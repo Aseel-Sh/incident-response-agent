@@ -35,3 +35,5 @@ coverage/
 # Optional local environment files
 .env
 .env.*
+
+Plan.md

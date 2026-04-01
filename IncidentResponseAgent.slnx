@@ -1,0 +1,7 @@
+<Solution>
+  <Project Path="IncidentResponseAgent.Agent/IncidentResponseAgent.Agent.csproj" />
+  <Project Path="IncidentResponseAgent.Api/IncidentResponseAgent.Api.csproj" />
+  <Project Path="IncidentResponseAgent.Application/IncidentResponseAgent.Application.csproj" />
+  <Project Path="IncidentResponseAgent.Domain/IncidentResponseAgent.Domain.csproj" />
+  <Project Path="IncidentResponseAgent.Infrastructure/IncidentResponseAgent.Infrastructure.csproj" />
+</Solution>
