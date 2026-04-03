@@ -6,6 +6,8 @@ public sealed record IncidentAnalysisResult
 
 	public string IncidentSummary { get; init; } = string.Empty;
 
+	public string AnalysisText { get; init; } = string.Empty;
+
 	public IReadOnlyList<string> Evidence { get; init; } = Array.Empty<string>();
 
 	public IReadOnlyList<string> Hypotheses { get; init; } = Array.Empty<string>();

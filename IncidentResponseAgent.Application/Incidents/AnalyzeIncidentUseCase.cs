@@ -4,22 +4,32 @@ namespace IncidentResponseAgent.Application.Incidents;
 
 public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 {
-	public Task<IncidentAnalysisResult> AnalyzeAsync(Incident incident, CancellationToken cancellationToken = default)
+	private readonly IIncidentAnalysisAgent _incidentAnalysisAgent;
+
+	public AnalyzeIncidentUseCase(IIncidentAnalysisAgent incidentAnalysisAgent)
+	{
+		_incidentAnalysisAgent = incidentAnalysisAgent;
+	}
+
+	public async Task<IncidentAnalysisResult> AnalyzeAsync(Incident incident, CancellationToken cancellationToken = default)
 	{
 		ArgumentNullException.ThrowIfNull(incident);
+
+		var analysisText = await _incidentAnalysisAgent.AnalyzeAsync(incident, cancellationToken);
 
 		var result = new IncidentAnalysisResult
 		{
 			IncidentId = incident.Id,
 			IncidentSummary = BuildSummary(incident),
+			AnalysisText = analysisText,
 			Evidence = BuildEvidence(incident),
 			Hypotheses = BuildHypotheses(incident),
 			RecommendedActions = BuildRecommendedActions(incident),
 			Confidence = "Low",
-			Notes = "Initial application-layer orchestration placeholder. AI analysis will be added in a later step."
+			Notes = "Initial application-layer orchestration now calls a prompt-based agent service."
 		};
 
-		return Task.FromResult(result);
+		return result;
 	}
 
 	private static string BuildSummary(Incident incident)

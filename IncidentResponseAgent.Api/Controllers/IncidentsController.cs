@@ -38,6 +38,7 @@ public sealed class IncidentsController : ControllerBase
         return Ok(new IncidentAnalysisResponse
         {
             IncidentSummary = result.IncidentSummary,
+            AnalysisText = result.AnalysisText,
             RetrievedEvidence = result.Evidence,
             RootCauseHypotheses = result.Hypotheses,
             RecommendedActions = result.RecommendedActions,
