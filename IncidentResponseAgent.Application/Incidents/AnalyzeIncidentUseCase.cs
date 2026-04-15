@@ -87,11 +87,19 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 			new IncidentHypothesis
 			{
 				Description = $"Investigate recent changes affecting {incident.ServiceName ?? "the impacted service"}.",
+				InferenceStrength = "Strong",
 				Confidence = "Medium",
 				SupportingEvidence =
 				[
 					"Incident description indicates active failures.",
 					"Current flow already retrieved logs, metrics, and runbooks."
+				],
+				EvidenceReferences =
+				[
+					"incident.description",
+					"tool.logs",
+					"tool.metrics",
+					"tool.runbooks"
 				]
 			}
 		};
@@ -101,8 +109,22 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 			hypotheses.Add(new IncidentHypothesis
 			{
 				Description = "The incident may be driven by a production regression or downstream dependency failure.",
+				InferenceStrength = "Weak",
 				Confidence = "Low",
-				SupportingEvidence = ["Severity is high enough to suggest a broad impact."]
+				SupportingEvidence = ["Severity is high enough to suggest a broad impact."],
+				EvidenceReferences = ["incident.severity"]
+			});
+		}
+
+		if (!string.IsNullOrWhiteSpace(incident.ServiceName))
+		{
+			hypotheses.Add(new IncidentHypothesis
+			{
+				Description = $"The incident may align with service-specific operational guidance for {incident.ServiceName}.",
+				InferenceStrength = "Medium",
+				Confidence = "Medium",
+				SupportingEvidence = ["A service name was provided on the incident.", "Relevant runbooks were retrieved for the service context."],
+				EvidenceReferences = ["incident.serviceName", "tool.runbooks"]
 			});
 		}
 

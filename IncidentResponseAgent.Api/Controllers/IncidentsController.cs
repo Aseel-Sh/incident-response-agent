@@ -51,8 +51,10 @@ public sealed class IncidentsController : ControllerBase
             RootCauseHypotheses = result.Hypotheses.Select(hypothesis => new IncidentResponseAgent.Api.Contracts.Incidents.IncidentHypothesis
             {
                 Description = hypothesis.Description,
+                InferenceStrength = hypothesis.InferenceStrength,
                 Confidence = hypothesis.Confidence,
-                SupportingEvidence = hypothesis.SupportingEvidence
+                SupportingEvidence = hypothesis.SupportingEvidence,
+                EvidenceReferences = hypothesis.EvidenceReferences
             }).ToArray(),
             RecommendedActions = result.RecommendedActions.Select(action => new IncidentResponseAgent.Api.Contracts.Incidents.IncidentActionRecommendation
             {
