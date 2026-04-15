@@ -6,11 +6,11 @@ public sealed record IncidentAnalysisResponse
 
     public string AnalysisText { get; init; } = string.Empty;
 
-    public IReadOnlyList<string> RetrievedEvidence { get; init; } = Array.Empty<string>();
+    public IReadOnlyList<IncidentAnalysisEvidenceItem> RetrievedEvidence { get; init; } = Array.Empty<IncidentAnalysisEvidenceItem>();
 
-    public IReadOnlyList<string> RootCauseHypotheses { get; init; } = Array.Empty<string>();
+    public IReadOnlyList<IncidentHypothesis> RootCauseHypotheses { get; init; } = Array.Empty<IncidentHypothesis>();
 
-    public IReadOnlyList<string> RecommendedActions { get; init; } = Array.Empty<string>();
+    public IReadOnlyList<IncidentActionRecommendation> RecommendedActions { get; init; } = Array.Empty<IncidentActionRecommendation>();
 
     public string? Confidence { get; init; }
 

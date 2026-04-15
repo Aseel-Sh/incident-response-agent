@@ -2,6 +2,9 @@ using IncidentResponseAgent.Api.Contracts.Incidents;
 using IncidentResponseAgent.Application.Incidents;
 using IncidentResponseAgent.Domain.Incidents;
 using Microsoft.AspNetCore.Mvc;
+using ApplicationAnalysisActionRecommendation = IncidentResponseAgent.Application.Incidents.IncidentActionRecommendation;
+using ApplicationAnalysisEvidenceItem = IncidentResponseAgent.Application.Incidents.IncidentAnalysisEvidenceItem;
+using ApplicationAnalysisHypothesis = IncidentResponseAgent.Application.Incidents.IncidentHypothesis;
 
 namespace IncidentResponseAgent.Api.Controllers;
 
@@ -39,9 +42,24 @@ public sealed class IncidentsController : ControllerBase
         {
             IncidentSummary = result.IncidentSummary,
             AnalysisText = result.AnalysisText,
-            RetrievedEvidence = result.Evidence,
-            RootCauseHypotheses = result.Hypotheses,
-            RecommendedActions = result.RecommendedActions,
+            RetrievedEvidence = result.Evidence.Select(item => new IncidentResponseAgent.Api.Contracts.Incidents.IncidentAnalysisEvidenceItem
+            {
+                Summary = item.Summary,
+                Source = item.Source,
+                Details = item.Details
+            }).ToArray(),
+            RootCauseHypotheses = result.Hypotheses.Select(hypothesis => new IncidentResponseAgent.Api.Contracts.Incidents.IncidentHypothesis
+            {
+                Description = hypothesis.Description,
+                Confidence = hypothesis.Confidence,
+                SupportingEvidence = hypothesis.SupportingEvidence
+            }).ToArray(),
+            RecommendedActions = result.RecommendedActions.Select(action => new IncidentResponseAgent.Api.Contracts.Incidents.IncidentActionRecommendation
+            {
+                Description = action.Description,
+                Priority = action.Priority,
+                Rationale = action.Rationale
+            }).ToArray(),
             Confidence = result.Confidence,
             Notes = result.Notes
         });

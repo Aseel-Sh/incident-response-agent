@@ -8,11 +8,11 @@ public sealed record IncidentAnalysisResult
 
 	public string AnalysisText { get; init; } = string.Empty;
 
-	public IReadOnlyList<string> Evidence { get; init; } = Array.Empty<string>();
+	public IReadOnlyList<IncidentAnalysisEvidenceItem> Evidence { get; init; } = Array.Empty<IncidentAnalysisEvidenceItem>();
 
-	public IReadOnlyList<string> Hypotheses { get; init; } = Array.Empty<string>();
+	public IReadOnlyList<IncidentHypothesis> Hypotheses { get; init; } = Array.Empty<IncidentHypothesis>();
 
-	public IReadOnlyList<string> RecommendedActions { get; init; } = Array.Empty<string>();
+	public IReadOnlyList<IncidentActionRecommendation> RecommendedActions { get; init; } = Array.Empty<IncidentActionRecommendation>();
 
 	public string? Confidence { get; init; }
 
