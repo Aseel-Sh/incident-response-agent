@@ -39,8 +39,13 @@ public sealed class PromptBasedIncidentAnalysisAgent : IIncidentAnalysisAgent
 		var runbookResult = await _runbookRetrievalService.RetrieveAsync(runbookRequest, cancellationToken);
 		var logResult = await _logSearchProvider.SearchAsync(logRequest, cancellationToken);
 		var metricsResult = await _metricsProvider.QueryAsync(metricsRequest, cancellationToken);
-		var prompt = _instructions.BuildPrompt(incident, profile, runbookResult.Runbooks);
-		var response = BuildAnalysisText(incident, profile, prompt, logResult, metricsResult);
+		var prompt = _instructions.BuildPrompt(
+			incident,
+			profile,
+			runbookResult.Runbooks,
+			BuildLogHighlights(logResult),
+			BuildMetricHighlights(metricsResult));
+		var response = BuildAnalysisText(incident, profile, prompt, runbookResult.Runbooks, logResult, metricsResult);
 
 		return response;
 	}
@@ -85,6 +90,7 @@ public sealed class PromptBasedIncidentAnalysisAgent : IIncidentAnalysisAgent
 		Incident incident,
 		IncidentAnalysisAgentProfile profile,
 		string prompt,
+		IReadOnlyCollection<RunbookDocument> runbooks,
 		LogSearchResult logResult,
 		MetricsQueryResult metricsResult)
 	{
@@ -92,13 +98,39 @@ public sealed class PromptBasedIncidentAnalysisAgent : IIncidentAnalysisAgent
 		var promptLength = prompt.Length;
 		var logCount = logResult.Entries.Count;
 		var metricCount = metricsResult.Samples.Count;
-		var runbookCount = CountRunbooksInPrompt(prompt);
+		var runbookCount = runbooks.Count;
+		var primaryRunbook = runbooks.FirstOrDefault()?.Title ?? "none";
+		var primaryLogMessage = logResult.Entries.FirstOrDefault()?.Message ?? "none";
+		var primaryMetric = metricsResult.Samples.FirstOrDefault()?.Value;
 
-		return $"[{profile.Name}] Prompt-based analysis for {serviceName}: start with log review, confirm recent changes, and validate the incident scope. Prompt size: {promptLength} characters. Runbooks retrieved: {runbookCount}. Log evidence: {logCount} entries. Metric samples: {metricCount}.";
+		var metricText = primaryMetric is null ? "none" : primaryMetric.Value.ToString("0.##");
+
+		return $"""
+[{profile.Name}] Analysis for {serviceName}
+Summary: start with log review, confirm recent changes, and validate the incident scope.
+Evidence: {logCount} log entries, {metricCount} metric samples, {runbookCount} runbooks.
+Primary runbook: {primaryRunbook}
+Primary log signal: {primaryLogMessage}
+Primary metric value: {metricText}
+Prompt size: {promptLength} characters.
+Confidence: Low.
+Notes: Prompt now enforces a fixed output structure and uses tool summaries.
+""";
 	}
 
-	private static int CountRunbooksInPrompt(string prompt)
+	private static IReadOnlyList<string> BuildLogHighlights(LogSearchResult logResult)
 	{
-		return prompt.Split("Runbook ", StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Length - 1;
+		return logResult.Entries
+			.Select(entry => $"[{entry.Level}] {entry.Source}: {entry.Message}")
+			.Take(3)
+			.ToArray();
+	}
+
+	private static IReadOnlyList<string> BuildMetricHighlights(MetricsQueryResult metricsResult)
+	{
+		return metricsResult.Samples
+			.Take(3)
+			.Select(sample => $"{sample.Timestamp:O} -> {sample.Value}")
+			.ToArray();
 	}
 }
