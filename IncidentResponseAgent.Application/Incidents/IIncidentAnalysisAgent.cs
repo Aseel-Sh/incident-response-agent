@@ -4,5 +4,8 @@ namespace IncidentResponseAgent.Application.Incidents;
 
 public interface IIncidentAnalysisAgent
 {
-	Task<string> AnalyzeAsync(Incident incident, CancellationToken cancellationToken = default);
+	Task<string> AnalyzeAsync(
+		Incident incident,
+		IncidentAnalysisSessionContext? sessionContext = null,
+		CancellationToken cancellationToken = default);
 }

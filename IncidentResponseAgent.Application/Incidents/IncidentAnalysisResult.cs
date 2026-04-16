@@ -2,6 +2,12 @@ namespace IncidentResponseAgent.Application.Incidents;
 
 public sealed record IncidentAnalysisResult
 {
+	public string SessionId { get; init; } = string.Empty;
+
+	public int SessionTurnNumber { get; init; }
+
+	public string? SessionContextSummary { get; init; }
+
 	public Guid IncidentId { get; init; }
 
 	public string IncidentSummary { get; init; } = string.Empty;

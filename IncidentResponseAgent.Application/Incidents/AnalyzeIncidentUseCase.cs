@@ -5,20 +5,37 @@ namespace IncidentResponseAgent.Application.Incidents;
 public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 {
 	private readonly IIncidentAnalysisAgent _incidentAnalysisAgent;
+	private readonly IIncidentAnalysisSessionStore _incidentAnalysisSessionStore;
 
-	public AnalyzeIncidentUseCase(IIncidentAnalysisAgent incidentAnalysisAgent)
+	public AnalyzeIncidentUseCase(
+		IIncidentAnalysisAgent incidentAnalysisAgent,
+		IIncidentAnalysisSessionStore incidentAnalysisSessionStore)
 	{
 		_incidentAnalysisAgent = incidentAnalysisAgent;
+		_incidentAnalysisSessionStore = incidentAnalysisSessionStore;
 	}
 
-	public async Task<IncidentAnalysisResult> AnalyzeAsync(Incident incident, CancellationToken cancellationToken = default)
+	public async Task<IncidentAnalysisResult> AnalyzeAsync(Incident incident, string? sessionId = null, CancellationToken cancellationToken = default)
 	{
 		ArgumentNullException.ThrowIfNull(incident);
 
-		var analysisText = await _incidentAnalysisAgent.AnalyzeAsync(incident, cancellationToken);
+		var sessionContext = await _incidentAnalysisSessionStore.GetOrCreateAsync(sessionId, cancellationToken);
+		var analysisText = await _incidentAnalysisAgent.AnalyzeAsync(incident, sessionContext, cancellationToken);
+		var nextSessionContext = sessionContext with
+		{
+			TurnNumber = sessionContext.TurnNumber + 1,
+			LastIncidentSummary = BuildSummary(incident),
+			LastAnalysisSummary = SummarizeAnalysisText(analysisText),
+			UpdatedAtUtc = DateTimeOffset.UtcNow
+		};
+
+		await _incidentAnalysisSessionStore.SaveAsync(nextSessionContext, cancellationToken);
 
 		var result = new IncidentAnalysisResult
 		{
+			SessionId = nextSessionContext.SessionId,
+			SessionTurnNumber = nextSessionContext.TurnNumber,
+			SessionContextSummary = BuildSessionSummary(nextSessionContext),
 			IncidentId = incident.Id,
 			IncidentSummary = BuildSummary(incident),
 			AnalysisText = analysisText,
@@ -30,6 +47,26 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 		};
 
 		return result;
+	}
+
+	private static string BuildSessionSummary(IncidentAnalysisSessionContext sessionContext)
+	{
+		var lastIncident = string.IsNullOrWhiteSpace(sessionContext.LastIncidentSummary)
+			? "no previous incident context"
+			: sessionContext.LastIncidentSummary;
+
+		return $"Session {sessionContext.SessionId} turn {sessionContext.TurnNumber} with {lastIncident}.";
+	}
+
+	private static string SummarizeAnalysisText(string analysisText)
+	{
+		if (string.IsNullOrWhiteSpace(analysisText))
+		{
+			return "no analysis text";
+		}
+
+		var firstLine = analysisText.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).FirstOrDefault();
+		return string.IsNullOrWhiteSpace(firstLine) ? "no analysis text" : firstLine;
 	}
 
 	private static string BuildSummary(Incident incident)

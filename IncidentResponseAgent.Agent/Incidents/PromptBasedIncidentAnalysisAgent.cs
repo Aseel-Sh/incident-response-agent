@@ -27,7 +27,7 @@ public sealed class PromptBasedIncidentAnalysisAgent : IIncidentAnalysisAgent
 		_runbookRetrievalService = runbookRetrievalService;
 	}
 
-	public async Task<string> AnalyzeAsync(Incident incident, CancellationToken cancellationToken = default)
+	public async Task<string> AnalyzeAsync(Incident incident, IncidentAnalysisSessionContext? sessionContext = null, CancellationToken cancellationToken = default)
 	{
 		ArgumentNullException.ThrowIfNull(incident);
 
@@ -42,10 +42,11 @@ public sealed class PromptBasedIncidentAnalysisAgent : IIncidentAnalysisAgent
 		var prompt = _instructions.BuildPrompt(
 			incident,
 			profile,
+			sessionContext,
 			runbookResult.Runbooks,
 			BuildLogHighlights(logResult),
 			BuildMetricHighlights(metricsResult));
-		var response = BuildAnalysisText(incident, profile, prompt, runbookResult.Runbooks, logResult, metricsResult);
+		var response = BuildAnalysisText(incident, profile, prompt, sessionContext, runbookResult.Runbooks, logResult, metricsResult);
 
 		return response;
 	}
@@ -90,6 +91,7 @@ public sealed class PromptBasedIncidentAnalysisAgent : IIncidentAnalysisAgent
 		Incident incident,
 		IncidentAnalysisAgentProfile profile,
 		string prompt,
+		IncidentAnalysisSessionContext? sessionContext,
 		IReadOnlyCollection<RunbookDocument> runbooks,
 		LogSearchResult logResult,
 		MetricsQueryResult metricsResult)
@@ -102,11 +104,15 @@ public sealed class PromptBasedIncidentAnalysisAgent : IIncidentAnalysisAgent
 		var primaryRunbook = runbooks.FirstOrDefault()?.Title ?? "none";
 		var primaryLogMessage = logResult.Entries.FirstOrDefault()?.Message ?? "none";
 		var primaryMetric = metricsResult.Samples.FirstOrDefault()?.Value;
+		var sessionLine = sessionContext is null
+			? "Session: new investigation"
+			: $"Session: {sessionContext.SessionId} turn {sessionContext.TurnNumber + 1} (previous turn {sessionContext.TurnNumber}).";
 
 		var metricText = primaryMetric is null ? "none" : primaryMetric.Value.ToString("0.##");
 
 		return $"""
 [{profile.Name}] Analysis for {serviceName}
+{sessionLine}
 Summary: start with log review, confirm recent changes, and validate the incident scope.
 Evidence: {logCount} log entries, {metricCount} metric samples, {runbookCount} runbooks.
 Primary runbook: {primaryRunbook}

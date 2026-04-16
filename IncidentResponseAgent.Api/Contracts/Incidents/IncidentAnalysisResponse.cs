@@ -2,6 +2,12 @@ namespace IncidentResponseAgent.Api.Contracts.Incidents;
 
 public sealed record IncidentAnalysisResponse
 {
+    public string SessionId { get; init; } = string.Empty;
+
+    public int SessionTurnNumber { get; init; }
+
+    public string? SessionContextSummary { get; init; }
+
     public string IncidentSummary { get; init; } = string.Empty;
 
     public string AnalysisText { get; init; } = string.Empty;

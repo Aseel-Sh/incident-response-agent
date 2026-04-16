@@ -36,10 +36,13 @@ public sealed class IncidentsController : ControllerBase
             request.Timestamp,
             request.Tags);
 
-        var result = await _analyzeIncidentUseCase.AnalyzeAsync(incident, cancellationToken);
+        var result = await _analyzeIncidentUseCase.AnalyzeAsync(incident, request.SessionId, cancellationToken);
 
         return Ok(new IncidentAnalysisResponse
         {
+            SessionId = result.SessionId,
+            SessionTurnNumber = result.SessionTurnNumber,
+            SessionContextSummary = result.SessionContextSummary,
             IncidentSummary = result.IncidentSummary,
             AnalysisText = result.AnalysisText,
             RetrievedEvidence = result.Evidence.Select(item => new IncidentResponseAgent.Api.Contracts.Incidents.IncidentAnalysisEvidenceItem

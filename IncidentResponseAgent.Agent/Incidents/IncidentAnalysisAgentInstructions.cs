@@ -1,3 +1,4 @@
+using IncidentResponseAgent.Application.Incidents;
 using IncidentResponseAgent.Domain.Incidents;
 using IncidentResponseAgent.Domain.Runbooks;
 
@@ -8,6 +9,7 @@ public sealed class IncidentAnalysisAgentInstructions
 	public string BuildPrompt(
 		Incident incident,
 		IncidentAnalysisAgentProfile profile,
+		IncidentAnalysisSessionContext? sessionContext,
 		IReadOnlyCollection<RunbookDocument> runbooks,
 		IReadOnlyList<string> logHighlights,
 		IReadOnlyList<string> metricHighlights)
@@ -36,6 +38,9 @@ Return the analysis in these sections only:
 Keep each section short and specific.
 Use the retrieved evidence instead of inventing new facts.
 Prefer operational language over generic commentary.
+
+Session context:
+{BuildSessionSection(sessionContext)}
 
 Title: {incident.Title}
 Description: {incident.Description}
@@ -73,5 +78,28 @@ Metric evidence:
 		}
 
 		return string.Join(Environment.NewLine, items.Select(item => $"- {item}"));
+	}
+
+	private static string BuildSessionSection(IncidentAnalysisSessionContext? sessionContext)
+	{
+		if (sessionContext is null)
+		{
+			return "- New session.";
+		}
+
+		var lastIncident = string.IsNullOrWhiteSpace(sessionContext.LastIncidentSummary)
+			? "none"
+			: sessionContext.LastIncidentSummary;
+		var lastAnalysis = string.IsNullOrWhiteSpace(sessionContext.LastAnalysisSummary)
+			? "none"
+			: sessionContext.LastAnalysisSummary;
+
+		return string.Join(Environment.NewLine, new[]
+		{
+			$"- Session id: {sessionContext.SessionId}",
+			$"- Current turn: {sessionContext.TurnNumber + 1}",
+			$"- Previous incident summary: {lastIncident}",
+			$"- Previous analysis summary: {lastAnalysis}"
+		});
 	}
 }
