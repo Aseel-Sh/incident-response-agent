@@ -133,35 +133,51 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 
 	private static IReadOnlyList<IncidentActionRecommendation> BuildRecommendedActions(Incident incident)
 	{
-		var actions = new List<IncidentActionRecommendation>
-		{
-			new IncidentActionRecommendation
-			{
-				Description = "Confirm current blast radius and affected users.",
-				Priority = "High",
-				Rationale = "You need impact scope before choosing remediation."
-			},
-			new IncidentActionRecommendation
-			{
-				Description = "Review recent deployments, config changes, and dependency health.",
-				Priority = "High",
-				Rationale = "This often explains sudden regressions."
-			},
-			new IncidentActionRecommendation
-			{
-				Description = "Collect supporting logs and metrics before making a remediation decision.",
-				Priority = "Medium",
-				Rationale = "Evidence should drive the next action."
-			}
-		};
+		var actions = new List<IncidentActionRecommendation>();
 
 		if (incident.Severity is IncidentSeverity.Critical)
 		{
-			actions.Insert(0, new IncidentActionRecommendation
+			actions.Add(new IncidentActionRecommendation
 			{
 				Description = "Escalate the incident and begin mitigation immediately.",
 				Priority = "Critical",
-				Rationale = "Critical incidents require immediate response coordination."
+				Rationale = "Critical incidents require immediate response coordination and explicit ownership.",
+				SupportingSignals = ["incident.severity", "response.comms"]
+			});
+		}
+
+		actions.Add(new IncidentActionRecommendation
+		{
+			Description = "Confirm current blast radius and affected users.",
+			Priority = "High",
+			Rationale = "You need impact scope before choosing remediation.",
+			SupportingSignals = ["incident.description", "tool.logs"]
+		});
+
+		actions.Add(new IncidentActionRecommendation
+		{
+			Description = "Review recent deployments, config changes, and dependency health.",
+			Priority = "High",
+			Rationale = "This often explains sudden regressions.",
+			SupportingSignals = ["tool.runbooks", "tool.logs", "tool.metrics"]
+		});
+
+		actions.Add(new IncidentActionRecommendation
+		{
+			Description = "Collect supporting logs and metrics before making a remediation decision.",
+			Priority = "Medium",
+			Rationale = "Evidence should drive the next action.",
+			SupportingSignals = ["tool.logs", "tool.metrics"]
+		});
+
+		if (incident.Severity is IncidentSeverity.High)
+		{
+			actions.Insert(0, new IncidentActionRecommendation
+			{
+				Description = "Prioritize investigation of the most affected service path first.",
+				Priority = "High",
+				Rationale = "High severity incidents still need quick triage of the highest-impact surface.",
+				SupportingSignals = ["incident.severity", "tool.runbooks"]
 			});
 		}
 

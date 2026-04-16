@@ -60,7 +60,8 @@ public sealed class IncidentsController : ControllerBase
             {
                 Description = action.Description,
                 Priority = action.Priority,
-                Rationale = action.Rationale
+                Rationale = action.Rationale,
+                SupportingSignals = action.SupportingSignals
             }).ToArray(),
             Confidence = result.Confidence,
             Notes = result.Notes
