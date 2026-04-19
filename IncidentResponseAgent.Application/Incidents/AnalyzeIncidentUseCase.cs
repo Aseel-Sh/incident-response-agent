@@ -1,4 +1,5 @@
 using IncidentResponseAgent.Domain.Incidents;
+using System.Text.RegularExpressions;
 
 namespace IncidentResponseAgent.Application.Incidents;
 
@@ -24,6 +25,7 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 
 		var sessionContext = await _incidentAnalysisSessionStore.GetOrCreateAsync(sessionId, cancellationToken);
 		var analysisText = await _incidentAnalysisAgent.AnalyzeAsync(incident, sessionContext, cancellationToken);
+		var confidence = ExtractConfidence(analysisText) ?? "Low";
 		var nextSessionContext = sessionContext with
 		{
 			TurnNumber = sessionContext.TurnNumber + 1,
@@ -45,7 +47,7 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 			Evidence = BuildEvidence(incident),
 			Hypotheses = BuildHypotheses(incident),
 			RecommendedActions = BuildRecommendedActions(incident),
-			Confidence = "Low",
+			Confidence = confidence,
 			Notes = "Initial application-layer orchestration now calls a prompt-based agent service."
 		};
 
@@ -72,6 +74,36 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 
 		var firstLine = analysisText.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).FirstOrDefault();
 		return string.IsNullOrWhiteSpace(firstLine) ? "no analysis text" : firstLine;
+	}
+
+	private static string? ExtractConfidence(string analysisText)
+	{
+		if (string.IsNullOrWhiteSpace(analysisText))
+		{
+			return null;
+		}
+
+		var match = Regex.Match(analysisText, @"(?im)^Confidence\s*$\s*(?<value>.+?)(?:\r?$|\n(?:\S|\s))*?(?:^Notes\s*$|\z)");
+		if (match.Success)
+		{
+			var value = match.Groups["value"].Value.Trim();
+			if (value.StartsWith("High", StringComparison.OrdinalIgnoreCase))
+			{
+				return "High";
+			}
+
+			if (value.StartsWith("Medium", StringComparison.OrdinalIgnoreCase))
+			{
+				return "Medium";
+			}
+
+			if (value.StartsWith("Low", StringComparison.OrdinalIgnoreCase))
+			{
+				return "Low";
+			}
+		}
+
+		return null;
 	}
 
 	private static string BuildSummary(Incident incident)

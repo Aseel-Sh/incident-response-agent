@@ -1,12 +1,14 @@
 using IncidentResponseAgent.Agent;
 using IncidentResponseAgent.Application;
 using IncidentResponseAgent.Infrastructure;
+using IncidentResponseAgent.Agent.Incidents;
 
 var builder = WebApplication.CreateBuilder(args);
 
 // Add services to the container.
 
 builder.Services.AddControllers();
+builder.Services.Configure<IncidentAnalysisAgentOptions>(builder.Configuration.GetSection("Agent:IncidentAnalysis"));
 builder.Services.AddApplication();
 builder.Services.AddInfrastructure();
 builder.Services.AddAgent();

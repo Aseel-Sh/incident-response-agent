@@ -1,3 +1,6 @@
+
+appsettings.Development.json
+
 # Build results
 bin/
 obj/

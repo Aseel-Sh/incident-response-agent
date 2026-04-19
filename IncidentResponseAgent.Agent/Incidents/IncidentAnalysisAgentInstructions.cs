@@ -38,6 +38,10 @@ Return the analysis in these sections only:
 Keep each section short and specific.
 Use the retrieved evidence instead of inventing new facts.
 Prefer operational language over generic commentary.
+Call the available tools when you need logs, metrics, or runbooks.
+Only use High confidence if you have explicit tool-backed evidence from logs or metrics and the evidence strongly agrees.
+If tool evidence is thin, missing, or generic, keep confidence Low or Medium.
+Do not state a confidence level that contradicts the evidence sections.
 
 Session context:
 {BuildSessionSection(sessionContext)}
