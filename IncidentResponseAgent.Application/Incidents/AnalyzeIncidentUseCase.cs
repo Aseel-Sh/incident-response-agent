@@ -6,13 +6,16 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 {
 	private readonly IIncidentAnalysisAgent _incidentAnalysisAgent;
 	private readonly IIncidentAnalysisSessionStore _incidentAnalysisSessionStore;
+	private readonly IIncidentRecordStore _incidentRecordStore;
 
 	public AnalyzeIncidentUseCase(
 		IIncidentAnalysisAgent incidentAnalysisAgent,
-		IIncidentAnalysisSessionStore incidentAnalysisSessionStore)
+		IIncidentAnalysisSessionStore incidentAnalysisSessionStore,
+		IIncidentRecordStore incidentRecordStore)
 	{
 		_incidentAnalysisAgent = incidentAnalysisAgent;
 		_incidentAnalysisSessionStore = incidentAnalysisSessionStore;
+		_incidentRecordStore = incidentRecordStore;
 	}
 
 	public async Task<IncidentAnalysisResult> AnalyzeAsync(Incident incident, string? sessionId = null, CancellationToken cancellationToken = default)
@@ -45,6 +48,8 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 			Confidence = "Low",
 			Notes = "Initial application-layer orchestration now calls a prompt-based agent service."
 		};
+
+		await _incidentRecordStore.SaveAsync(incident, result, cancellationToken);
 
 		return result;
 	}
