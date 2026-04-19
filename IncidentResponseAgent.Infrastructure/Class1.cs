@@ -16,7 +16,7 @@ public static class DependencyInjection
 		services.AddSingleton<IMetricsProvider, FakeMetricsProvider>();
 		services.AddSingleton<IRunbookRetrievalService, InMemoryRunbookRetrievalService>();
 		services.AddSingleton<IIncidentAnalysisSessionStore, InMemoryIncidentAnalysisSessionStore>();
-		services.AddSingleton<IIncidentRecordStore, InMemoryIncidentRecordStore>();
+		services.AddSingleton<IIncidentRecordStore, FileIncidentRecordStore>();
 		return services;
 	}
 }
