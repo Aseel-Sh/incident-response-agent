@@ -13,10 +13,14 @@ namespace IncidentResponseAgent.Api.Controllers;
 public sealed class IncidentsController : ControllerBase
 {
     private readonly IAnalyzeIncidentUseCase _analyzeIncidentUseCase;
+    private readonly IGetRecentIncidentAnalysesUseCase _getRecentIncidentAnalysesUseCase;
 
-    public IncidentsController(IAnalyzeIncidentUseCase analyzeIncidentUseCase)
+    public IncidentsController(
+        IAnalyzeIncidentUseCase analyzeIncidentUseCase,
+        IGetRecentIncidentAnalysesUseCase getRecentIncidentAnalysesUseCase)
     {
         _analyzeIncidentUseCase = analyzeIncidentUseCase;
+        _getRecentIncidentAnalysesUseCase = getRecentIncidentAnalysesUseCase;
     }
 
     [HttpPost("analyze")]
@@ -69,6 +73,27 @@ public sealed class IncidentsController : ControllerBase
             Confidence = result.Confidence,
             Notes = result.Notes
         });
+    }
+
+    [HttpGet("recent")]
+    [ProducesResponseType(typeof(IReadOnlyList<RecentIncidentAnalysisResponse>), StatusCodes.Status200OK)]
+    public async Task<ActionResult<IReadOnlyList<RecentIncidentAnalysisResponse>>> GetRecentAsync(
+        [FromQuery] int maxResults = 10,
+        CancellationToken cancellationToken = default)
+    {
+        var results = await _getRecentIncidentAnalysesUseCase.ExecuteAsync(maxResults, cancellationToken);
+
+        return Ok(results.Select(result => new RecentIncidentAnalysisResponse
+        {
+            IncidentId = result.IncidentId,
+            IncidentSummary = result.IncidentSummary,
+            AnalysisText = result.AnalysisText,
+            SessionId = result.SessionId,
+            SessionTurnNumber = result.SessionTurnNumber,
+            Confidence = result.Confidence,
+            Notes = result.Notes,
+            CreatedAtUtc = result.CreatedAtUtc
+        }).ToArray());
     }
 
     private static IncidentSeverity ParseSeverity(string severity)
