@@ -1,6 +1,8 @@
 using System.ClientModel;
 using IncidentResponseAgent.Application.Incidents;
+using IncidentResponseAgent.Application.Runbooks;
 using IncidentResponseAgent.Domain.Incidents;
+using IncidentResponseAgent.Domain.Runbooks;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Options;
@@ -15,15 +17,20 @@ public sealed class OpenAIIncidentAnalysisAgent : IIncidentAnalysisAgent
 	private readonly IncidentAnalysisAgentOptions _options;
 	private readonly IncidentAnalysisAgentInstructions _instructions = new();
 	private readonly IncidentAnalysisAgentTools _tools;
+	private readonly IRunbookRetrievalService _runbookRetrievalService;
 	private readonly object _agentLock = new();
 	private readonly object _sessionLock = new();
 	private readonly Dictionary<string, AgentSession> _sessions = new(StringComparer.Ordinal);
 	private AIAgent? _agent;
 
-	public OpenAIIncidentAnalysisAgent(IOptions<IncidentAnalysisAgentOptions> options, IncidentAnalysisAgentTools tools)
+	public OpenAIIncidentAnalysisAgent(
+		IOptions<IncidentAnalysisAgentOptions> options,
+		IncidentAnalysisAgentTools tools,
+		IRunbookRetrievalService runbookRetrievalService)
 	{
 		_options = options.Value ?? new IncidentAnalysisAgentOptions();
 		_tools = tools;
+		_runbookRetrievalService = runbookRetrievalService;
 	}
 
 	public async Task<string> AnalyzeAsync(Incident incident, IncidentAnalysisSessionContext? sessionContext = null, CancellationToken cancellationToken = default)
@@ -31,11 +38,21 @@ public sealed class OpenAIIncidentAnalysisAgent : IIncidentAnalysisAgent
 		ArgumentNullException.ThrowIfNull(incident);
 
 		var agent = GetOrCreateAgent();
+		var runbookResult = await _runbookRetrievalService.RetrieveAsync(
+			new RunbookRetrievalRequest
+			{
+				Query = BuildRunbookQuery(incident),
+				ServiceName = incident.ServiceName,
+				Environment = incident.Environment,
+				MaxResults = 3
+			},
+			cancellationToken);
+
 		var prompt = _instructions.BuildPrompt(
 			incident,
 			BuildProfile(),
 			sessionContext,
-			Array.Empty<Domain.Runbooks.RunbookDocument>(),
+			runbookResult.Runbooks,
 			Array.Empty<string>(),
 			Array.Empty<string>());
 
@@ -127,6 +144,23 @@ Notes
 
 Do not invent facts. Prefer tool output and incident details.
 """;
+	}
+
+	private static string BuildRunbookQuery(Incident incident)
+	{
+		var parts = new List<string> { incident.Title, incident.Description };
+		if (!string.IsNullOrWhiteSpace(incident.ServiceName))
+		{
+			parts.Add(incident.ServiceName);
+		}
+
+		if (!string.IsNullOrWhiteSpace(incident.Environment))
+		{
+			parts.Add(incident.Environment);
+		}
+
+		parts.AddRange(incident.Tags);
+		return string.Join(' ', parts.Where(part => !string.IsNullOrWhiteSpace(part)));
 	}
 
 	private async Task<AgentSession> GetOrCreateSessionAsync(AIAgent agent, string sessionId, CancellationToken cancellationToken)
