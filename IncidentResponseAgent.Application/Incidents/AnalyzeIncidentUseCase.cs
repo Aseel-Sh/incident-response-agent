@@ -1,4 +1,6 @@
 using IncidentResponseAgent.Domain.Incidents;
+using IncidentResponseAgent.Application.Runbooks;
+using IncidentResponseAgent.Application.Tools;
 using System.Text.RegularExpressions;
 
 namespace IncidentResponseAgent.Application.Incidents;
@@ -8,15 +10,24 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 	private readonly IIncidentAnalysisAgent _incidentAnalysisAgent;
 	private readonly IIncidentAnalysisSessionStore _incidentAnalysisSessionStore;
 	private readonly IIncidentRecordStore _incidentRecordStore;
+	private readonly ILogSearchProvider _logSearchProvider;
+	private readonly IMetricsProvider _metricsProvider;
+	private readonly IRunbookRetrievalService _runbookRetrievalService;
 
 	public AnalyzeIncidentUseCase(
 		IIncidentAnalysisAgent incidentAnalysisAgent,
 		IIncidentAnalysisSessionStore incidentAnalysisSessionStore,
-		IIncidentRecordStore incidentRecordStore)
+		IIncidentRecordStore incidentRecordStore,
+		ILogSearchProvider logSearchProvider,
+		IMetricsProvider metricsProvider,
+		IRunbookRetrievalService runbookRetrievalService)
 	{
 		_incidentAnalysisAgent = incidentAnalysisAgent;
 		_incidentAnalysisSessionStore = incidentAnalysisSessionStore;
 		_incidentRecordStore = incidentRecordStore;
+		_logSearchProvider = logSearchProvider;
+		_metricsProvider = metricsProvider;
+		_runbookRetrievalService = runbookRetrievalService;
 	}
 
 	public async Task<IncidentAnalysisResult> AnalyzeAsync(Incident incident, string? sessionId = null, CancellationToken cancellationToken = default)
@@ -24,6 +35,9 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 		ArgumentNullException.ThrowIfNull(incident);
 
 		var sessionContext = await _incidentAnalysisSessionStore.GetOrCreateAsync(sessionId, cancellationToken);
+		var runbookResult = await _runbookRetrievalService.RetrieveAsync(BuildRunbookRetrievalRequest(incident), cancellationToken);
+		var logResult = await _logSearchProvider.SearchAsync(BuildLogSearchRequest(incident), cancellationToken);
+		var metricsResult = await _metricsProvider.QueryAsync(BuildMetricsQueryRequest(incident), cancellationToken);
 		var analysisText = await _incidentAnalysisAgent.AnalyzeAsync(incident, sessionContext, cancellationToken);
 		var confidence = ExtractConfidence(analysisText) ?? "Low";
 		var nextSessionContext = sessionContext with
@@ -44,16 +58,52 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 			IncidentId = incident.Id,
 			IncidentSummary = BuildSummary(incident),
 			AnalysisText = analysisText,
-			Evidence = BuildEvidence(incident),
-			Hypotheses = BuildHypotheses(incident),
-			RecommendedActions = BuildRecommendedActions(incident),
+			Evidence = BuildEvidence(incident, runbookResult, logResult, metricsResult),
+			Hypotheses = BuildHypotheses(incident, runbookResult, logResult, metricsResult),
+			RecommendedActions = BuildRecommendedActions(incident, runbookResult, logResult, metricsResult),
 			Confidence = confidence,
-			Notes = "Initial application-layer orchestration now calls a prompt-based agent service."
+			Notes = "Application orchestration captured incident details, RAG runbooks, logs, metrics, session state, and agent analysis."
 		};
 
 		await _incidentRecordStore.SaveAsync(incident, result, cancellationToken);
 
 		return result;
+	}
+
+	private static RunbookRetrievalRequest BuildRunbookRetrievalRequest(Incident incident)
+	{
+		return new RunbookRetrievalRequest
+		{
+			Query = string.Join(' ', new[] { incident.Title, incident.Description }.Concat(incident.Tags)),
+			ServiceName = incident.ServiceName,
+			Environment = incident.Environment,
+			MaxResults = 3
+		};
+	}
+
+	private static LogSearchRequest BuildLogSearchRequest(Incident incident)
+	{
+		return new LogSearchRequest
+		{
+			Query = incident.Title,
+			ServiceName = incident.ServiceName,
+			Environment = incident.Environment,
+			StartTime = incident.Timestamp?.AddHours(-1),
+			EndTime = incident.Timestamp,
+			MaxResults = 3
+		};
+	}
+
+	private static MetricsQueryRequest BuildMetricsQueryRequest(Incident incident)
+	{
+		return new MetricsQueryRequest
+		{
+			MetricName = "request_error_rate",
+			ServiceName = incident.ServiceName,
+			Environment = incident.Environment,
+			StartTime = incident.Timestamp?.AddHours(-1),
+			EndTime = incident.Timestamp
+		};
 	}
 
 	private static string BuildSessionSummary(IncidentAnalysisSessionContext sessionContext)
@@ -119,7 +169,11 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 		return $"{incident.Severity} incident reported for {servicePart} in {environmentPart}: {incident.Title}.";
 	}
 
-	private static IReadOnlyList<IncidentAnalysisEvidenceItem> BuildEvidence(Incident incident)
+	private static IReadOnlyList<IncidentAnalysisEvidenceItem> BuildEvidence(
+		Incident incident,
+		RunbookRetrievalResult runbookResult,
+		LogSearchResult logResult,
+		MetricsQueryResult metricsResult)
 	{
 		var evidence = new List<IncidentAnalysisEvidenceItem>
 		{
@@ -151,10 +205,45 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 			});
 		}
 
+		foreach (var runbook in runbookResult.Runbooks)
+		{
+			evidence.Add(new IncidentAnalysisEvidenceItem
+			{
+				Summary = runbook.Summary,
+				Source = $"rag.runbook.{runbook.Id}",
+				Details = runbook.Title
+			});
+		}
+
+		foreach (var entry in logResult.Entries)
+		{
+			evidence.Add(new IncidentAnalysisEvidenceItem
+			{
+				Summary = entry.Message,
+				Source = "tool.logs",
+				Details = $"{entry.Timestamp:O} {entry.Level} {entry.Source}"
+			});
+		}
+
+		if (metricsResult.Samples.Count > 0)
+		{
+			var latest = metricsResult.Samples.OrderByDescending(sample => sample.Timestamp).First();
+			evidence.Add(new IncidentAnalysisEvidenceItem
+			{
+				Summary = $"Latest {metricsResult.MetricName} sample is {latest.Value}.",
+				Source = "tool.metrics",
+				Details = $"{metricsResult.Samples.Count} samples ending at {latest.Timestamp:O}"
+			});
+		}
+
 		return evidence;
 	}
 
-	private static IReadOnlyList<IncidentHypothesis> BuildHypotheses(Incident incident)
+	private static IReadOnlyList<IncidentHypothesis> BuildHypotheses(
+		Incident incident,
+		RunbookRetrievalResult runbookResult,
+		LogSearchResult logResult,
+		MetricsQueryResult metricsResult)
 	{
 		var hypotheses = new List<IncidentHypothesis>
 		{
@@ -166,7 +255,7 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 				SupportingEvidence =
 				[
 					"Incident description indicates active failures.",
-					"Current flow already retrieved logs, metrics, and runbooks."
+					$"Retrieved {logResult.Entries.Count} log entries, {metricsResult.Samples.Count} metric samples, and {runbookResult.Runbooks.Count} runbook chunks."
 				],
 				EvidenceReferences =
 				[
@@ -202,10 +291,40 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 			});
 		}
 
+		var primaryRunbook = runbookResult.Runbooks.FirstOrDefault();
+		if (primaryRunbook is not null)
+		{
+			hypotheses.Add(new IncidentHypothesis
+			{
+				Description = $"The incident may match guidance from '{primaryRunbook.Title}'.",
+				InferenceStrength = "Medium",
+				Confidence = "Medium",
+				SupportingEvidence = [primaryRunbook.Summary],
+				EvidenceReferences = [$"rag.runbook.{primaryRunbook.Id}"]
+			});
+		}
+
+		var latestMetric = metricsResult.Samples.OrderByDescending(sample => sample.Timestamp).FirstOrDefault();
+		if (latestMetric is not null && latestMetric.Value > 25)
+		{
+			hypotheses.Add(new IncidentHypothesis
+			{
+				Description = "The error-rate metric suggests the symptom is measurable and currently elevated.",
+				InferenceStrength = "Medium",
+				Confidence = "Medium",
+				SupportingEvidence = [$"{metricsResult.MetricName} latest sample is {latestMetric.Value}."],
+				EvidenceReferences = ["tool.metrics"]
+			});
+		}
+
 		return hypotheses;
 	}
 
-	private static IReadOnlyList<IncidentActionRecommendation> BuildRecommendedActions(Incident incident)
+	private static IReadOnlyList<IncidentActionRecommendation> BuildRecommendedActions(
+		Incident incident,
+		RunbookRetrievalResult runbookResult,
+		LogSearchResult logResult,
+		MetricsQueryResult metricsResult)
 	{
 		var actions = new List<IncidentActionRecommendation>();
 
@@ -225,7 +344,7 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 			Description = "Confirm current blast radius and affected users.",
 			Priority = "High",
 			Rationale = "You need impact scope before choosing remediation.",
-			SupportingSignals = ["incident.description", "tool.logs"]
+			SupportingSignals = logResult.Entries.Count > 0 ? ["incident.description", "tool.logs"] : ["incident.description"]
 		});
 
 		actions.Add(new IncidentActionRecommendation
@@ -233,7 +352,7 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 			Description = "Review recent deployments, config changes, and dependency health.",
 			Priority = "High",
 			Rationale = "This often explains sudden regressions.",
-			SupportingSignals = ["tool.runbooks", "tool.logs", "tool.metrics"]
+			SupportingSignals = ["rag.runbooks", "tool.logs", "tool.metrics"]
 		});
 
 		actions.Add(new IncidentActionRecommendation
@@ -252,6 +371,28 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 				Priority = "High",
 				Rationale = "High severity incidents still need quick triage of the highest-impact surface.",
 				SupportingSignals = ["incident.severity", "tool.runbooks"]
+			});
+		}
+
+		if (runbookResult.Runbooks.Count > 0)
+		{
+			actions.Add(new IncidentActionRecommendation
+			{
+				Description = $"Follow the most relevant retrieved runbook: {runbookResult.Runbooks[0].Title}.",
+				Priority = "High",
+				Rationale = "RAG found operational guidance that matches the incident context.",
+				SupportingSignals = [$"rag.runbook.{runbookResult.Runbooks[0].Id}"]
+			});
+		}
+
+		if (metricsResult.Samples.Count == 0)
+		{
+			actions.Add(new IncidentActionRecommendation
+			{
+				Description = "Add or verify metrics for this service path before relying on automated diagnosis.",
+				Priority = "Medium",
+				Rationale = "A full incident response agent needs measurable signals for confidence.",
+				SupportingSignals = ["tool.metrics"]
 			});
 		}
 

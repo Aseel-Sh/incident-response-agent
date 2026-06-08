@@ -8,6 +8,7 @@ public static class DependencyInjection
 	{
 		services.AddTransient<Incidents.IAnalyzeIncidentUseCase, Incidents.AnalyzeIncidentUseCase>();
 		services.AddTransient<Incidents.IGetRecentIncidentAnalysesUseCase, Incidents.GetRecentIncidentAnalysesUseCase>();
+		services.AddSingleton<Evaluation.IIncidentAnalysisEvaluator, Evaluation.RubricIncidentAnalysisEvaluator>();
 		return services;
 	}
 }

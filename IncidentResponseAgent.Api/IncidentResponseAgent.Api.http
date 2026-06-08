@@ -1,6 +1,23 @@
 @IncidentResponseAgent.Api_HostAddress = http://localhost:5155
 
-GET {{IncidentResponseAgent.Api_HostAddress}}/weatherforecast/
+GET {{IncidentResponseAgent.Api_HostAddress}}/health
 Accept: application/json
 
 ###
+
+POST {{IncidentResponseAgent.Api_HostAddress}}/api/incidents/analyze
+Content-Type: application/json
+
+{
+  "title": "Checkout 5xx spike",
+  "description": "Customers are seeing intermittent 500 responses during checkout.",
+  "severity": "High",
+  "serviceName": "checkout-api",
+  "environment": "production",
+  "tags": ["checkout", "5xx", "latency"]
+}
+
+###
+
+GET {{IncidentResponseAgent.Api_HostAddress}}/api/incidents/recent?maxResults=5
+Accept: application/json

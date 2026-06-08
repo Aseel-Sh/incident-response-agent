@@ -1,25 +1,27 @@
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
 using IncidentResponseAgent.Application.Runbooks;
 using IncidentResponseAgent.Domain.Runbooks;
+using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Options;
-using System.Net.Http.Headers;
-using System.Net.Http.Json;
-using System.Text.Json;
 
 namespace IncidentResponseAgent.Infrastructure.Runbooks;
 
 public sealed class SemanticRunbookRetrievalService : IRunbookRetrievalService
 {
+	private static readonly JsonSerializerOptions SerializerOptions = new(JsonSerializerDefaults.Web);
+	private readonly IRunbookEmbeddingProvider _embeddingProvider;
 	private readonly RunbookRetrievalOptions _options;
-	private readonly IHttpClientFactory _httpClientFactory;
-	private readonly HuggingFaceEmbeddingSettings? _embeddingSettings;
-	private readonly object _indexLock = new();
-	private Task<RunbookSemanticIndex>? _indexTask;
+	private readonly SemaphoreSlim _indexLock = new(1, 1);
+	private bool _isInitialized;
 
 	public SemanticRunbookRetrievalService(IOptions<RunbookRetrievalOptions> options, IHttpClientFactory httpClientFactory)
 	{
 		_options = options.Value ?? new RunbookRetrievalOptions();
-		_httpClientFactory = httpClientFactory;
-		_embeddingSettings = CreateEmbeddingSettings(_options);
+		_embeddingProvider = HuggingFaceRunbookEmbeddingProvider.IsConfigured(_options)
+			? new HuggingFaceRunbookEmbeddingProvider(_options, httpClientFactory)
+			: new LocalHashingRunbookEmbeddingProvider(_options);
 	}
 
 	public async Task<RunbookRetrievalResult> RetrieveAsync(RunbookRetrievalRequest request, CancellationToken cancellationToken = default)
@@ -32,224 +34,321 @@ public sealed class SemanticRunbookRetrievalService : IRunbookRetrievalService
 			throw new ArgumentException("Runbook query cannot be empty.", nameof(request));
 		}
 
-		var index = await GetIndexAsync().ConfigureAwait(false);
-		var limit = Math.Clamp(request.MaxResults <= 0 ? _options.MaxResults : request.MaxResults, 1, 5);
-		var queryTokens = Tokenize(request.Query);
-		var serviceTokens = Tokenize(request.ServiceName);
-		var environmentTokens = Tokenize(request.Environment);
+		await EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
 
-		IReadOnlyList<ScoredRunbookChunk> matches = await SearchSemanticallyAsync(index, request.Query, limit, cancellationToken).ConfigureAwait(false);
+		var queryVector = await _embeddingProvider.GenerateEmbeddingAsync(BuildQueryText(request), cancellationToken).ConfigureAwait(false);
+		var queryTokens = RunbookTextAnalysis.Tokenize(request.Query);
+		var serviceTokens = RunbookTextAnalysis.Tokenize(request.ServiceName);
+		var environmentTokens = RunbookTextAnalysis.Tokenize(request.Environment);
+		var limit = Math.Clamp(request.MaxResults <= 0 ? _options.MaxResults : request.MaxResults, 1, 8);
 
-		if (matches.Count == 0)
-		{
-			matches = SearchLexically(index, queryTokens, serviceTokens, environmentTokens, limit);
-		}
+		var matches = await LoadChunksAsync(cancellationToken).ConfigureAwait(false);
+		var scored = matches
+			.Select(chunk => new ScoredRunbookChunk(chunk, Score(chunk, queryVector, queryTokens, serviceTokens, environmentTokens)))
+			.Where(match => match.Score >= _options.MinimumRelevanceScore || HasLexicalOverlap(match.Chunk, queryTokens, serviceTokens, environmentTokens))
+			.OrderByDescending(match => match.Score)
+			.ThenBy(match => match.Chunk.DocumentTitle, StringComparer.OrdinalIgnoreCase)
+			.ThenBy(match => match.Chunk.Ordinal)
+			.Take(limit)
+			.Select(match => match.ToDocument())
+			.ToArray();
 
 		return new RunbookRetrievalResult
 		{
-			Runbooks = matches.Select(match => match.ToDocument()).ToArray()
+			Runbooks = scored
 		};
 	}
 
-	private Task<RunbookSemanticIndex> GetIndexAsync()
+	private async Task EnsureInitializedAsync(CancellationToken cancellationToken)
 	{
-		lock (_indexLock)
+		if (_isInitialized)
 		{
-			_indexTask ??= BuildIndexAsync(_options);
-			return _indexTask;
-		}
-	}
-
-	private async Task<IReadOnlyList<ScoredRunbookChunk>> SearchSemanticallyAsync(
-		RunbookSemanticIndex index,
-		string query,
-		int limit,
-		CancellationToken cancellationToken)
-	{
-		if (_embeddingSettings is null)
-		{
-			return Array.Empty<ScoredRunbookChunk>();
+			return;
 		}
 
-		float[]? queryVector;
+		await _indexLock.WaitAsync(cancellationToken).ConfigureAwait(false);
 		try
 		{
-			queryVector = await GenerateEmbeddingAsync(_embeddingSettings, query, cancellationToken).ConfigureAwait(false);
-		}
-		catch
-		{
-			return Array.Empty<ScoredRunbookChunk>();
-		}
-
-		return index.Entries
-			.Select(entry => new ScoredRunbookChunk(entry, CosineSimilarity(queryVector, entry.Embedding)))
-			.Where(match => match.Score >= index.Options.MinimumRelevanceScore)
-			.OrderByDescending(match => match.Score)
-			.ThenBy(match => match.Entry.Document.Title, StringComparer.OrdinalIgnoreCase)
-			.Take(limit)
-			.ToArray();
-	}
-
-	private static IReadOnlyList<ScoredRunbookChunk> SearchLexically(
-		RunbookSemanticIndex index,
-		HashSet<string> queryTokens,
-		HashSet<string> serviceTokens,
-		HashSet<string> environmentTokens,
-		int limit)
-	{
-		return index.Entries
-			.Select(entry => new ScoredRunbookChunk(entry, Score(entry, queryTokens, serviceTokens, environmentTokens)))
-			.Where(match => match.Score > 0)
-			.OrderByDescending(match => match.Score)
-			.ThenBy(match => match.Entry.Document.Title, StringComparer.OrdinalIgnoreCase)
-			.Take(limit)
-			.ToArray();
-	}
-
-	private static double Score(RunbookChunkEntry entry, HashSet<string> queryTokens, HashSet<string> serviceTokens, HashSet<string> environmentTokens)
-	{
-		var haystack = Tokenize(entry.Chunk.SearchText);
-		var score = haystack.Overlaps(queryTokens) ? 2 : 0;
-
-		foreach (var token in queryTokens)
-		{
-			if (haystack.Contains(token))
+			if (_isInitialized)
 			{
-				score += 2;
-			}
-		}
-
-		foreach (var token in serviceTokens)
-		{
-			if (haystack.Contains(token))
-			{
-				score += 3;
-			}
-		}
-
-		foreach (var token in environmentTokens)
-		{
-			if (haystack.Contains(token))
-			{
-				score += 1;
-			}
-		}
-
-		if (entry.Document.Tags.Any(tag => serviceTokens.Contains(tag)))
-		{
-			score += 4;
-		}
-
-		if (entry.Document.Tags.Any(tag => queryTokens.Contains(tag)))
-		{
-			score += 3;
-		}
-
-		return score;
-	}
-
-	private static HashSet<string> Tokenize(string? value)
-	{
-		if (string.IsNullOrWhiteSpace(value))
-		{
-			return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-		}
-
-		return System.Text.RegularExpressions.Regex.Matches(value.ToLowerInvariant(), "[a-z0-9]+")
-			.Select(match => match.Value)
-			.ToHashSet(StringComparer.OrdinalIgnoreCase);
-	}
-
-	private static double CosineSimilarity(float[] left, float[] right)
-	{
-		var length = Math.Min(left.Length, right.Length);
-		if (length == 0)
-		{
-			return 0;
-		}
-
-		double dot = 0;
-		double leftMagnitude = 0;
-		double rightMagnitude = 0;
-
-		for (var index = 0; index < length; index++)
-		{
-			var leftValue = left[index];
-			var rightValue = right[index];
-			dot += leftValue * rightValue;
-			leftMagnitude += leftValue * leftValue;
-			rightMagnitude += rightValue * rightValue;
-		}
-
-		if (leftMagnitude <= 0 || rightMagnitude <= 0)
-		{
-			return 0;
-		}
-
-		return dot / (Math.Sqrt(leftMagnitude) * Math.Sqrt(rightMagnitude));
-	}
-
-	private async Task<RunbookSemanticIndex> BuildIndexAsync(RunbookRetrievalOptions options)
-	{
-		var documents = LoadRunbooks();
-		var entries = new List<RunbookChunkEntry>();
-		var embeddingSettings = CreateEmbeddingSettings(options);
-		if (embeddingSettings is null)
-		{
-			foreach (var document in documents)
-			{
-				foreach (var chunk in MarkdownRunbookChunker.Chunk(document))
-				{
-					entries.Add(new RunbookChunkEntry(document, chunk, Array.Empty<float>()));
-				}
+				return;
 			}
 
-			return await Task.FromResult(new RunbookSemanticIndex(entries, options, UseEmbeddings: false)).ConfigureAwait(false);
+			await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+			await EnsureSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
+			await IndexMarkdownRunbooksAsync(connection, cancellationToken).ConfigureAwait(false);
+			_isInitialized = true;
 		}
-
-		foreach (var document in documents)
+		finally
 		{
+			_indexLock.Release();
+		}
+	}
+
+	private async Task IndexMarkdownRunbooksAsync(SqliteConnection connection, CancellationToken cancellationToken)
+	{
+		foreach (var source in LoadRunbookSources())
+		{
+			cancellationToken.ThrowIfCancellationRequested();
+
+			var document = ParseDocument(source.Path, source.Content);
+			var contentHash = ComputeHash(source.Content);
+			var existingHash = await GetExistingDocumentHashAsync(connection, document.Id, cancellationToken).ConfigureAwait(false);
+			if (string.Equals(existingHash, contentHash, StringComparison.Ordinal))
+			{
+				continue;
+			}
+
+			using var transaction = connection.BeginTransaction();
+			await UpsertDocumentAsync(connection, transaction, document, source.Path, contentHash, cancellationToken).ConfigureAwait(false);
+			await DeleteChunksAsync(connection, transaction, document.Id, cancellationToken).ConfigureAwait(false);
+
 			foreach (var chunk in MarkdownRunbookChunker.Chunk(document))
 			{
-				entries.Add(new RunbookChunkEntry(document, chunk, Array.Empty<float>()));
-			}
-		}
-
-		try
-		{
-			for (var index = 0; index < entries.Count; index++)
-			{
-				entries[index] = entries[index] with { Embedding = await GenerateEmbeddingAsync(embeddingSettings, entries[index].Chunk.SearchText, CancellationToken.None).ConfigureAwait(false) };
+				var embedding = await _embeddingProvider.GenerateEmbeddingAsync(chunk.SearchText, cancellationToken).ConfigureAwait(false);
+				await InsertChunkAsync(connection, transaction, document, chunk, embedding, cancellationToken).ConfigureAwait(false);
 			}
 
-			return await Task.FromResult(new RunbookSemanticIndex(entries, options, UseEmbeddings: true)).ConfigureAwait(false);
-		}
-		catch
-		{
-			return await Task.FromResult(new RunbookSemanticIndex(entries, options, UseEmbeddings: false)).ConfigureAwait(false);
+			await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
 		}
 	}
 
-	private static IReadOnlyList<RunbookDocument> LoadRunbooks()
+	private async Task<string?> GetExistingDocumentHashAsync(SqliteConnection connection, string documentId, CancellationToken cancellationToken)
 	{
-		var directory = Path.Combine(AppContext.BaseDirectory, "KnowledgeBase", "Runbooks");
+		await using var command = connection.CreateCommand();
+		command.CommandText = "select content_hash from runbook_documents where id = $id;";
+		command.Parameters.AddWithValue("$id", documentId);
+		var value = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+		return value as string;
+	}
+
+	private async Task UpsertDocumentAsync(
+		SqliteConnection connection,
+		SqliteTransaction transaction,
+		RunbookDocument document,
+		string sourcePath,
+		string contentHash,
+		CancellationToken cancellationToken)
+	{
+		await using var command = connection.CreateCommand();
+		command.Transaction = transaction;
+		command.CommandText = """
+insert into runbook_documents (id, title, summary, content, tags_json, source_path, content_hash, indexed_at_utc)
+values ($id, $title, $summary, $content, $tagsJson, $sourcePath, $contentHash, $indexedAtUtc)
+on conflict(id) do update set
+	title = excluded.title,
+	summary = excluded.summary,
+	content = excluded.content,
+	tags_json = excluded.tags_json,
+	source_path = excluded.source_path,
+	content_hash = excluded.content_hash,
+	indexed_at_utc = excluded.indexed_at_utc;
+""";
+		command.Parameters.AddWithValue("$id", document.Id);
+		command.Parameters.AddWithValue("$title", document.Title);
+		command.Parameters.AddWithValue("$summary", document.Summary);
+		command.Parameters.AddWithValue("$content", document.Content);
+		command.Parameters.AddWithValue("$tagsJson", JsonSerializer.Serialize(document.Tags, SerializerOptions));
+		command.Parameters.AddWithValue("$sourcePath", sourcePath);
+		command.Parameters.AddWithValue("$contentHash", contentHash);
+		command.Parameters.AddWithValue("$indexedAtUtc", DateTimeOffset.UtcNow.ToString("O"));
+		await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+	}
+
+	private static async Task DeleteChunksAsync(
+		SqliteConnection connection,
+		SqliteTransaction transaction,
+		string documentId,
+		CancellationToken cancellationToken)
+	{
+		await using var command = connection.CreateCommand();
+		command.Transaction = transaction;
+		command.CommandText = "delete from runbook_chunks where document_id = $documentId;";
+		command.Parameters.AddWithValue("$documentId", documentId);
+		await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+	}
+
+	private async Task InsertChunkAsync(
+		SqliteConnection connection,
+		SqliteTransaction transaction,
+		RunbookDocument document,
+		RunbookChunk chunk,
+		float[] embedding,
+		CancellationToken cancellationToken)
+	{
+		await using var command = connection.CreateCommand();
+		command.Transaction = transaction;
+		command.CommandText = """
+insert into runbook_chunks (
+	document_id,
+	ordinal,
+	section_path,
+	text,
+	search_text,
+	embedding,
+	embedding_dimensions,
+	embedding_provider,
+	embedding_model,
+	content_hash)
+values (
+	$documentId,
+	$ordinal,
+	$sectionPath,
+	$text,
+	$searchText,
+	$embedding,
+	$embeddingDimensions,
+	$embeddingProvider,
+	$embeddingModel,
+	$contentHash);
+""";
+		command.Parameters.AddWithValue("$documentId", document.Id);
+		command.Parameters.AddWithValue("$ordinal", chunk.Ordinal);
+		command.Parameters.AddWithValue("$sectionPath", chunk.SectionPath);
+		command.Parameters.AddWithValue("$text", chunk.Text);
+		command.Parameters.AddWithValue("$searchText", chunk.SearchText);
+		command.Parameters.Add("$embedding", SqliteType.Blob).Value = SerializeVector(embedding);
+		command.Parameters.AddWithValue("$embeddingDimensions", embedding.Length);
+		command.Parameters.AddWithValue("$embeddingProvider", _embeddingProvider.ProviderName);
+		command.Parameters.AddWithValue("$embeddingModel", _embeddingProvider.ModelName);
+		command.Parameters.AddWithValue("$contentHash", ComputeHash(chunk.SearchText));
+		await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+	}
+
+	private async Task<IReadOnlyList<RunbookChunkRecord>> LoadChunksAsync(CancellationToken cancellationToken)
+	{
+		await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+		await using var command = connection.CreateCommand();
+		command.CommandText = """
+select
+	c.id,
+	c.document_id,
+	d.title,
+	d.summary,
+	d.tags_json,
+	c.ordinal,
+	c.section_path,
+	c.text,
+	c.search_text,
+	c.embedding
+from runbook_chunks c
+join runbook_documents d on d.id = c.document_id
+order by d.title, c.ordinal;
+""";
+
+		var chunks = new List<RunbookChunkRecord>();
+		await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+		while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+		{
+			chunks.Add(new RunbookChunkRecord(
+				ChunkId: reader.GetInt64(0),
+				DocumentId: reader.GetString(1),
+				DocumentTitle: reader.GetString(2),
+				DocumentSummary: reader.GetString(3),
+				Tags: DeserializeTags(reader.GetString(4)),
+				Ordinal: reader.GetInt32(5),
+				SectionPath: reader.GetString(6),
+				Text: reader.GetString(7),
+				SearchText: reader.GetString(8),
+				Embedding: DeserializeVector((byte[])reader["embedding"])));
+		}
+
+		return chunks;
+	}
+
+	private async Task<SqliteConnection> OpenConnectionAsync(CancellationToken cancellationToken)
+	{
+		var databasePath = ResolveDatabasePath();
+		Directory.CreateDirectory(Path.GetDirectoryName(databasePath)!);
+
+		var connectionString = new SqliteConnectionStringBuilder
+		{
+			DataSource = databasePath,
+			Pooling = false
+		}.ToString();
+		var connection = new SqliteConnection(connectionString);
+		await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
+		return connection;
+	}
+
+	private static async Task EnsureSchemaAsync(SqliteConnection connection, CancellationToken cancellationToken)
+	{
+		await using var command = connection.CreateCommand();
+		command.CommandText = """
+create table if not exists runbook_documents (
+	id text primary key,
+	title text not null,
+	summary text not null,
+	content text not null,
+	tags_json text not null,
+	source_path text not null,
+	content_hash text not null,
+	indexed_at_utc text not null
+);
+
+create table if not exists runbook_chunks (
+	id integer primary key autoincrement,
+	document_id text not null,
+	ordinal integer not null,
+	section_path text not null,
+	text text not null,
+	search_text text not null,
+	embedding blob not null,
+	embedding_dimensions integer not null,
+	embedding_provider text not null,
+	embedding_model text not null,
+	content_hash text not null,
+	foreign key(document_id) references runbook_documents(id) on delete cascade
+);
+
+create index if not exists ix_runbook_chunks_document_id on runbook_chunks(document_id);
+create index if not exists ix_runbook_documents_content_hash on runbook_documents(content_hash);
+""";
+		await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+	}
+
+	private string ResolveDatabasePath()
+	{
+		if (!string.IsNullOrWhiteSpace(_options.DatabasePath))
+		{
+			return Path.GetFullPath(Environment.ExpandEnvironmentVariables(_options.DatabasePath));
+		}
+
+		return Path.Combine(
+			Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+			"IncidentResponseAgent",
+			"runbook-rag.sqlite");
+	}
+
+	private IReadOnlyList<RunbookSource> LoadRunbookSources()
+	{
+		var directory = ResolveKnowledgeBasePath();
 		if (!Directory.Exists(directory))
 		{
-			return Array.Empty<RunbookDocument>();
+			return Array.Empty<RunbookSource>();
 		}
 
-		var files = Directory.EnumerateFiles(directory, "*.md", SearchOption.TopDirectoryOnly)
+		return Directory.EnumerateFiles(directory, "*.md", SearchOption.TopDirectoryOnly)
 			.OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+			.Select(path => new RunbookSource(path, File.ReadAllText(path)))
 			.ToArray();
+	}
 
-		var runbooks = new List<RunbookDocument>(files.Length);
-		foreach (var filePath in files)
+	private string ResolveKnowledgeBasePath()
+	{
+		if (!string.IsNullOrWhiteSpace(_options.KnowledgeBasePath))
 		{
-			var content = File.ReadAllText(filePath);
-			runbooks.Add(ParseDocument(filePath, content));
+			return Path.GetFullPath(Environment.ExpandEnvironmentVariables(_options.KnowledgeBasePath));
 		}
 
-		return runbooks;
+		var candidates = new[]
+		{
+			Path.Combine(AppContext.BaseDirectory, "Runbooks", "KnowledgeBase"),
+			Path.Combine(AppContext.BaseDirectory, "KnowledgeBase", "Runbooks"),
+			Path.Combine(AppContext.BaseDirectory, "KnowledgeBase")
+		};
+
+		return candidates.FirstOrDefault(Directory.Exists) ?? candidates[0];
 	}
 
 	private static RunbookDocument ParseDocument(string filePath, string content)
@@ -286,7 +385,10 @@ public sealed class SemanticRunbookRetrievalService : IRunbookRetrievalService
 					continue;
 				}
 
-				if (line.StartsWith("---", StringComparison.Ordinal) || line.StartsWith("## ", StringComparison.Ordinal) || line.StartsWith("- ", StringComparison.Ordinal) || line.StartsWith("1.", StringComparison.Ordinal))
+				if (line.StartsWith("---", StringComparison.Ordinal) ||
+				    line.StartsWith("## ", StringComparison.Ordinal) ||
+				    line.StartsWith("- ", StringComparison.Ordinal) ||
+				    line.StartsWith("1.", StringComparison.Ordinal))
 				{
 					break;
 				}
@@ -334,10 +436,7 @@ public sealed class SemanticRunbookRetrievalService : IRunbookRetrievalService
 				var value = trimmed[5..].Trim();
 				foreach (var token in value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
 				{
-					if (!string.IsNullOrWhiteSpace(token))
-					{
-						tags.Add(token.Trim());
-					}
+					tags.Add(token.Trim());
 				}
 			}
 		}
@@ -346,12 +445,7 @@ public sealed class SemanticRunbookRetrievalService : IRunbookRetrievalService
 		foreach (var key in metadataKeys)
 		{
 			var value = ExtractMetadataValue(lines, key);
-			if (string.IsNullOrWhiteSpace(value))
-			{
-				continue;
-			}
-
-			foreach (var token in Tokenize(value))
+			foreach (var token in RunbookTextAnalysis.Tokenize(value))
 			{
 				tags.Add(token);
 			}
@@ -375,114 +469,128 @@ public sealed class SemanticRunbookRetrievalService : IRunbookRetrievalService
 		return null;
 	}
 
-	private async Task<float[]> GenerateEmbeddingAsync(HuggingFaceEmbeddingSettings settings, string text, CancellationToken cancellationToken)
+	private static string BuildQueryText(RunbookRetrievalRequest request)
 	{
-		if (string.IsNullOrWhiteSpace(text))
-		{
-			return Array.Empty<float>();
-		}
-
-		var httpClient = _httpClientFactory.CreateClient();
-		using var request = new HttpRequestMessage(HttpMethod.Post, BuildEmbeddingUri(settings));
-		request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", settings.ApiKey);
-		request.Content = JsonContent.Create(new
-		{
-			inputs = text,
-			normalize = true,
-			truncate = true
-		});
-
-		using var response = await httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
-		response.EnsureSuccessStatusCode();
-
-		await using var responseStream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-		using var jsonDocument = await JsonDocument.ParseAsync(responseStream, cancellationToken: cancellationToken).ConfigureAwait(false);
-		return ParseEmbedding(jsonDocument.RootElement);
+		var parts = new[] { request.Query, request.ServiceName, request.Environment };
+		return string.Join(' ', parts.Where(part => !string.IsNullOrWhiteSpace(part)));
 	}
 
-	private static Uri BuildEmbeddingUri(HuggingFaceEmbeddingSettings settings)
+	private double Score(
+		RunbookChunkRecord chunk,
+		float[] queryVector,
+		HashSet<string> queryTokens,
+		HashSet<string> serviceTokens,
+		HashSet<string> environmentTokens)
 	{
-		var baseEndpoint = settings.Endpoint.EndsWith("/", StringComparison.Ordinal) ? settings.Endpoint : settings.Endpoint + "/";
-		return new Uri(baseEndpoint + Uri.EscapeDataString(settings.Model), UriKind.Absolute);
+		var semanticScore = RunbookTextAnalysis.CosineSimilarity(queryVector, chunk.Embedding);
+		var lexicalScore = LexicalScore(chunk, queryTokens, serviceTokens, environmentTokens);
+		var semanticWeight = Math.Clamp(_options.SemanticWeight, 0, 1);
+		var lexicalWeight = Math.Clamp(_options.LexicalWeight, 0, 1);
+
+		if (semanticWeight + lexicalWeight <= 0)
+		{
+			semanticWeight = 0.75;
+			lexicalWeight = 0.25;
+		}
+
+		return semanticScore * semanticWeight + lexicalScore * lexicalWeight;
 	}
 
-	private static float[] ParseEmbedding(JsonElement element)
+	private static double LexicalScore(
+		RunbookChunkRecord chunk,
+		HashSet<string> queryTokens,
+		HashSet<string> serviceTokens,
+		HashSet<string> environmentTokens)
 	{
-		if (element.ValueKind != JsonValueKind.Array)
-		{
-			return Array.Empty<float>();
-		}
+		var haystack = RunbookTextAnalysis.Tokenize(chunk.SearchText);
+		var score = 0d;
 
-		if (element.GetArrayLength() == 0)
-		{
-			return Array.Empty<float>();
-		}
+		score += CountMatches(haystack, queryTokens) * 0.08;
+		score += CountMatches(haystack, serviceTokens) * 0.12;
+		score += CountMatches(haystack, environmentTokens) * 0.04;
+		score += chunk.Tags.Any(tag => serviceTokens.Contains(tag)) ? 0.2 : 0;
+		score += chunk.Tags.Any(tag => queryTokens.Contains(tag)) ? 0.15 : 0;
 
-		var first = element[0];
-		if (first.ValueKind == JsonValueKind.Array)
-		{
-			return first.EnumerateArray().Select(value => (float)value.GetDouble()).ToArray();
-		}
-
-		return element.EnumerateArray().Select(value => (float)value.GetDouble()).ToArray();
+		return Math.Min(score, 1);
 	}
 
-	private static HuggingFaceEmbeddingSettings? CreateEmbeddingSettings(RunbookRetrievalOptions options)
+	private static int CountMatches(HashSet<string> haystack, HashSet<string> needles)
 	{
-		var apiKey = options.ApiKey;
-		if (string.IsNullOrWhiteSpace(apiKey))
+		var matches = 0;
+		foreach (var needle in needles)
 		{
-			apiKey = Environment.GetEnvironmentVariable("HF_TOKEN");
+			if (haystack.Contains(needle))
+			{
+				matches++;
+			}
 		}
 
-		if (string.IsNullOrWhiteSpace(apiKey))
-		{
-			return null;
-		}
-
-		var model = options.Model;
-		if (string.IsNullOrWhiteSpace(model))
-		{
-			model = Environment.GetEnvironmentVariable("HF_EMBEDDING_MODEL");
-		}
-
-		if (string.IsNullOrWhiteSpace(model))
-		{
-			model = "thenlper/gte-large";
-		}
-
-		var endpoint = options.Endpoint;
-		if (string.IsNullOrWhiteSpace(endpoint))
-		{
-			endpoint = "https://api-inference.huggingface.co/pipeline/feature-extraction/";
-		}
-
-		return new HuggingFaceEmbeddingSettings(endpoint.Trim(), model.Trim(), apiKey.Trim());
+		return matches;
 	}
 
-	private sealed record RunbookSemanticIndex(
-		IReadOnlyList<RunbookChunkEntry> Entries,
-		RunbookRetrievalOptions Options,
-		bool UseEmbeddings);
+	private static bool HasLexicalOverlap(
+		RunbookChunkRecord chunk,
+		HashSet<string> queryTokens,
+		HashSet<string> serviceTokens,
+		HashSet<string> environmentTokens)
+	{
+		var haystack = RunbookTextAnalysis.Tokenize(chunk.SearchText);
+		return haystack.Overlaps(queryTokens) || haystack.Overlaps(serviceTokens) || haystack.Overlaps(environmentTokens);
+	}
 
-	private sealed record HuggingFaceEmbeddingSettings(string Endpoint, string Model, string ApiKey);
+	private static byte[] SerializeVector(float[] vector)
+	{
+		var bytes = new byte[vector.Length * sizeof(float)];
+		Buffer.BlockCopy(vector, 0, bytes, 0, bytes.Length);
+		return bytes;
+	}
 
-	private sealed record RunbookChunkEntry(RunbookDocument Document, RunbookChunk Chunk, float[] Embedding);
+	private static float[] DeserializeVector(byte[] bytes)
+	{
+		var vector = new float[bytes.Length / sizeof(float)];
+		Buffer.BlockCopy(bytes, 0, vector, 0, bytes.Length);
+		return vector;
+	}
 
-	private sealed record ScoredRunbookChunk(RunbookChunkEntry Entry, double Score)
+	private static IReadOnlyCollection<string> DeserializeTags(string tagsJson)
+	{
+		return JsonSerializer.Deserialize<string[]>(tagsJson, SerializerOptions) ?? Array.Empty<string>();
+	}
+
+	private static string ComputeHash(string value)
+	{
+		var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(value));
+		return Convert.ToHexString(bytes);
+	}
+
+	private sealed record RunbookSource(string Path, string Content);
+
+	private sealed record RunbookChunkRecord(
+		long ChunkId,
+		string DocumentId,
+		string DocumentTitle,
+		string DocumentSummary,
+		IReadOnlyCollection<string> Tags,
+		int Ordinal,
+		string SectionPath,
+		string Text,
+		string SearchText,
+		float[] Embedding);
+
+	private sealed record ScoredRunbookChunk(RunbookChunkRecord Chunk, double Score)
 	{
 		public RunbookDocument ToDocument()
 		{
-			var title = string.IsNullOrWhiteSpace(Entry.Chunk.SectionPath)
-				? Entry.Document.Title
-				: $"{Entry.Document.Title} - {Entry.Chunk.SectionPath}";
+			var title = string.IsNullOrWhiteSpace(Chunk.SectionPath)
+				? Chunk.DocumentTitle
+				: $"{Chunk.DocumentTitle} - {Chunk.SectionPath}";
 
 			return new RunbookDocument(
-				$"{Entry.Document.Id}-{Entry.Chunk.Ordinal}",
+				$"{Chunk.DocumentId}-{Chunk.Ordinal}",
 				title,
-				BuildSummary(Entry.Chunk.Text),
-				Entry.Chunk.SearchText,
-				Entry.Document.Tags);
+				BuildSummary(Chunk.Text),
+				Chunk.SearchText,
+				Chunk.Tags);
 		}
 
 		private static string BuildSummary(string text)
