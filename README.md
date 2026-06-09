@@ -54,17 +54,44 @@ $env:HF_TOKEN = "your-hugging-face-token"
 $env:HF_EMBEDDING_MODEL = "thenlper/gte-large"
 ```
 
+Get the key here:
+
+- Hugging Face access tokens: https://huggingface.co/settings/tokens
+- Hugging Face token docs: https://huggingface.co/docs/hub/security-tokens
+
 ## Agent Model Configuration
 
 If `Agent:IncidentAnalysis:ApiKey` or `IRA_AGENT_API_KEY` is empty, the app uses the prompt-based local agent fallback so the API can still run during development.
 
-When you add a free/OpenRouter-compatible model key later:
+When you add a free/OpenRouter-compatible model key later, use either user secrets/environment variables or `appsettings.Development.json`. Do not commit real keys to `appsettings.json`.
 
 ```powershell
 $env:IRA_AGENT_API_KEY = "your-model-api-key"
 $env:IRA_AGENT_ENDPOINT = "https://openrouter.ai/api/v1"
 $env:IRA_AGENT_MODEL = "your-free-model"
 ```
+
+Equivalent config location:
+
+```json
+"Agent": {
+  "IncidentAnalysis": {
+    "Provider": "OpenAI-compatible provider",
+    "Model": "your-free-model",
+    "Endpoint": "https://openrouter.ai/api/v1",
+    "ApiKey": "your-model-api-key"
+  }
+}
+```
+
+Get model keys here:
+
+- OpenRouter keys: https://openrouter.ai/settings/keys
+- OpenRouter authentication docs: https://openrouter.ai/docs/api-reference/authentication
+- Google AI Studio Gemini keys: https://aistudio.google.com/app/apikey
+- Gemini API key docs: https://ai.google.dev/gemini-api/docs/api-key
+
+This project is currently wired for OpenAI-compatible chat endpoints, so OpenRouter is the easiest drop-in for the agent. Gemini is still useful if you later add a Gemini-specific adapter or route Gemini through an OpenAI-compatible gateway.
 
 ## Run
 
@@ -76,6 +103,12 @@ Health check:
 
 ```http
 GET http://localhost:5155/health
+```
+
+Inspect RAG retrieval:
+
+```http
+GET http://localhost:5155/api/runbooks/search?query=checkout%205xx%20latency&serviceName=checkout-api&environment=production&maxResults=5
 ```
 
 Analyze an incident:

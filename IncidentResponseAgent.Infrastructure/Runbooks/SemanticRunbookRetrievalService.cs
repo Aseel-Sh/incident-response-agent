@@ -8,7 +8,7 @@ using Microsoft.Extensions.Options;
 
 namespace IncidentResponseAgent.Infrastructure.Runbooks;
 
-public sealed class SemanticRunbookRetrievalService : IRunbookRetrievalService
+public sealed class SemanticRunbookRetrievalService : IRunbookRetrievalService, IRunbookRetrievalDiagnosticsService
 {
 	private static readonly JsonSerializerOptions SerializerOptions = new(JsonSerializerDefaults.Web);
 	private readonly IRunbookEmbeddingProvider _embeddingProvider;
@@ -36,27 +36,79 @@ public sealed class SemanticRunbookRetrievalService : IRunbookRetrievalService
 
 		await EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
 
-		var queryVector = await _embeddingProvider.GenerateEmbeddingAsync(BuildQueryText(request), cancellationToken).ConfigureAwait(false);
-		var queryTokens = RunbookTextAnalysis.Tokenize(request.Query);
-		var serviceTokens = RunbookTextAnalysis.Tokenize(request.ServiceName);
-		var environmentTokens = RunbookTextAnalysis.Tokenize(request.Environment);
+		var queryVector = await _embeddingProvider.GenerateEmbeddingAsync(BuildQueryText(request.Query, request.ServiceName, request.Environment), cancellationToken).ConfigureAwait(false);
 		var limit = Math.Clamp(request.MaxResults <= 0 ? _options.MaxResults : request.MaxResults, 1, 8);
+		var scored = await GetScoredMatchesAsync(
+			request.Query,
+			request.ServiceName,
+			request.Environment,
+			queryVector,
+			limit,
+			cancellationToken).ConfigureAwait(false);
 
-		var matches = await LoadChunksAsync(cancellationToken).ConfigureAwait(false);
-		var scored = matches
+		return new RunbookRetrievalResult
+		{
+			Runbooks = scored.Select(match => match.ToDocument()).ToArray()
+		};
+	}
+
+	public async Task<RunbookRetrievalDiagnosticsResult> SearchAsync(
+		RunbookRetrievalDiagnosticsRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		ArgumentNullException.ThrowIfNull(request);
+		cancellationToken.ThrowIfCancellationRequested();
+
+		if (string.IsNullOrWhiteSpace(request.Query))
+		{
+			throw new ArgumentException("Runbook query cannot be empty.", nameof(request));
+		}
+
+		await EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
+
+		var queryVector = await _embeddingProvider.GenerateEmbeddingAsync(
+			BuildQueryText(request.Query, request.ServiceName, request.Environment),
+			cancellationToken).ConfigureAwait(false);
+		var limit = Math.Clamp(request.MaxResults <= 0 ? _options.MaxResults : request.MaxResults, 1, 20);
+		var scored = await GetScoredMatchesAsync(
+			request.Query,
+			request.ServiceName,
+			request.Environment,
+			queryVector,
+			limit,
+			cancellationToken).ConfigureAwait(false);
+
+		return new RunbookRetrievalDiagnosticsResult
+		{
+			EmbeddingProvider = _embeddingProvider.ProviderName,
+			EmbeddingModel = _embeddingProvider.ModelName,
+			DatabasePath = ResolveDatabasePath(),
+			KnowledgeBasePath = ResolveKnowledgeBasePath(),
+			Matches = scored.Select(match => match.ToDiagnosticMatch()).ToArray()
+		};
+	}
+
+	private async Task<IReadOnlyList<ScoredRunbookChunk>> GetScoredMatchesAsync(
+		string query,
+		string? serviceName,
+		string? environment,
+		float[] queryVector,
+		int limit,
+		CancellationToken cancellationToken)
+	{
+		var queryTokens = RunbookTextAnalysis.Tokenize(query);
+		var serviceTokens = RunbookTextAnalysis.Tokenize(serviceName);
+		var environmentTokens = RunbookTextAnalysis.Tokenize(environment);
+		var chunks = await LoadChunksAsync(cancellationToken).ConfigureAwait(false);
+
+		return chunks
 			.Select(chunk => new ScoredRunbookChunk(chunk, Score(chunk, queryVector, queryTokens, serviceTokens, environmentTokens)))
 			.Where(match => match.Score >= _options.MinimumRelevanceScore || HasLexicalOverlap(match.Chunk, queryTokens, serviceTokens, environmentTokens))
 			.OrderByDescending(match => match.Score)
 			.ThenBy(match => match.Chunk.DocumentTitle, StringComparer.OrdinalIgnoreCase)
 			.ThenBy(match => match.Chunk.Ordinal)
 			.Take(limit)
-			.Select(match => match.ToDocument())
 			.ToArray();
-
-		return new RunbookRetrievalResult
-		{
-			Runbooks = scored
-		};
 	}
 
 	private async Task EnsureInitializedAsync(CancellationToken cancellationToken)
@@ -226,6 +278,7 @@ select
 	d.title,
 	d.summary,
 	d.tags_json,
+	d.source_path,
 	c.ordinal,
 	c.section_path,
 	c.text,
@@ -246,10 +299,11 @@ order by d.title, c.ordinal;
 				DocumentTitle: reader.GetString(2),
 				DocumentSummary: reader.GetString(3),
 				Tags: DeserializeTags(reader.GetString(4)),
-				Ordinal: reader.GetInt32(5),
-				SectionPath: reader.GetString(6),
-				Text: reader.GetString(7),
-				SearchText: reader.GetString(8),
+				SourcePath: reader.GetString(5),
+				Ordinal: reader.GetInt32(6),
+				SectionPath: reader.GetString(7),
+				Text: reader.GetString(8),
+				SearchText: reader.GetString(9),
 				Embedding: DeserializeVector((byte[])reader["embedding"])));
 		}
 
@@ -469,9 +523,9 @@ create index if not exists ix_runbook_documents_content_hash on runbook_document
 		return null;
 	}
 
-	private static string BuildQueryText(RunbookRetrievalRequest request)
+	private static string BuildQueryText(string query, string? serviceName, string? environment)
 	{
-		var parts = new[] { request.Query, request.ServiceName, request.Environment };
+		var parts = new[] { query, serviceName, environment };
 		return string.Join(' ', parts.Where(part => !string.IsNullOrWhiteSpace(part)));
 	}
 
@@ -571,6 +625,7 @@ create index if not exists ix_runbook_documents_content_hash on runbook_document
 		string DocumentTitle,
 		string DocumentSummary,
 		IReadOnlyCollection<string> Tags,
+		string SourcePath,
 		int Ordinal,
 		string SectionPath,
 		string Text,
@@ -591,6 +646,22 @@ create index if not exists ix_runbook_documents_content_hash on runbook_document
 				BuildSummary(Chunk.Text),
 				Chunk.SearchText,
 				Chunk.Tags);
+		}
+
+		public RunbookRetrievalMatch ToDiagnosticMatch()
+		{
+			return new RunbookRetrievalMatch
+			{
+				RunbookId = $"{Chunk.DocumentId}-{Chunk.Ordinal}",
+				Title = string.IsNullOrWhiteSpace(Chunk.SectionPath)
+					? Chunk.DocumentTitle
+					: $"{Chunk.DocumentTitle} - {Chunk.SectionPath}",
+				SectionPath = Chunk.SectionPath,
+				Summary = BuildSummary(Chunk.Text),
+				Source = Chunk.SourcePath,
+				Score = Math.Round(Score, 4),
+				Tags = Chunk.Tags
+			};
 		}
 
 		private static string BuildSummary(string text)

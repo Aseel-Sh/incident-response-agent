@@ -52,6 +52,19 @@ Check recent deployments, review downstream payment dependencies, and confirm bl
 		Assert.NotEmpty(result.Runbooks);
 		Assert.Contains(result.Runbooks, runbook => runbook.Title.Contains("Checkout 5xx", StringComparison.OrdinalIgnoreCase));
 		Assert.True(File.Exists(databasePath));
+
+		var diagnostics = await service.SearchAsync(new RunbookRetrievalDiagnosticsRequest
+		{
+			Query = "checkout http 500 errors",
+			ServiceName = "checkout-api",
+			Environment = "production",
+			MaxResults = 3
+		});
+
+		Assert.Equal("local", diagnostics.EmbeddingProvider);
+		Assert.Equal(databasePath, diagnostics.DatabasePath);
+		Assert.NotEmpty(diagnostics.Matches);
+		Assert.All(diagnostics.Matches, match => Assert.True(match.Score > 0));
 	}
 
 	public void Dispose()

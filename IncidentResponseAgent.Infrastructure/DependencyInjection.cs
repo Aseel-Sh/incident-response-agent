@@ -15,6 +15,8 @@ public static class DependencyInjection
 		services.AddSingleton<ILogSearchProvider, FakeLogSearchProvider>();
 		services.AddSingleton<IMetricsProvider, FakeMetricsProvider>();
 		services.AddSingleton<IRunbookRetrievalService, SemanticRunbookRetrievalService>();
+		services.AddSingleton<IRunbookRetrievalDiagnosticsService>(serviceProvider =>
+			(IRunbookRetrievalDiagnosticsService)serviceProvider.GetRequiredService<IRunbookRetrievalService>());
 		services.AddSingleton<IIncidentAnalysisSessionStore, InMemoryIncidentAnalysisSessionStore>();
 		services.AddSingleton<IIncidentRecordStore, FileIncidentRecordStore>();
 		return services;

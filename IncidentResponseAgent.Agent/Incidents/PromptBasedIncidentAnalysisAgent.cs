@@ -3,6 +3,7 @@ using IncidentResponseAgent.Application.Runbooks;
 using IncidentResponseAgent.Application.Tools;
 using IncidentResponseAgent.Domain.Incidents;
 using IncidentResponseAgent.Domain.Runbooks;
+using System.Text.Json;
 
 namespace IncidentResponseAgent.Agent.Incidents;
 
@@ -110,18 +111,54 @@ public sealed class PromptBasedIncidentAnalysisAgent : IIncidentAnalysisAgent
 
 		var metricText = primaryMetric is null ? "none" : primaryMetric.Value.ToString("0.##");
 
-		return $"""
-[{profile.Name}] Analysis for {serviceName}
-{sessionLine}
-Summary: start with log review, confirm recent changes, and validate the incident scope.
-Evidence: {logCount} log entries, {metricCount} metric samples, {runbookCount} runbooks.
-Primary runbook: {primaryRunbook}
-Primary log signal: {primaryLogMessage}
-Primary metric value: {metricText}
-Prompt size: {promptLength} characters.
-Confidence: Low.
-Notes: Prompt now enforces a fixed output structure and uses tool summaries.
-""";
+		var structured = new IncidentAnalysisResult
+		{
+			IncidentId = incident.Id,
+			IncidentSummary = $"Investigate {serviceName}: {incident.Title}.",
+			AnalysisText = string.Empty,
+			Evidence =
+			[
+				new IncidentAnalysisEvidenceItem
+				{
+					Summary = $"{logCount} log entries, {metricCount} metric samples, and {runbookCount} runbook chunks were gathered.",
+					Source = "agent.local",
+					Details = $"{sessionLine} Primary runbook: {primaryRunbook}. Primary log: {primaryLogMessage}. Primary metric: {metricText}."
+				}
+			],
+			Hypotheses =
+			[
+				new IncidentHypothesis
+				{
+					Description = $"Recent service or dependency change may be affecting {serviceName}.",
+					InferenceStrength = "Medium",
+					Confidence = "Low",
+					SupportingEvidence = [$"Prompt size: {promptLength} characters.", $"Primary runbook: {primaryRunbook}."],
+					EvidenceReferences = ["agent.local", "rag.runbooks", "tool.logs", "tool.metrics"]
+				}
+			],
+			RecommendedActions =
+			[
+				new IncidentActionRecommendation
+				{
+					Description = "Confirm blast radius, review recent changes, and follow the most relevant runbook.",
+					Priority = "High",
+					Rationale = "The local fallback can summarize gathered signals but cannot perform model reasoning.",
+					SupportingSignals = ["rag.runbooks", "tool.logs", "tool.metrics"]
+				}
+			],
+			Confidence = "Low",
+			Notes = "Local prompt-based fallback used because no agent API key is configured."
+		};
+
+		return JsonSerializer.Serialize(new
+		{
+			summary = structured.IncidentSummary,
+			evidence = structured.Evidence,
+			hypotheses = structured.Hypotheses,
+			recommendedActions = structured.RecommendedActions,
+			confidence = structured.Confidence,
+			notes = structured.Notes
+		}, new JsonSerializerOptions(JsonSerializerDefaults.Web));
 	}
 
 	private static IReadOnlyList<string> BuildLogHighlights(LogSearchResult logResult)

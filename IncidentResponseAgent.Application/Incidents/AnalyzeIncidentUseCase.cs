@@ -39,7 +39,8 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 		var logResult = await _logSearchProvider.SearchAsync(BuildLogSearchRequest(incident), cancellationToken);
 		var metricsResult = await _metricsProvider.QueryAsync(BuildMetricsQueryRequest(incident), cancellationToken);
 		var analysisText = await _incidentAnalysisAgent.AnalyzeAsync(incident, sessionContext, cancellationToken);
-		var confidence = ExtractConfidence(analysisText) ?? "Low";
+		var structuredAnalysis = AgentStructuredAnalysisParser.TryParse(analysisText);
+		var confidence = structuredAnalysis?.Confidence ?? ExtractConfidence(analysisText) ?? "Low";
 		var nextSessionContext = sessionContext with
 		{
 			TurnNumber = sessionContext.TurnNumber + 1,
@@ -56,18 +57,34 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 			SessionTurnNumber = nextSessionContext.TurnNumber,
 			SessionContextSummary = BuildSessionSummary(nextSessionContext),
 			IncidentId = incident.Id,
-			IncidentSummary = BuildSummary(incident),
+			IncidentSummary = structuredAnalysis?.Summary ?? BuildSummary(incident),
 			AnalysisText = analysisText,
-			Evidence = BuildEvidence(incident, runbookResult, logResult, metricsResult),
-			Hypotheses = BuildHypotheses(incident, runbookResult, logResult, metricsResult),
-			RecommendedActions = BuildRecommendedActions(incident, runbookResult, logResult, metricsResult),
+			Evidence = MergeEvidence(BuildEvidence(incident, runbookResult, logResult, metricsResult), structuredAnalysis?.Evidence),
+			Hypotheses = structuredAnalysis?.Hypotheses.Count > 0
+				? structuredAnalysis.Hypotheses
+				: BuildHypotheses(incident, runbookResult, logResult, metricsResult),
+			RecommendedActions = structuredAnalysis?.RecommendedActions.Count > 0
+				? structuredAnalysis.RecommendedActions
+				: BuildRecommendedActions(incident, runbookResult, logResult, metricsResult),
 			Confidence = confidence,
-			Notes = "Application orchestration captured incident details, RAG runbooks, logs, metrics, session state, and agent analysis."
+			Notes = structuredAnalysis?.Notes ?? "Application orchestration captured incident details, RAG runbooks, logs, metrics, session state, and agent analysis."
 		};
 
 		await _incidentRecordStore.SaveAsync(incident, result, cancellationToken);
 
 		return result;
+	}
+
+	private static IReadOnlyList<IncidentAnalysisEvidenceItem> MergeEvidence(
+		IReadOnlyList<IncidentAnalysisEvidenceItem> deterministicEvidence,
+		IReadOnlyList<IncidentAnalysisEvidenceItem>? agentEvidence)
+	{
+		if (agentEvidence is not { Count: > 0 })
+		{
+			return deterministicEvidence;
+		}
+
+		return deterministicEvidence.Concat(agentEvidence).ToArray();
 	}
 
 	private static RunbookRetrievalRequest BuildRunbookRetrievalRequest(Incident incident)

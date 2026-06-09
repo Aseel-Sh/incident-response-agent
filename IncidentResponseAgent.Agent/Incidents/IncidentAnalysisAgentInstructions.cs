@@ -20,20 +20,44 @@ public sealed class IncidentAnalysisAgentInstructions
 		ArgumentNullException.ThrowIfNull(logHighlights);
 		ArgumentNullException.ThrowIfNull(metricHighlights);
 
-		return $"""
-You are {profile.Name}, an incident analysis agent.
-Provider: {profile.Provider}
-Model: {profile.Model}
+		return $$"""
+You are {{profile.Name}}, an incident analysis agent.
+Provider: {{profile.Provider}}
+Model: {{profile.Model}}
 
 Analyze this incident and return concise operational guidance.
 Use short sentences and avoid filler.
-Return the analysis in these sections only:
-1. Summary
-2. Evidence
-3. Hypotheses
-4. Recommended actions
-5. Confidence
-6. Notes
+Return valid JSON only. Do not wrap it in Markdown.
+Use this exact shape:
+{
+  "summary": "short incident summary",
+  "evidence": [
+    {
+      "summary": "what the evidence says",
+      "source": "incident.description | rag.runbook.<id> | tool.logs | tool.metrics",
+      "details": "specific supporting detail"
+    }
+  ],
+  "hypotheses": [
+    {
+      "description": "likely root cause hypothesis",
+      "inferenceStrength": "Strong | Medium | Weak",
+      "confidence": "High | Medium | Low",
+      "supportingEvidence": ["short evidence note"],
+      "evidenceReferences": ["source reference"]
+    }
+  ],
+  "recommendedActions": [
+    {
+      "description": "specific next action",
+      "priority": "Critical | High | Medium | Low",
+      "rationale": "why this action matters",
+      "supportingSignals": ["source reference"]
+    }
+  ],
+  "confidence": "High | Medium | Low",
+  "notes": "short caveats"
+}
 
 Keep each section short and specific.
 Use the retrieved evidence instead of inventing new facts.
@@ -44,23 +68,23 @@ If tool evidence is thin, missing, or generic, keep confidence Low or Medium.
 Do not state a confidence level that contradicts the evidence sections.
 
 Session context:
-{BuildSessionSection(sessionContext)}
+{{BuildSessionSection(sessionContext)}}
 
-Title: {incident.Title}
-Description: {incident.Description}
-Severity: {incident.Severity}
-Service: {incident.ServiceName ?? "unknown"}
-Environment: {incident.Environment ?? "unknown"}
-Tags: {string.Join(", ", incident.Tags)}
+Title: {{incident.Title}}
+Description: {{incident.Description}}
+Severity: {{incident.Severity}}
+Service: {{incident.ServiceName ?? "unknown"}}
+Environment: {{incident.Environment ?? "unknown"}}
+Tags: {{string.Join(", ", incident.Tags)}}
 
 Relevant runbooks:
-{BuildRunbookSection(runbooks)}
+{{BuildRunbookSection(runbooks)}}
 
 Log evidence:
-{BuildBulletSection(logHighlights)}
+{{BuildBulletSection(logHighlights)}}
 
 Metric evidence:
-{BuildBulletSection(metricHighlights)}
+{{BuildBulletSection(metricHighlights)}}
 """;
 	}
 

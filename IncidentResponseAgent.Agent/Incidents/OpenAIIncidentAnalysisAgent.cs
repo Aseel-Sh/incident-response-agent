@@ -134,13 +134,37 @@ public sealed class OpenAIIncidentAnalysisAgent : IIncidentAnalysisAgent
 		return """
 You are an incident response assistant.
 Use the available tools to gather evidence before answering.
-Return a concise operational analysis with this structure only:
-Summary
-Evidence
-Hypotheses
-Recommended actions
-Confidence
-Notes
+Return valid JSON only. Do not wrap the JSON in Markdown.
+Use this exact shape:
+{
+  "summary": "short incident summary",
+  "evidence": [
+    {
+      "summary": "what the evidence says",
+      "source": "incident.description | rag.runbook.<id> | tool.logs | tool.metrics",
+      "details": "specific supporting detail"
+    }
+  ],
+  "hypotheses": [
+    {
+      "description": "likely root cause hypothesis",
+      "inferenceStrength": "Strong | Medium | Weak",
+      "confidence": "High | Medium | Low",
+      "supportingEvidence": ["short evidence note"],
+      "evidenceReferences": ["source reference"]
+    }
+  ],
+  "recommendedActions": [
+    {
+      "description": "specific next action",
+      "priority": "Critical | High | Medium | Low",
+      "rationale": "why this action matters",
+      "supportingSignals": ["source reference"]
+    }
+  ],
+  "confidence": "High | Medium | Low",
+  "notes": "short caveats"
+}
 
 Do not invent facts. Prefer tool output and incident details.
 """;
