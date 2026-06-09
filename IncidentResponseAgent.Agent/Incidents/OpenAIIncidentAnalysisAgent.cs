@@ -5,6 +5,7 @@ using IncidentResponseAgent.Domain.Incidents;
 using IncidentResponseAgent.Domain.Runbooks;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using OpenAI;
 using OpenAI.Chat;
@@ -16,6 +17,7 @@ public sealed class OpenAIIncidentAnalysisAgent : IIncidentAnalysisAgent
 	private const string DefaultAgentName = "IncidentAnalysisAgent";
 	private readonly IncidentAnalysisAgentOptions _options;
 	private readonly IncidentAnalysisAgentInstructions _instructions = new();
+	private readonly ILogger<OpenAIIncidentAnalysisAgent> _logger;
 	private readonly IncidentAnalysisAgentTools _tools;
 	private readonly IRunbookRetrievalService _runbookRetrievalService;
 	private readonly object _agentLock = new();
@@ -26,11 +28,13 @@ public sealed class OpenAIIncidentAnalysisAgent : IIncidentAnalysisAgent
 	public OpenAIIncidentAnalysisAgent(
 		IOptions<IncidentAnalysisAgentOptions> options,
 		IncidentAnalysisAgentTools tools,
-		IRunbookRetrievalService runbookRetrievalService)
+		IRunbookRetrievalService runbookRetrievalService,
+		ILogger<OpenAIIncidentAnalysisAgent> logger)
 	{
 		_options = options.Value ?? new IncidentAnalysisAgentOptions();
 		_tools = tools;
 		_runbookRetrievalService = runbookRetrievalService;
+		_logger = logger;
 	}
 
 	public async Task<string> AnalyzeAsync(Incident incident, IncidentAnalysisSessionContext? sessionContext = null, CancellationToken cancellationToken = default)
@@ -38,6 +42,10 @@ public sealed class OpenAIIncidentAnalysisAgent : IIncidentAnalysisAgent
 		ArgumentNullException.ThrowIfNull(incident);
 
 		var agent = GetOrCreateAgent();
+		_logger.LogInformation(
+			"Running OpenAI-compatible incident analysis for IncidentId={IncidentId} Model={Model}.",
+			incident.Id,
+			ResolveOption(_options.Model, "IRA_AGENT_MODEL"));
 		var runbookResult = await _runbookRetrievalService.RetrieveAsync(
 			new RunbookRetrievalRequest
 			{
@@ -63,6 +71,10 @@ public sealed class OpenAIIncidentAnalysisAgent : IIncidentAnalysisAgent
 		}
 
 		AgentResponse response = await agent.RunAsync(prompt, session, cancellationToken: cancellationToken);
+		_logger.LogInformation(
+			"OpenAI-compatible incident analysis completed for IncidentId={IncidentId}. ResponseLength={ResponseLength}.",
+			incident.Id,
+			response.Text.Length);
 		return response.Text;
 	}
 
@@ -90,26 +102,30 @@ public sealed class OpenAIIncidentAnalysisAgent : IIncidentAnalysisAgent
 				return _agent;
 			}
 
-			if (string.IsNullOrWhiteSpace(_options.Endpoint))
+			var endpoint = ResolveOption(_options.Endpoint, "IRA_AGENT_ENDPOINT");
+			var model = ResolveOption(_options.Model, "IRA_AGENT_MODEL");
+			var apiKey = ResolveOption(_options.ApiKey, "IRA_AGENT_API_KEY");
+
+			if (string.IsNullOrWhiteSpace(endpoint))
 			{
 				throw new InvalidOperationException("Agent:IncidentAnalysis:Endpoint is not configured.");
 			}
 
-			if (string.IsNullOrWhiteSpace(_options.Model))
+			if (string.IsNullOrWhiteSpace(model))
 			{
 				throw new InvalidOperationException("Agent:IncidentAnalysis:Model is not configured.");
 			}
 
-			if (string.IsNullOrWhiteSpace(_options.ApiKey))
+			if (string.IsNullOrWhiteSpace(apiKey))
 			{
 				throw new InvalidOperationException("Agent:IncidentAnalysis:ApiKey is not configured.");
 			}
 
 			var client = new OpenAIClient(
-				new ApiKeyCredential(_options.ApiKey),
+				new ApiKeyCredential(apiKey),
 				new OpenAIClientOptions
 				{
-					Endpoint = new Uri(_options.Endpoint)
+					Endpoint = new Uri(endpoint)
 				});
 			var toolSet = new List<AITool>
 			{
@@ -118,7 +134,7 @@ public sealed class OpenAIIncidentAnalysisAgent : IIncidentAnalysisAgent
 				AIFunctionFactory.Create(_tools.RetrieveRunbooksAsync)
 			};
 
-			ChatClient chatClient = client.GetChatClient(_options.Model);
+			ChatClient chatClient = client.GetChatClient(model);
 
 			_agent = chatClient.AsAIAgent(
 				instructions: BuildInstructions(),
@@ -168,6 +184,17 @@ Use this exact shape:
 
 Do not invent facts. Prefer tool output and incident details.
 """;
+	}
+
+	private static string? ResolveOption(string? configuredValue, string environmentVariableName)
+	{
+		if (!string.IsNullOrWhiteSpace(configuredValue))
+		{
+			return configuredValue.Trim();
+		}
+
+		var environmentValue = Environment.GetEnvironmentVariable(environmentVariableName);
+		return string.IsNullOrWhiteSpace(environmentValue) ? null : environmentValue.Trim();
 	}
 
 	private static string BuildRunbookQuery(Incident incident)

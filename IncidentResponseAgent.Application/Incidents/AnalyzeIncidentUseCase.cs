@@ -1,6 +1,7 @@
 using IncidentResponseAgent.Domain.Incidents;
 using IncidentResponseAgent.Application.Runbooks;
 using IncidentResponseAgent.Application.Tools;
+using Microsoft.Extensions.Logging;
 using System.Text.RegularExpressions;
 
 namespace IncidentResponseAgent.Application.Incidents;
@@ -11,6 +12,7 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 	private readonly IIncidentAnalysisSessionStore _incidentAnalysisSessionStore;
 	private readonly IIncidentRecordStore _incidentRecordStore;
 	private readonly ILogSearchProvider _logSearchProvider;
+	private readonly ILogger<AnalyzeIncidentUseCase> _logger;
 	private readonly IMetricsProvider _metricsProvider;
 	private readonly IRunbookRetrievalService _runbookRetrievalService;
 
@@ -20,12 +22,14 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 		IIncidentRecordStore incidentRecordStore,
 		ILogSearchProvider logSearchProvider,
 		IMetricsProvider metricsProvider,
-		IRunbookRetrievalService runbookRetrievalService)
+		IRunbookRetrievalService runbookRetrievalService,
+		ILogger<AnalyzeIncidentUseCase> logger)
 	{
 		_incidentAnalysisAgent = incidentAnalysisAgent;
 		_incidentAnalysisSessionStore = incidentAnalysisSessionStore;
 		_incidentRecordStore = incidentRecordStore;
 		_logSearchProvider = logSearchProvider;
+		_logger = logger;
 		_metricsProvider = metricsProvider;
 		_runbookRetrievalService = runbookRetrievalService;
 	}
@@ -34,10 +38,22 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 	{
 		ArgumentNullException.ThrowIfNull(incident);
 
+		_logger.LogInformation(
+			"Starting incident analysis for IncidentId={IncidentId} Severity={Severity} Service={ServiceName} Environment={Environment}.",
+			incident.Id,
+			incident.Severity,
+			incident.ServiceName,
+			incident.Environment);
 		var sessionContext = await _incidentAnalysisSessionStore.GetOrCreateAsync(sessionId, cancellationToken);
 		var runbookResult = await _runbookRetrievalService.RetrieveAsync(BuildRunbookRetrievalRequest(incident), cancellationToken);
 		var logResult = await _logSearchProvider.SearchAsync(BuildLogSearchRequest(incident), cancellationToken);
 		var metricsResult = await _metricsProvider.QueryAsync(BuildMetricsQueryRequest(incident), cancellationToken);
+		_logger.LogInformation(
+			"Incident evidence gathered for IncidentId={IncidentId}: Runbooks={RunbookCount} Logs={LogCount} MetricSamples={MetricSampleCount}.",
+			incident.Id,
+			runbookResult.Runbooks.Count,
+			logResult.Entries.Count,
+			metricsResult.Samples.Count);
 		var analysisText = await _incidentAnalysisAgent.AnalyzeAsync(incident, sessionContext, cancellationToken);
 		var structuredAnalysis = AgentStructuredAnalysisParser.TryParse(analysisText);
 		var confidence = structuredAnalysis?.Confidence ?? ExtractConfidence(analysisText) ?? "Low";
@@ -71,6 +87,12 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 		};
 
 		await _incidentRecordStore.SaveAsync(incident, result, cancellationToken);
+		_logger.LogInformation(
+			"Completed incident analysis for IncidentId={IncidentId} SessionId={SessionId} Turn={TurnNumber} Confidence={Confidence}.",
+			incident.Id,
+			result.SessionId,
+			result.SessionTurnNumber,
+			result.Confidence);
 
 		return result;
 	}

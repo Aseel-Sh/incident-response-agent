@@ -1,18 +1,24 @@
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
+using Microsoft.Extensions.Logging;
 
 namespace IncidentResponseAgent.Infrastructure.Runbooks;
 
 internal sealed class HuggingFaceRunbookEmbeddingProvider : IRunbookEmbeddingProvider
 {
 	private readonly IHttpClientFactory _httpClientFactory;
+	private readonly ILogger<HuggingFaceRunbookEmbeddingProvider> _logger;
 	private readonly string _apiKey;
 	private readonly string _endpoint;
 
-	public HuggingFaceRunbookEmbeddingProvider(RunbookRetrievalOptions options, IHttpClientFactory httpClientFactory)
+	public HuggingFaceRunbookEmbeddingProvider(
+		RunbookRetrievalOptions options,
+		IHttpClientFactory httpClientFactory,
+		ILogger<HuggingFaceRunbookEmbeddingProvider> logger)
 	{
 		_httpClientFactory = httpClientFactory;
+		_logger = logger;
 		_apiKey = ResolveApiKey(options);
 		ModelName = ResolveModel(options);
 		_endpoint = ResolveEndpoint(options);
@@ -46,6 +52,7 @@ internal sealed class HuggingFaceRunbookEmbeddingProvider : IRunbookEmbeddingPro
 			truncate = true
 		});
 
+		_logger.LogDebug("Generating Hugging Face embedding with model {ModelName}.", ModelName);
 		using var response = await httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
 		response.EnsureSuccessStatusCode();
 

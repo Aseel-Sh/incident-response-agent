@@ -12,12 +12,12 @@ public static class DependencyInjection
 {
 	public static IServiceCollection AddInfrastructure(this IServiceCollection services)
 	{
-		services.AddSingleton<ILogSearchProvider, FakeLogSearchProvider>();
-		services.AddSingleton<IMetricsProvider, FakeMetricsProvider>();
+		services.AddSingleton<ILogSearchProvider, LocalJsonLogSearchProvider>();
+		services.AddSingleton<IMetricsProvider, LocalJsonMetricsProvider>();
 		services.AddSingleton<IRunbookRetrievalService, SemanticRunbookRetrievalService>();
 		services.AddSingleton<IRunbookRetrievalDiagnosticsService>(serviceProvider =>
 			(IRunbookRetrievalDiagnosticsService)serviceProvider.GetRequiredService<IRunbookRetrievalService>());
-		services.AddSingleton<IIncidentAnalysisSessionStore, InMemoryIncidentAnalysisSessionStore>();
+		services.AddSingleton<IIncidentAnalysisSessionStore, SqliteIncidentAnalysisSessionStore>();
 		services.AddSingleton<IIncidentRecordStore, FileIncidentRecordStore>();
 		return services;
 	}

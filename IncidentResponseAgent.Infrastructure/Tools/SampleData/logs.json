@@ -1,0 +1,37 @@
+[
+  {
+    "timestamp": "2026-06-09T12:35:00+00:00",
+    "source": "checkout-api",
+    "level": "Error",
+    "message": "production checkout-api returned HTTP 500 for payment authorization after deployment deploy-20260609.1",
+    "correlationId": "corr-checkout-001"
+  },
+  {
+    "timestamp": "2026-06-09T12:34:00+00:00",
+    "source": "checkout-api",
+    "level": "Warning",
+    "message": "production checkout-api latency exceeded 2500ms while calling payment-gateway",
+    "correlationId": "corr-checkout-002"
+  },
+  {
+    "timestamp": "2026-06-09T12:33:00+00:00",
+    "source": "payment-gateway-client",
+    "level": "Error",
+    "message": "production dependency timeout during checkout payment authorization",
+    "correlationId": "corr-checkout-003"
+  },
+  {
+    "timestamp": "2026-06-09T12:32:00+00:00",
+    "source": "auth-api",
+    "level": "Warning",
+    "message": "production login failure rate elevated for token refresh requests",
+    "correlationId": "corr-auth-001"
+  },
+  {
+    "timestamp": "2026-06-09T12:31:00+00:00",
+    "source": "orders-worker",
+    "level": "Warning",
+    "message": "production queue backlog growing faster than consumer throughput",
+    "correlationId": "corr-orders-001"
+  }
+]

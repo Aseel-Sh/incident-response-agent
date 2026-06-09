@@ -1,5 +1,6 @@
 using IncidentResponseAgent.Application.Runbooks;
 using IncidentResponseAgent.Infrastructure.Runbooks;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
 namespace IncidentResponseAgent.Tests;
@@ -39,7 +40,9 @@ Check recent deployments, review downstream payment dependencies, and confirm bl
 				KnowledgeBasePath = knowledgeBasePath,
 				MinimumRelevanceScore = 0.05
 			}),
-			new EmptyHttpClientFactory());
+			new EmptyHttpClientFactory(),
+			NullLoggerFactory.Instance,
+			NullLogger<SemanticRunbookRetrievalService>.Instance);
 
 		var result = await service.RetrieveAsync(new RunbookRetrievalRequest
 		{

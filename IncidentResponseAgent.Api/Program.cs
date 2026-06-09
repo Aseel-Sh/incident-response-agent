@@ -3,6 +3,8 @@ using IncidentResponseAgent.Application;
 using IncidentResponseAgent.Infrastructure;
 using IncidentResponseAgent.Agent.Incidents;
 using IncidentResponseAgent.Infrastructure.Runbooks;
+using IncidentResponseAgent.Infrastructure.Tools;
+using IncidentResponseAgent.Infrastructure.Incidents;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -12,6 +14,8 @@ builder.Services.AddControllers();
 builder.Services.AddHttpClient();
 builder.Services.Configure<IncidentAnalysisAgentOptions>(builder.Configuration.GetSection("Agent:IncidentAnalysis"));
 builder.Services.Configure<RunbookRetrievalOptions>(builder.Configuration.GetSection("Runbooks:SemanticRetrieval"));
+builder.Services.Configure<OperationalDataOptions>(builder.Configuration.GetSection("Tools:OperationalData"));
+builder.Services.Configure<IncidentStorageOptions>(builder.Configuration.GetSection("Storage:Incidents"));
 builder.Services.AddApplication();
 builder.Services.AddInfrastructure();
 builder.Services.AddAgent();

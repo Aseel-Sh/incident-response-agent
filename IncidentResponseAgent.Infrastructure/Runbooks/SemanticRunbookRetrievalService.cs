@@ -4,6 +4,7 @@ using System.Text.Json;
 using IncidentResponseAgent.Application.Runbooks;
 using IncidentResponseAgent.Domain.Runbooks;
 using Microsoft.Data.Sqlite;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace IncidentResponseAgent.Infrastructure.Runbooks;
@@ -12,16 +13,30 @@ public sealed class SemanticRunbookRetrievalService : IRunbookRetrievalService, 
 {
 	private static readonly JsonSerializerOptions SerializerOptions = new(JsonSerializerDefaults.Web);
 	private readonly IRunbookEmbeddingProvider _embeddingProvider;
+	private readonly ILogger<SemanticRunbookRetrievalService> _logger;
 	private readonly RunbookRetrievalOptions _options;
 	private readonly SemaphoreSlim _indexLock = new(1, 1);
 	private bool _isInitialized;
 
-	public SemanticRunbookRetrievalService(IOptions<RunbookRetrievalOptions> options, IHttpClientFactory httpClientFactory)
+	public SemanticRunbookRetrievalService(
+		IOptions<RunbookRetrievalOptions> options,
+		IHttpClientFactory httpClientFactory,
+		ILoggerFactory loggerFactory,
+		ILogger<SemanticRunbookRetrievalService> logger)
 	{
 		_options = options.Value ?? new RunbookRetrievalOptions();
-		_embeddingProvider = HuggingFaceRunbookEmbeddingProvider.IsConfigured(_options)
-			? new HuggingFaceRunbookEmbeddingProvider(_options, httpClientFactory)
-			: new LocalHashingRunbookEmbeddingProvider(_options);
+		_logger = logger;
+		var fallback = new LocalHashingRunbookEmbeddingProvider(_options);
+		var primary = HuggingFaceRunbookEmbeddingProvider.IsConfigured(_options)
+			? new HuggingFaceRunbookEmbeddingProvider(
+				_options,
+				httpClientFactory,
+				loggerFactory.CreateLogger<HuggingFaceRunbookEmbeddingProvider>())
+			: null;
+		_embeddingProvider = new ResilientRunbookEmbeddingProvider(
+			primary,
+			fallback,
+			loggerFactory.CreateLogger<ResilientRunbookEmbeddingProvider>());
 	}
 
 	public async Task<RunbookRetrievalResult> RetrieveAsync(RunbookRetrievalRequest request, CancellationToken cancellationToken = default)
@@ -129,6 +144,12 @@ public sealed class SemanticRunbookRetrievalService : IRunbookRetrievalService, 
 			await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
 			await EnsureSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
 			await IndexMarkdownRunbooksAsync(connection, cancellationToken).ConfigureAwait(false);
+			_logger.LogInformation(
+				"Runbook RAG index ready. Provider={EmbeddingProvider} Model={EmbeddingModel} DatabasePath={DatabasePath} KnowledgeBasePath={KnowledgeBasePath}",
+				_embeddingProvider.ProviderName,
+				_embeddingProvider.ModelName,
+				ResolveDatabasePath(),
+				ResolveKnowledgeBasePath());
 			_isInitialized = true;
 		}
 		finally
@@ -145,8 +166,11 @@ public sealed class SemanticRunbookRetrievalService : IRunbookRetrievalService, 
 
 			var document = ParseDocument(source.Path, source.Content);
 			var contentHash = ComputeHash(source.Content);
-			var existingHash = await GetExistingDocumentHashAsync(connection, document.Id, cancellationToken).ConfigureAwait(false);
-			if (string.Equals(existingHash, contentHash, StringComparison.Ordinal))
+			var existingState = await GetExistingDocumentIndexStateAsync(connection, document.Id, cancellationToken).ConfigureAwait(false);
+			if (existingState is not null &&
+			    string.Equals(existingState.ContentHash, contentHash, StringComparison.Ordinal) &&
+			    string.Equals(existingState.EmbeddingProvider, _embeddingProvider.ProviderName, StringComparison.Ordinal) &&
+			    string.Equals(existingState.EmbeddingModel, _embeddingProvider.ModelName, StringComparison.Ordinal))
 			{
 				continue;
 			}
@@ -162,16 +186,36 @@ public sealed class SemanticRunbookRetrievalService : IRunbookRetrievalService, 
 			}
 
 			await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+			_logger.LogInformation(
+				"Indexed runbook {RunbookId} with embedding provider {EmbeddingProvider} and model {EmbeddingModel}.",
+				document.Id,
+				_embeddingProvider.ProviderName,
+				_embeddingProvider.ModelName);
 		}
 	}
 
-	private async Task<string?> GetExistingDocumentHashAsync(SqliteConnection connection, string documentId, CancellationToken cancellationToken)
+	private async Task<RunbookDocumentIndexState?> GetExistingDocumentIndexStateAsync(SqliteConnection connection, string documentId, CancellationToken cancellationToken)
 	{
 		await using var command = connection.CreateCommand();
-		command.CommandText = "select content_hash from runbook_documents where id = $id;";
+		command.CommandText = """
+select d.content_hash, c.embedding_provider, c.embedding_model
+from runbook_documents d
+left join runbook_chunks c on c.document_id = d.id
+where d.id = $id
+order by c.ordinal
+limit 1;
+""";
 		command.Parameters.AddWithValue("$id", documentId);
-		var value = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
-		return value as string;
+		await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+		if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+		{
+			return null;
+		}
+
+		return new RunbookDocumentIndexState(
+			reader.GetString(0),
+			reader.IsDBNull(1) ? string.Empty : reader.GetString(1),
+			reader.IsDBNull(2) ? string.Empty : reader.GetString(2));
 	}
 
 	private async Task UpsertDocumentAsync(
@@ -618,6 +662,8 @@ create index if not exists ix_runbook_documents_content_hash on runbook_document
 	}
 
 	private sealed record RunbookSource(string Path, string Content);
+
+	private sealed record RunbookDocumentIndexState(string ContentHash, string EmbeddingProvider, string EmbeddingModel);
 
 	private sealed record RunbookChunkRecord(
 		long ChunkId,

@@ -3,6 +3,7 @@ using IncidentResponseAgent.Application.Runbooks;
 using IncidentResponseAgent.Application.Tools;
 using IncidentResponseAgent.Domain.Incidents;
 using IncidentResponseAgent.Domain.Runbooks;
+using Microsoft.Extensions.Logging;
 using System.Text.Json;
 
 namespace IncidentResponseAgent.Agent.Incidents;
@@ -12,6 +13,7 @@ public sealed class PromptBasedIncidentAnalysisAgent : IIncidentAnalysisAgent
 	private readonly IIncidentAnalysisAgentFactory _agentFactory;
 	private readonly IncidentAnalysisAgentInstructions _instructions;
 	private readonly ILogSearchProvider _logSearchProvider;
+	private readonly ILogger<PromptBasedIncidentAnalysisAgent> _logger;
 	private readonly IMetricsProvider _metricsProvider;
 	private readonly IRunbookRetrievalService _runbookRetrievalService;
 
@@ -19,11 +21,13 @@ public sealed class PromptBasedIncidentAnalysisAgent : IIncidentAnalysisAgent
 		IIncidentAnalysisAgentFactory agentFactory,
 		ILogSearchProvider logSearchProvider,
 		IMetricsProvider metricsProvider,
-		IRunbookRetrievalService runbookRetrievalService)
+		IRunbookRetrievalService runbookRetrievalService,
+		ILogger<PromptBasedIncidentAnalysisAgent> logger)
 	{
 		_agentFactory = agentFactory;
 		_instructions = new IncidentAnalysisAgentInstructions();
 		_logSearchProvider = logSearchProvider;
+		_logger = logger;
 		_metricsProvider = metricsProvider;
 		_runbookRetrievalService = runbookRetrievalService;
 	}
@@ -33,6 +37,7 @@ public sealed class PromptBasedIncidentAnalysisAgent : IIncidentAnalysisAgent
 		ArgumentNullException.ThrowIfNull(incident);
 
 		var profile = _agentFactory.Create();
+		_logger.LogInformation("Running local prompt-based incident analysis fallback for IncidentId={IncidentId}.", incident.Id);
 		var runbookRequest = BuildRunbookRetrievalRequest(incident);
 		var logRequest = BuildLogSearchRequest(incident);
 		var metricsRequest = BuildMetricsQueryRequest(incident);
@@ -48,6 +53,7 @@ public sealed class PromptBasedIncidentAnalysisAgent : IIncidentAnalysisAgent
 			BuildLogHighlights(logResult),
 			BuildMetricHighlights(metricsResult));
 		var response = BuildAnalysisText(incident, profile, prompt, sessionContext, runbookResult.Runbooks, logResult, metricsResult);
+		_logger.LogInformation("Local prompt-based incident analysis completed for IncidentId={IncidentId}.", incident.Id);
 
 		return response;
 	}
