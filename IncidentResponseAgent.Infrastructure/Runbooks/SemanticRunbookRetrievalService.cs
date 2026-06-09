@@ -15,6 +15,7 @@ public sealed class SemanticRunbookRetrievalService : IRunbookRetrievalService, 
 	private readonly IRunbookEmbeddingProvider _embeddingProvider;
 	private readonly ILogger<SemanticRunbookRetrievalService> _logger;
 	private readonly RunbookRetrievalOptions _options;
+	private readonly QdrantRunbookVectorStore? _qdrantVectorStore;
 	private readonly SemaphoreSlim _indexLock = new(1, 1);
 	private bool _isInitialized;
 
@@ -37,6 +38,12 @@ public sealed class SemanticRunbookRetrievalService : IRunbookRetrievalService, 
 			primary,
 			fallback,
 			loggerFactory.CreateLogger<ResilientRunbookEmbeddingProvider>());
+		_qdrantVectorStore = IsQdrantEnabled(_options)
+			? new QdrantRunbookVectorStore(
+				_options,
+				httpClientFactory,
+				loggerFactory.CreateLogger<QdrantRunbookVectorStore>())
+			: null;
 	}
 
 	public async Task<RunbookRetrievalResult> RetrieveAsync(RunbookRetrievalRequest request, CancellationToken cancellationToken = default)
@@ -97,6 +104,9 @@ public sealed class SemanticRunbookRetrievalService : IRunbookRetrievalService, 
 		{
 			EmbeddingProvider = _embeddingProvider.ProviderName,
 			EmbeddingModel = _embeddingProvider.ModelName,
+			VectorStoreProvider = _qdrantVectorStore?.ProviderName ?? "sqlite",
+			VectorStoreEndpoint = _qdrantVectorStore?.Endpoint,
+			VectorStoreCollection = _qdrantVectorStore?.CollectionName,
 			DatabasePath = ResolveDatabasePath(),
 			KnowledgeBasePath = ResolveKnowledgeBasePath(),
 			Matches = scored.Select(match => match.ToDiagnosticMatch()).ToArray()
@@ -114,6 +124,22 @@ public sealed class SemanticRunbookRetrievalService : IRunbookRetrievalService, 
 		var queryTokens = RunbookTextAnalysis.Tokenize(query);
 		var serviceTokens = RunbookTextAnalysis.Tokenize(serviceName);
 		var environmentTokens = RunbookTextAnalysis.Tokenize(environment);
+		var qdrantMatches = _qdrantVectorStore is null
+			? Array.Empty<QdrantRunbookMatch>()
+			: await _qdrantVectorStore.SearchAsync(queryVector, limit, cancellationToken).ConfigureAwait(false);
+
+		if (qdrantMatches.Count > 0)
+		{
+			return qdrantMatches
+				.Select(match => ToScoredRunbookChunk(match, queryTokens, serviceTokens, environmentTokens))
+				.Where(match => match.Score >= _options.MinimumRelevanceScore || HasLexicalOverlap(match.Chunk, queryTokens, serviceTokens, environmentTokens))
+				.OrderByDescending(match => match.Score)
+				.ThenBy(match => match.Chunk.DocumentTitle, StringComparer.OrdinalIgnoreCase)
+				.ThenBy(match => match.Chunk.Ordinal)
+				.Take(limit)
+				.ToArray();
+		}
+
 		var chunks = await LoadChunksAsync(cancellationToken).ConfigureAwait(false);
 
 		return chunks
@@ -178,14 +204,34 @@ public sealed class SemanticRunbookRetrievalService : IRunbookRetrievalService, 
 			using var transaction = connection.BeginTransaction();
 			await UpsertDocumentAsync(connection, transaction, document, source.Path, contentHash, cancellationToken).ConfigureAwait(false);
 			await DeleteChunksAsync(connection, transaction, document.Id, cancellationToken).ConfigureAwait(false);
+			var vectorPoints = new List<RunbookVectorPoint>();
 
 			foreach (var chunk in MarkdownRunbookChunker.Chunk(document))
 			{
 				var embedding = await _embeddingProvider.GenerateEmbeddingAsync(chunk.SearchText, cancellationToken).ConfigureAwait(false);
 				await InsertChunkAsync(connection, transaction, document, chunk, embedding, cancellationToken).ConfigureAwait(false);
+				vectorPoints.Add(new RunbookVectorPoint(
+					document.Id,
+					document.Title,
+					document.Summary,
+					document.Tags,
+					source.Path,
+					chunk.Ordinal,
+					chunk.SectionPath,
+					chunk.Text,
+					chunk.SearchText,
+					embedding));
 			}
 
 			await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+			if (_qdrantVectorStore is not null && vectorPoints.Count > 0)
+			{
+				var collectionReady = await _qdrantVectorStore.EnsureCollectionAsync(vectorPoints[0].Embedding.Length, cancellationToken).ConfigureAwait(false);
+				if (collectionReady)
+				{
+					await _qdrantVectorStore.UpsertAsync(vectorPoints, cancellationToken).ConfigureAwait(false);
+				}
+			}
 			_logger.LogInformation(
 				"Indexed runbook {RunbookId} with embedding provider {EmbeddingProvider} and model {EmbeddingModel}.",
 				document.Id,
@@ -571,6 +617,36 @@ create index if not exists ix_runbook_documents_content_hash on runbook_document
 	{
 		var parts = new[] { query, serviceName, environment };
 		return string.Join(' ', parts.Where(part => !string.IsNullOrWhiteSpace(part)));
+	}
+
+	private static bool IsQdrantEnabled(RunbookRetrievalOptions options)
+	{
+		return string.Equals(options.VectorStoreProvider, "Qdrant", StringComparison.OrdinalIgnoreCase);
+	}
+
+	private ScoredRunbookChunk ToScoredRunbookChunk(
+		QdrantRunbookMatch match,
+		HashSet<string> queryTokens,
+		HashSet<string> serviceTokens,
+		HashSet<string> environmentTokens)
+	{
+		var chunk = new RunbookChunkRecord(
+			ChunkId: 0,
+			DocumentId: match.RunbookId,
+			DocumentTitle: match.DocumentTitle,
+			DocumentSummary: match.DocumentSummary,
+			Tags: match.Tags,
+			SourcePath: match.SourcePath,
+			Ordinal: match.Ordinal,
+			SectionPath: match.SectionPath,
+			Text: match.Text,
+			SearchText: match.SearchText,
+			Embedding: Array.Empty<float>());
+		var lexicalScore = LexicalScore(chunk, queryTokens, serviceTokens, environmentTokens);
+		var semanticWeight = Math.Clamp(_options.SemanticWeight, 0, 1);
+		var lexicalWeight = Math.Clamp(_options.LexicalWeight, 0, 1);
+		var score = match.Score * semanticWeight + lexicalScore * lexicalWeight;
+		return new ScoredRunbookChunk(chunk, score);
 	}
 
 	private double Score(

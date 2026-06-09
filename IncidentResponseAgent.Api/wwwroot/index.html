@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Incident Response Agent</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <p class="eyebrow">AI-assisted operations</p>
+      <h1>Incident Response Agent</h1>
+    </div>
+    <div class="status" id="healthStatus">Checking API</div>
+  </header>
+
+  <main class="layout">
+    <section class="panel incident-panel">
+      <div class="panel-header">
+        <div>
+          <h2>Analyze Incident</h2>
+          <p>Submit an incident and get evidence, hypotheses, and actions.</p>
+        </div>
+        <button id="sampleButton" type="button">Sample</button>
+      </div>
+
+      <form id="incidentForm" class="form-grid">
+        <label>
+          Title
+          <input name="title" required maxlength="200" value="Checkout 5xx spike">
+        </label>
+
+        <label>
+          Severity
+          <select name="severity" required>
+            <option>Low</option>
+            <option>Medium</option>
+            <option selected>High</option>
+            <option>Critical</option>
+          </select>
+        </label>
+
+        <label>
+          Service
+          <input name="serviceName" value="checkout-api">
+        </label>
+
+        <label>
+          Environment
+          <input name="environment" value="production">
+        </label>
+
+        <label class="wide">
+          Session ID
+          <input name="sessionId" placeholder="optional, reuse for follow-up turns">
+        </label>
+
+        <label class="wide">
+          Tags
+          <input name="tags" value="checkout, 5xx, latency">
+        </label>
+
+        <label class="wide">
+          Description
+          <textarea name="description" required maxlength="5000">Customers are seeing intermittent 500 responses during checkout. Error rate increased after the latest deployment.</textarea>
+        </label>
+
+        <div class="actions wide">
+          <button id="analyzeButton" type="submit">Analyze</button>
+          <button id="recentButton" type="button">Load Recent</button>
+        </div>
+      </form>
+    </section>
+
+    <section class="panel rag-panel">
+      <div class="panel-header">
+        <div>
+          <h2>RAG Search</h2>
+          <p>Inspect retrieved runbook chunks and vector store status.</p>
+        </div>
+      </div>
+
+      <form id="ragForm" class="rag-form">
+        <input name="query" value="checkout 5xx latency" aria-label="RAG query">
+        <button type="submit">Search</button>
+      </form>
+
+      <div id="ragSummary" class="summary-strip"></div>
+      <div id="ragResults" class="result-list"></div>
+    </section>
+
+    <section class="panel output-panel">
+      <div class="panel-header">
+        <div>
+          <h2>Analysis</h2>
+          <p>Structured output from the agent and deterministic evidence pipeline.</p>
+        </div>
+      </div>
+      <div id="analysisOutput" class="empty-state">No analysis yet.</div>
+    </section>
+
+    <section class="panel recent-panel">
+      <div class="panel-header">
+        <div>
+          <h2>Recent Analyses</h2>
+          <p>Persisted investigation records.</p>
+        </div>
+      </div>
+      <div id="recentOutput" class="result-list"></div>
+    </section>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>

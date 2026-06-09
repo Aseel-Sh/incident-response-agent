@@ -4,12 +4,16 @@ Incident Response Agent is a .NET 10 backend for AI-assisted incident investigat
 
 The project is built as a portfolio-quality modular monolith. It is useful without paid services because it includes local embeddings, sample operational data, SQLite persistence, and a local prompt-based agent fallback. When API keys are added, it can use OpenRouter-compatible chat models and Hugging Face-hosted embeddings.
 
+It also includes a static frontend served by the API and optional Qdrant vector database support for local, free vector search.
+
 ## What It Does
 
 - Accepts incident submissions over HTTP.
 - Validates incident title, description, severity, session id, service, environment, timestamp, and tags.
 - Retrieves relevant Markdown runbook chunks using hybrid RAG.
 - Stores runbook documents, chunks, and embedding vectors in SQLite.
+- Uses Qdrant as the primary vector database when it is running locally.
+- Falls back to SQLite vector search when Qdrant is unavailable.
 - Falls back to local embeddings if Hugging Face is unavailable.
 - Searches local JSON-backed log samples.
 - Queries local JSON-backed metric samples.
@@ -65,16 +69,59 @@ At runtime the RAG service:
 2. Parses title, summary, metadata, and tags.
 3. Chunks runbooks by headings and numbered steps.
 4. Generates an embedding for each chunk.
-5. Stores documents, chunks, vectors, provider metadata, and content hashes in SQLite.
-6. Reindexes when Markdown content or embedding provider/model changes.
-7. Retrieves chunks with hybrid semantic and lexical scoring.
-8. Returns top matches to the agent and API response.
+5. Stores document metadata and fallback vectors in SQLite.
+6. Upserts vectors and payloads to Qdrant when Qdrant is available.
+7. Reindexes when Markdown content or embedding provider/model changes.
+8. Retrieves chunks from Qdrant first, then falls back to SQLite vector search.
+9. Reranks with hybrid semantic and lexical scoring.
+10. Returns top matches to the agent and API response.
 
 Default RAG database:
 
 ```text
 %LOCALAPPDATA%\IncidentResponseAgent\runbook-rag.sqlite
 ```
+
+## Free Local Vector Database
+
+Qdrant is the configured primary vector database. It is free and runs locally through Docker.
+
+Start Qdrant:
+
+```powershell
+docker compose up -d qdrant
+```
+
+Qdrant endpoints:
+
+```text
+REST API: http://localhost:6333
+Dashboard: http://localhost:6333/dashboard
+gRPC: http://localhost:6334
+```
+
+The project uses:
+
+```json
+{
+  "Runbooks": {
+    "SemanticRetrieval": {
+      "VectorStoreProvider": "Qdrant",
+      "QdrantEndpoint": "http://localhost:6333",
+      "QdrantCollectionName": "incident_runbook_chunks"
+    }
+  }
+}
+```
+
+If Docker Desktop is not running or Qdrant is unavailable, the app logs the failure and falls back to SQLite search.
+
+Qdrant docs:
+
+- https://qdrant.tech/documentation/quickstart/
+- https://api.qdrant.tech/api-reference/collections/create-collection
+- https://api.qdrant.tech/api-reference/points/upsert-points
+- https://api.qdrant.tech/api-reference/search/query-points
 
 ## Embeddings
 
@@ -226,6 +273,25 @@ Default local URL:
 ```text
 http://localhost:5155
 ```
+
+## Frontend
+
+The API serves a static frontend at:
+
+```text
+http://localhost:5155
+```
+
+The frontend lets you:
+
+- submit an incident
+- reuse a session id for follow-up turns
+- inspect structured analysis output
+- run RAG searches directly
+- view recent persisted analyses
+- see embedding/vector store status
+
+No npm install or frontend build step is required.
 
 OpenAPI is exposed in Development through:
 
