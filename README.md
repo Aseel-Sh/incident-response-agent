@@ -1,114 +1,244 @@
 # Incident Response Agent
 
-Incident Response Agent is a .NET 10 modular monolith for AI-assisted incident investigation. It accepts incident submissions, retrieves operational runbook context, queries log and metric tools, and returns structured guidance with evidence, hypotheses, recommended actions, confidence, and session context.
+Incident Response Agent is a .NET 10 backend for AI-assisted incident investigation. It accepts an incident report, retrieves relevant operational runbooks through a local RAG pipeline, queries log and metric tools, uses an OpenAI-compatible agent when configured, and returns structured response guidance.
 
-## Projects
+The project is built as a portfolio-quality modular monolith. It is useful without paid services because it includes local embeddings, sample operational data, SQLite persistence, and a local prompt-based agent fallback. When API keys are added, it can use OpenRouter-compatible chat models and Hugging Face-hosted embeddings.
 
-- `IncidentResponseAgent.Api`: HTTP endpoints, contracts, validation, and composition root.
-- `IncidentResponseAgent.Application`: use cases, orchestration, tool abstractions, persistence abstractions, and evaluation contracts.
-- `IncidentResponseAgent.Domain`: framework-light incident and runbook domain models.
-- `IncidentResponseAgent.Infrastructure`: concrete log/metric providers, incident storage, session storage, and SQLite-backed runbook RAG.
-- `IncidentResponseAgent.Agent`: Microsoft Agent Framework integration and prompt-based local fallback.
+## What It Does
 
-## RAG Storage
+- Accepts incident submissions over HTTP.
+- Validates incident title, description, severity, session id, service, environment, timestamp, and tags.
+- Retrieves relevant Markdown runbook chunks using hybrid RAG.
+- Stores runbook documents, chunks, and embedding vectors in SQLite.
+- Falls back to local embeddings if Hugging Face is unavailable.
+- Searches local JSON-backed log samples.
+- Queries local JSON-backed metric samples.
+- Persists incident analysis records.
+- Persists multi-turn investigation session state in SQLite.
+- Uses a Microsoft Agent Framework `AIAgent` with tool registration when a model key is configured.
+- Falls back to a local prompt-based agent when no model key is configured.
+- Returns structured evidence, hypotheses, recommended actions, confidence, notes, and session context.
+- Exposes RAG diagnostics so retrieval quality can be inspected directly.
+- Includes rubric-based evaluation scaffolding and built-in evaluation scenarios.
+- Returns structured `ProblemDetails` for invalid requests and provider failures.
 
-Runbooks are authored as Markdown in `IncidentResponseAgent.Infrastructure/Runbooks/KnowledgeBase`.
+## Architecture
 
-At runtime, the infrastructure layer:
+The solution follows clean architecture boundaries:
+
+- `IncidentResponseAgent.Api`
+  HTTP controllers, request/response contracts, validation, configuration binding, OpenAPI, health, and error handling.
+
+- `IncidentResponseAgent.Application`
+  Use cases, orchestration, tool interfaces, persistence interfaces, runbook retrieval contracts, structured analysis parsing, and evaluation contracts.
+
+- `IncidentResponseAgent.Domain`
+  Framework-light business models such as `Incident`, `IncidentSeverity`, and `RunbookDocument`.
+
+- `IncidentResponseAgent.Infrastructure`
+  SQLite storage, Markdown runbook indexing, embedding providers, local log/metric providers, session persistence, and incident record persistence.
+
+- `IncidentResponseAgent.Agent`
+  Microsoft Agent Framework integration, agent instructions, tool registration, OpenAI-compatible agent execution, and local prompt fallback.
+
+Dependency direction:
+
+```text
+Api -> Application, Infrastructure, Agent
+Application -> Domain
+Infrastructure -> Application, Domain
+Agent -> Application, Domain
+Domain -> none
+```
+
+## RAG Pipeline
+
+Runbooks are authored as Markdown in:
+
+```text
+IncidentResponseAgent.Infrastructure/Runbooks/KnowledgeBase
+```
+
+At runtime the RAG service:
 
 1. Loads Markdown runbooks.
-2. Chunks them by headings and numbered steps.
-3. Generates embeddings for each chunk.
-4. Stores documents, chunks, and vectors in SQLite.
-5. Retrieves top matching chunks with hybrid semantic and lexical scoring.
+2. Parses title, summary, metadata, and tags.
+3. Chunks runbooks by headings and numbered steps.
+4. Generates an embedding for each chunk.
+5. Stores documents, chunks, vectors, provider metadata, and content hashes in SQLite.
+6. Reindexes when Markdown content or embedding provider/model changes.
+7. Retrieves chunks with hybrid semantic and lexical scoring.
+8. Returns top matches to the agent and API response.
 
-The default database path is:
+Default RAG database:
 
 ```text
 %LOCALAPPDATA%\IncidentResponseAgent\runbook-rag.sqlite
 ```
 
-You can override it with:
+## Embeddings
 
-```json
-"Runbooks": {
-  "SemanticRetrieval": {
-    "DatabasePath": "C:\\data\\incident-response-agent\\runbook-rag.sqlite",
-    "KnowledgeBasePath": "C:\\path\\to\\runbooks"
-  }
-}
-```
+The project supports two embedding paths:
 
-## Free Embedding Defaults
+- Local fallback: `local-hashing-384`
+- Hosted Hugging Face model: `thenlper/gte-large`
 
-The project is configured for free/low-cost development paths:
+If a Hugging Face token is configured, the app tries Hugging Face first. If Hugging Face is unreachable, rate-limited, misconfigured, or otherwise fails, the app logs the failure and falls back to local embeddings for the current process.
 
-- Without keys, it uses `local-hashing-384`, a deterministic local embedding fallback.
-- With `HF_TOKEN`, it uses the Hugging Face feature-extraction endpoint.
-- Default hosted embedding model: `thenlper/gte-large`.
+Get a Hugging Face token:
 
-Set these when you are ready:
+- https://huggingface.co/settings/tokens
+- https://huggingface.co/docs/hub/security-tokens
+
+Set it with environment variables:
 
 ```powershell
 $env:HF_TOKEN = "your-hugging-face-token"
 $env:HF_EMBEDDING_MODEL = "thenlper/gte-large"
 ```
 
-Get the key here:
-
-- Hugging Face access tokens: https://huggingface.co/settings/tokens
-- Hugging Face token docs: https://huggingface.co/docs/hub/security-tokens
-
-## Agent Model Configuration
-
-If `Agent:IncidentAnalysis:ApiKey` or `IRA_AGENT_API_KEY` is empty, the app uses the prompt-based local agent fallback so the API can still run during development.
-
-When you add a free/OpenRouter-compatible model key later, use either user secrets/environment variables or `appsettings.Development.json`. Do not commit real keys to `appsettings.json`.
-
-```powershell
-$env:IRA_AGENT_API_KEY = "your-model-api-key"
-$env:IRA_AGENT_ENDPOINT = "https://openrouter.ai/api/v1"
-$env:IRA_AGENT_MODEL = "your-free-model"
-```
-
-Equivalent config location:
+Or in `IncidentResponseAgent.Api/appsettings.Development.json`:
 
 ```json
-"Agent": {
-  "IncidentAnalysis": {
-    "Provider": "OpenAI-compatible provider",
-    "Model": "your-free-model",
-    "Endpoint": "https://openrouter.ai/api/v1",
-    "ApiKey": "your-model-api-key"
+{
+  "Runbooks": {
+    "SemanticRetrieval": {
+      "ApiKey": "your-hugging-face-token",
+      "Model": "thenlper/gte-large"
+    }
   }
 }
 ```
 
-Get model keys here:
+Do not commit real keys.
 
-- OpenRouter keys: https://openrouter.ai/settings/keys
-- OpenRouter authentication docs: https://openrouter.ai/docs/api-reference/authentication
-- Google AI Studio Gemini keys: https://aistudio.google.com/app/apikey
-- Gemini API key docs: https://ai.google.dev/gemini-api/docs/api-key
+## Agent Model
 
-This project is currently wired for OpenAI-compatible chat endpoints, so OpenRouter is the easiest drop-in for the agent. Gemini is still useful if you later add a Gemini-specific adapter or route Gemini through an OpenAI-compatible gateway.
+The agent uses an OpenAI-compatible endpoint. OpenRouter is the easiest drop-in provider for this project.
 
-## Run
+Get an OpenRouter key:
+
+- https://openrouter.ai/settings/keys
+- https://openrouter.ai/docs/api-reference/authentication
+
+Set it with environment variables:
 
 ```powershell
-dotnet run --project IncidentResponseAgent.Api
+$env:IRA_AGENT_API_KEY = "your-openrouter-key"
+$env:IRA_AGENT_ENDPOINT = "https://openrouter.ai/api/v1"
+$env:IRA_AGENT_MODEL = "nvidia/nemotron-3-super-120b-a12b:free"
 ```
 
-Health check:
+Or in `IncidentResponseAgent.Api/appsettings.Development.json`:
+
+```json
+{
+  "Agent": {
+    "IncidentAnalysis": {
+      "Provider": "OpenAI-compatible provider",
+      "Model": "nvidia/nemotron-3-super-120b-a12b:free",
+      "Endpoint": "https://openrouter.ai/api/v1",
+      "ApiKey": "your-openrouter-key"
+    }
+  }
+}
+```
+
+If no key is configured, the app uses the local prompt-based fallback so development and tests still work.
+
+## Local Operational Data
+
+The project includes sample operational signals:
+
+```text
+IncidentResponseAgent.Infrastructure/Tools/SampleData/logs.json
+IncidentResponseAgent.Infrastructure/Tools/SampleData/metrics.json
+```
+
+These files are copied to the API output folder and used by:
+
+- `LocalJsonLogSearchProvider`
+- `LocalJsonMetricsProvider`
+
+If no local data matches a query, deterministic fallback signals are returned so the incident workflow remains usable.
+
+Override paths in `appsettings.Development.json`:
+
+```json
+{
+  "Tools": {
+    "OperationalData": {
+      "LogEntriesPath": "C:\\data\\incident-response-agent\\logs.json",
+      "MetricSamplesPath": "C:\\data\\incident-response-agent\\metrics.json"
+    }
+  }
+}
+```
+
+## Persistence
+
+Incident records are stored as JSON by default:
+
+```text
+%LOCALAPPDATA%\IncidentResponseAgent\incident-records.json
+```
+
+Session state is stored in SQLite:
+
+```text
+%LOCALAPPDATA%\IncidentResponseAgent\incident-sessions.sqlite
+```
+
+Runbook RAG data is stored in SQLite:
+
+```text
+%LOCALAPPDATA%\IncidentResponseAgent\runbook-rag.sqlite
+```
+
+You can override session and RAG database paths:
+
+```json
+{
+  "Runbooks": {
+    "SemanticRetrieval": {
+      "DatabasePath": "C:\\data\\incident-response-agent\\runbook-rag.sqlite",
+      "KnowledgeBasePath": "C:\\data\\incident-response-agent\\runbooks"
+    }
+  },
+  "Storage": {
+    "Incidents": {
+      "SessionDatabasePath": "C:\\data\\incident-response-agent\\incident-sessions.sqlite"
+    }
+  }
+}
+```
+
+## Run The API
+
+From the repository root:
+
+```powershell
+dotnet run --project IncidentResponseAgent.Api --launch-profile http
+```
+
+Default local URL:
+
+```text
+http://localhost:5155
+```
+
+OpenAPI is exposed in Development through:
+
+```text
+http://localhost:5155/openapi/v1.json
+```
+
+## Endpoints
+
+Health:
 
 ```http
 GET http://localhost:5155/health
-```
-
-Inspect RAG retrieval:
-
-```http
-GET http://localhost:5155/api/runbooks/search?query=checkout%205xx%20latency&serviceName=checkout-api&environment=production&maxResults=5
 ```
 
 Analyze an incident:
@@ -127,6 +257,168 @@ Content-Type: application/json
 }
 ```
 
+Continue an investigation session:
+
+```http
+POST http://localhost:5155/api/incidents/analyze
+Content-Type: application/json
+
+{
+  "sessionId": "existing-session-id",
+  "title": "Checkout 5xx spike still active",
+  "description": "Errors continue after rollback.",
+  "severity": "High",
+  "serviceName": "checkout-api",
+  "environment": "production",
+  "tags": ["checkout", "rollback"]
+}
+```
+
+Get recent analyses:
+
+```http
+GET http://localhost:5155/api/incidents/recent?maxResults=5
+```
+
+Inspect RAG retrieval:
+
+```http
+GET http://localhost:5155/api/runbooks/search?query=checkout%205xx%20latency&serviceName=checkout-api&environment=production&maxResults=5
+```
+
+The RAG diagnostics response includes:
+
+- embedding provider
+- embedding model
+- database path
+- knowledge base path
+- matched runbook chunks
+- section path
+- score
+- source file
+- tags
+
+## Response Shape
+
+Incident analysis returns:
+
+- `sessionId`
+- `sessionTurnNumber`
+- `sessionContextSummary`
+- `incidentSummary`
+- `analysisText`
+- `retrievedEvidence`
+- `rootCauseHypotheses`
+- `recommendedActions`
+- `confidence`
+- `notes`
+
+The model is instructed to return strict JSON. The application parses that JSON into typed response fields and preserves deterministic tool/RAG evidence as supporting context.
+
+## Error Handling
+
+The API returns structured `ProblemDetails` for common failure modes:
+
+- `400` for invalid request arguments.
+- `502` for rejected/failed model provider requests.
+- `503` for missing configuration or unavailable external services.
+- `500` for unexpected server errors.
+
+Each problem response includes a `traceId` extension for log correlation.
+
+## Build And Test
+
+Build:
+
+```powershell
+dotnet build IncidentResponseAgent.slnx
+```
+
+Test:
+
+```powershell
+dotnet test IncidentResponseAgent.slnx --no-build
+```
+
+Current tests cover:
+
+- incident request validation
+- structured agent JSON parsing
+- SQLite-backed RAG indexing and diagnostics
+- resilient embedding fallback
+- SQLite session persistence
+- rubric evaluation
+- built-in evaluation scenarios
+
 ## Evaluation
 
-`IncidentResponseAgent.Application/Evaluation` contains local rubric-based evaluation hooks. They are intentionally model-independent so scenario tests can score evidence coverage, hypotheses, actions, and expected themes without calling an LLM.
+Evaluation lives in:
+
+```text
+IncidentResponseAgent.Application/Evaluation
+```
+
+The current evaluator is model-independent. It scores whether an analysis includes evidence, hypotheses, recommendations, confidence, expected evidence signals, and expected action themes.
+
+Built-in scenarios include:
+
+- `checkout-5xx-regression`
+- `queue-backlog-growth`
+
+## Troubleshooting
+
+### Hugging Face DNS Or Network Failure
+
+Symptom:
+
+```text
+api-inference.huggingface.co:443
+```
+
+Expected behavior:
+
+The app logs the hosted embedding failure and falls back to `local-hashing-384`.
+
+### OpenRouter 401 Unauthorized
+
+Check:
+
+- the API key was copied correctly
+- the key is active
+- the model is available to your account
+- `appsettings.Development.json` is not malformed
+- environment variables are set in the same shell that starts the API
+
+### RAG Results Look Stale
+
+Delete the local RAG database and restart the app:
+
+```powershell
+Remove-Item "$env:LOCALAPPDATA\\IncidentResponseAgent\\runbook-rag.sqlite"
+```
+
+The app will rebuild the index from Markdown runbooks.
+
+### No Real Logs Or Metrics
+
+The project uses local JSON sample data by default. Replace or override the sample files to simulate your own operational signals.
+
+## Extension Points
+
+Good next engineering upgrades:
+
+- Replace local JSON log search with a Splunk, Elasticsearch, Azure Monitor, or Datadog provider.
+- Replace local JSON metrics with Prometheus, Azure Monitor, or Datadog metrics.
+- Move incident record persistence from JSON file to SQLite or a relational database.
+- Add OpenTelemetry traces for agent calls, tool calls, and RAG retrieval.
+- Add a frontend for incident submission and investigation sessions.
+- Add more evaluation fixtures and regression tests.
+- Add a dedicated vector database adapter if you want Qdrant, Chroma, LanceDB, or pgvector.
+
+## Security Notes
+
+- Do not commit real API keys.
+- Prefer environment variables or `appsettings.Development.json` for local secrets.
+- `appsettings.Development.json` is ignored by git.
+- Treat model output as untrusted.
+- Keep tool behavior bounded and read-only unless deliberately adding controlled write actions.

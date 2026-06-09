@@ -2,7 +2,7 @@ using IncidentResponseAgent.Application.Tools;
 
 namespace IncidentResponseAgent.Infrastructure.Tools;
 
-public sealed class FakeLogSearchProvider : ILogSearchProvider
+public sealed class DeterministicFallbackLogSearchProvider : ILogSearchProvider
 {
 	public Task<LogSearchResult> SearchAsync(LogSearchRequest request, CancellationToken cancellationToken = default)
 	{

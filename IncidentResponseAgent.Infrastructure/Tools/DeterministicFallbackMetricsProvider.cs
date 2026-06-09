@@ -2,7 +2,7 @@ using IncidentResponseAgent.Application.Tools;
 
 namespace IncidentResponseAgent.Infrastructure.Tools;
 
-public sealed class FakeMetricsProvider : IMetricsProvider
+public sealed class DeterministicFallbackMetricsProvider : IMetricsProvider
 {
 	public Task<MetricsQueryResult> QueryAsync(MetricsQueryRequest request, CancellationToken cancellationToken = default)
 	{

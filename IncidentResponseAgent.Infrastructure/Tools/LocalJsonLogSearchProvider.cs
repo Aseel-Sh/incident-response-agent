@@ -54,7 +54,7 @@ public sealed class LocalJsonLogSearchProvider : ILogSearchProvider
 		if (matches.Length == 0)
 		{
 			_logger.LogInformation("No local log entries matched query {Query}. Returning deterministic fallback entries.", request.Query);
-			return await new FakeLogSearchProvider().SearchAsync(request, cancellationToken).ConfigureAwait(false);
+			return await new DeterministicFallbackLogSearchProvider().SearchAsync(request, cancellationToken).ConfigureAwait(false);
 		}
 
 		_logger.LogInformation("Log search query {Query} returned {Count} local entries.", request.Query, matches.Length);
