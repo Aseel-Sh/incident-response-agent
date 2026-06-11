@@ -32,19 +32,19 @@ public sealed class PromptBasedIncidentAnalysisAgent : IIncidentAnalysisAgent
 		_runbookRetrievalService = runbookRetrievalService;
 	}
 
-	public async Task<string> AnalyzeAsync(Incident incident, IncidentAnalysisSessionContext? sessionContext = null, CancellationToken cancellationToken = default)
+	public async Task<string> AnalyzeAsync(
+		Incident incident,
+		IncidentAnalysisSessionContext? sessionContext = null,
+		IncidentAnalysisAgentContext? agentContext = null,
+		CancellationToken cancellationToken = default)
 	{
 		ArgumentNullException.ThrowIfNull(incident);
 
 		var profile = _agentFactory.Create();
 		_logger.LogInformation("Running local prompt-based incident analysis fallback for IncidentId={IncidentId}.", incident.Id);
-		var runbookRequest = BuildRunbookRetrievalRequest(incident);
-		var logRequest = BuildLogSearchRequest(incident);
-		var metricsRequest = BuildMetricsQueryRequest(incident);
-
-		var runbookResult = await _runbookRetrievalService.RetrieveAsync(runbookRequest, cancellationToken);
-		var logResult = await _logSearchProvider.SearchAsync(logRequest, cancellationToken);
-		var metricsResult = await _metricsProvider.QueryAsync(metricsRequest, cancellationToken);
+		var runbookResult = agentContext?.Runbooks ?? await _runbookRetrievalService.RetrieveAsync(BuildRunbookRetrievalRequest(incident), cancellationToken);
+		var logResult = agentContext?.Logs ?? await _logSearchProvider.SearchAsync(BuildLogSearchRequest(incident), cancellationToken);
+		var metricsResult = agentContext?.Metrics ?? await _metricsProvider.QueryAsync(BuildMetricsQueryRequest(incident), cancellationToken);
 		var prompt = _instructions.BuildPrompt(
 			incident,
 			profile,

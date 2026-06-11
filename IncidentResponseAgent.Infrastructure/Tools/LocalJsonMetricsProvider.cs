@@ -43,7 +43,17 @@ public sealed class LocalJsonMetricsProvider : IMetricsProvider
 
 		if (matchedSeries is null)
 		{
-			_logger.LogInformation("No local metric series matched {MetricName} for {ServiceName}/{Environment}. Returning deterministic fallback samples.", request.MetricName, serviceName, environment);
+			if (!_options.UseDeterministicFallbacks)
+			{
+				_logger.LogInformation("No local metric series matched {MetricName} for {ServiceName}/{Environment}. Returning an empty local result.", request.MetricName, serviceName, environment);
+				return new MetricsQueryResult
+				{
+					MetricName = $"{request.MetricName} ({serviceName}/{environment})",
+					Samples = Array.Empty<MetricSample>()
+				};
+			}
+
+			_logger.LogInformation("No local metric series matched {MetricName} for {ServiceName}/{Environment}. Returning deterministic fallback samples because Tools:OperationalData:UseDeterministicFallbacks is enabled.", request.MetricName, serviceName, environment);
 			return await new DeterministicFallbackMetricsProvider().QueryAsync(request, cancellationToken).ConfigureAwait(false);
 		}
 

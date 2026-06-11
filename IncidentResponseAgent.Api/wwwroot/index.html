@@ -4,113 +4,239 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Incident Response Agent</title>
-  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/styles.css?v=20260610-frontend-fix">
 </head>
 <body>
-  <header class="topbar">
-    <div>
-      <p class="eyebrow">AI-assisted operations</p>
-      <h1>Incident Response Agent</h1>
-    </div>
-    <div class="status" id="healthStatus">Checking API</div>
-  </header>
-
-  <main class="layout">
-    <section class="panel incident-panel">
-      <div class="panel-header">
-        <div>
-          <h2>Analyze Incident</h2>
-          <p>Submit an incident and get evidence, hypotheses, and actions.</p>
-        </div>
-        <button id="sampleButton" type="button">Sample</button>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <p class="eyebrow">Ops Console</p>
+        <h1>Incident Response Agent</h1>
       </div>
 
-      <form id="incidentForm" class="form-grid">
-        <label>
-          Title
-          <input name="title" required maxlength="200" value="Checkout 5xx spike">
-        </label>
+      <nav class="nav-tabs" aria-label="Primary">
+        <button class="nav-tab active" type="button" data-tab="monitor">Monitor</button>
+        <button class="nav-tab" type="button" data-tab="analyze">Analyze</button>
+        <button class="nav-tab" type="button" data-tab="runbooks">Runbooks</button>
+        <button class="nav-tab" type="button" data-tab="history">History</button>
+        <button class="nav-tab" type="button" data-tab="sources">Sources</button>
+      </nav>
 
-        <label>
-          Severity
-          <select name="severity" required>
-            <option>Low</option>
-            <option>Medium</option>
-            <option selected>High</option>
-            <option>Critical</option>
-          </select>
-        </label>
+      <section class="sidebar-card">
+        <h2>Analytics</h2>
+        <dl class="metric-grid">
+          <div>
+            <dt>Total</dt>
+            <dd id="totalDetected">0</dd>
+          </div>
+          <div>
+            <dt>Critical</dt>
+            <dd id="criticalDetected">0</dd>
+          </div>
+          <div>
+            <dt>Log Signals</dt>
+            <dd id="logDetected">0</dd>
+          </div>
+          <div>
+            <dt>Metric Signals</dt>
+            <dd id="metricDetected">0</dd>
+          </div>
+        </dl>
+      </section>
 
-        <label>
-          Service
-          <input name="serviceName" value="checkout-api">
-        </label>
+      <section class="sidebar-card">
+        <h2>Connection</h2>
+        <div class="status" id="healthStatus">Checking API</div>
+        <p id="lastScan" class="meta">Not scanned yet</p>
+      </section>
 
-        <label>
-          Environment
-          <input name="environment" value="production">
-        </label>
+      <button id="themeToggle" class="secondary full-width" type="button">Dark Mode</button>
+    </aside>
 
-        <label class="wide">
-          Session ID
-          <input name="sessionId" placeholder="optional, reuse for follow-up turns">
-        </label>
-
-        <label class="wide">
-          Tags
-          <input name="tags" value="checkout, 5xx, latency">
-        </label>
-
-        <label class="wide">
-          Description
-          <textarea name="description" required maxlength="5000">Customers are seeing intermittent 500 responses during checkout. Error rate increased after the latest deployment.</textarea>
-        </label>
-
-        <div class="actions wide">
-          <button id="analyzeButton" type="submit">Analyze</button>
-          <button id="recentButton" type="button">Load Recent</button>
-        </div>
-      </form>
-    </section>
-
-    <section class="panel rag-panel">
-      <div class="panel-header">
+    <main class="workspace">
+      <header class="workspace-header">
         <div>
-          <h2>RAG Search</h2>
-          <p>Inspect retrieved runbook chunks and vector store status.</p>
+          <p class="eyebrow">Sample signal mode</p>
+          <h2 id="workspaceTitle">Monitor</h2>
+          <p id="workspaceDescription">This app is currently detecting incidents from bundled sample JSON logs and metrics. Connect real providers later by changing the configured source paths or adding provider adapters.</p>
         </div>
-      </div>
-
-      <form id="ragForm" class="rag-form">
-        <input name="query" value="checkout 5xx latency" aria-label="RAG query">
-        <button type="submit">Search</button>
-      </form>
-
-      <div id="ragSummary" class="summary-strip"></div>
-      <div id="ragResults" class="result-list"></div>
-    </section>
-
-    <section class="panel output-panel">
-      <div class="panel-header">
-        <div>
-          <h2>Analysis</h2>
-          <p>Structured output from the agent and deterministic evidence pipeline.</p>
+        <div class="header-actions">
+          <button id="scanButton" type="button">Scan Now</button>
+          <button id="sampleButton" class="secondary" type="button">Load Sample</button>
         </div>
-      </div>
-      <div id="analysisOutput" class="empty-state">No analysis yet.</div>
-    </section>
+      </header>
 
-    <section class="panel recent-panel">
-      <div class="panel-header">
-        <div>
-          <h2>Recent Analyses</h2>
-          <p>Persisted investigation records.</p>
+      <section class="notice">
+        <strong>No live app is being monitored yet.</strong>
+        Detection is coming from local sample files copied into the API output folder. The monitor is proving the workflow before you wire real logs and metrics.
+      </section>
+
+      <section id="monitorView" class="tab-view active">
+        <div class="panel">
+          <div class="panel-header">
+            <div>
+              <h3>Detected Incidents</h3>
+              <p>Auto-generated candidates from the current log and metric sources.</p>
+            </div>
+            <div class="toolbar">
+              <input id="incidentSearch" type="search" placeholder="Search service, title, signal">
+              <select id="incidentSort" aria-label="Sort detected incidents">
+                <option value="severity">Severity</option>
+                <option value="time">Newest</option>
+                <option value="source">Source</option>
+                <option value="service">Service</option>
+              </select>
+            </div>
+          </div>
+          <div id="detectedOutput" class="incident-table"></div>
         </div>
-      </div>
-      <div id="recentOutput" class="result-list"></div>
-    </section>
-  </main>
+      </section>
 
-  <script src="/app.js"></script>
+      <section id="analyzeView" class="tab-view">
+        <div class="split-layout">
+          <section class="panel">
+            <div class="panel-header">
+              <div>
+                <h3>Incident Details</h3>
+                <p>Use a detected incident or enter one manually.</p>
+              </div>
+            </div>
+
+            <form id="incidentForm" class="form-grid">
+              <label class="wide">
+                Title
+                <input name="title" required maxlength="200" value="Checkout 5xx spike">
+              </label>
+
+              <label>
+                Severity
+                <select name="severity" required>
+                  <option>Low</option>
+                  <option>Medium</option>
+                  <option selected>High</option>
+                  <option>Critical</option>
+                </select>
+              </label>
+
+              <label>
+                Service
+                <input name="serviceName" value="checkout-api">
+              </label>
+
+              <label>
+                Environment
+                <input name="environment" value="production">
+              </label>
+
+              <label>
+                Session ID
+                <input name="sessionId" placeholder="optional follow-up session">
+              </label>
+
+              <label class="wide">
+                Tags
+                <input name="tags" value="checkout, 5xx, latency">
+              </label>
+
+              <label class="wide">
+                Description
+                <textarea name="description" required maxlength="5000">Customers are seeing intermittent 500 responses during checkout. Error rate increased after the latest deployment.</textarea>
+              </label>
+
+              <div class="actions wide">
+                <button id="analyzeButton" type="submit">Analyze Incident</button>
+                <button id="recentButton" class="secondary" type="button">Refresh History</button>
+              </div>
+            </form>
+          </section>
+
+          <section class="panel">
+            <div class="panel-header">
+              <div>
+                <h3>Analysis Output</h3>
+                <p id="analysisStatus">Run analysis to generate evidence, hypotheses, and actions.</p>
+              </div>
+            </div>
+            <div id="analysisOutput" class="empty-state">No analysis yet.</div>
+          </section>
+        </div>
+      </section>
+
+      <section id="runbooksView" class="tab-view">
+        <section class="panel">
+          <div class="panel-header">
+            <div>
+              <h3>Runbook Search</h3>
+              <p>Search the RAG index and inspect vector/embedding status.</p>
+            </div>
+          </div>
+
+          <form id="ragForm" class="search-bar">
+            <input name="query" value="checkout 5xx latency" aria-label="RAG query">
+            <button type="submit">Search</button>
+          </form>
+
+          <div id="ragSummary" class="summary-strip"></div>
+          <div id="ragResults" class="result-list"></div>
+        </section>
+      </section>
+
+      <section id="historyView" class="tab-view">
+        <section class="panel">
+          <div class="panel-header">
+            <div>
+              <h3>Recent Analyses</h3>
+              <p>Saved investigations from previous analysis runs.</p>
+            </div>
+          </div>
+          <div id="recentOutput" class="result-list"></div>
+        </section>
+      </section>
+
+      <section id="sourcesView" class="tab-view">
+        <section class="panel connector-panel">
+          <div class="panel-header">
+            <div>
+              <h3>Connect A Live App</h3>
+              <p>Send logs and metrics here from any app, script, or background job. The Monitor tab scans these signals.</p>
+            </div>
+          </div>
+          <div class="connector-grid">
+            <article>
+              <h4>Log signal</h4>
+              <pre><code>POST /api/signals/logs
+{
+  "source": "checkout-api",
+  "level": "Error",
+  "message": "HTTP 500 during checkout"
+}</code></pre>
+            </article>
+            <article>
+              <h4>Metric signal</h4>
+              <pre><code>POST /api/signals/metrics
+{
+  "metricName": "request_error_rate",
+  "serviceName": "checkout-api",
+  "environment": "production",
+  "value": 42.6
+}</code></pre>
+            </article>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-header">
+            <div>
+              <h3>Connected Sources</h3>
+              <p>These are the exact sources the app is currently reading.</p>
+            </div>
+          </div>
+          <div id="sourcesOutput" class="source-list"></div>
+        </section>
+      </section>
+    </main>
+  </div>
+
+  <script src="/app.js?v=20260610-frontend-fix"></script>
 </body>
 </html>

@@ -17,6 +17,7 @@ public static class DependencyInjection
 		services.AddSingleton<IRunbookRetrievalService, SemanticRunbookRetrievalService>();
 		services.AddSingleton<IRunbookRetrievalDiagnosticsService>(serviceProvider =>
 			(IRunbookRetrievalDiagnosticsService)serviceProvider.GetRequiredService<IRunbookRetrievalService>());
+		services.AddSingleton<IIncidentSignalMonitor, LocalOperationalSignalMonitor>();
 		services.AddSingleton<IIncidentAnalysisSessionStore, SqliteIncidentAnalysisSessionStore>();
 		services.AddSingleton<IIncidentRecordStore, FileIncidentRecordStore>();
 		return services;

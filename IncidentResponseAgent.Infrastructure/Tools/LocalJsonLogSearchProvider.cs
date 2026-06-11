@@ -53,7 +53,13 @@ public sealed class LocalJsonLogSearchProvider : ILogSearchProvider
 
 		if (matches.Length == 0)
 		{
-			_logger.LogInformation("No local log entries matched query {Query}. Returning deterministic fallback entries.", request.Query);
+			if (!_options.UseDeterministicFallbacks)
+			{
+				_logger.LogInformation("No local log entries matched query {Query}. Returning an empty local result.", request.Query);
+				return new LogSearchResult { Entries = Array.Empty<LogSearchEntry>() };
+			}
+
+			_logger.LogInformation("No local log entries matched query {Query}. Returning deterministic fallback entries because Tools:OperationalData:UseDeterministicFallbacks is enabled.", request.Query);
 			return await new DeterministicFallbackLogSearchProvider().SearchAsync(request, cancellationToken).ConfigureAwait(false);
 		}
 

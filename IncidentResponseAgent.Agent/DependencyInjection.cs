@@ -13,17 +13,7 @@ public static class DependencyInjection
 		services.AddTransient<IIncidentAnalysisAgentFactory, IncidentAnalysisAgentFactory>();
 		services.AddTransient<OpenAIIncidentAnalysisAgent>();
 		services.AddTransient<PromptBasedIncidentAnalysisAgent>();
-		services.AddTransient<IIncidentAnalysisAgent>(serviceProvider =>
-		{
-			var options = serviceProvider.GetRequiredService<IOptions<IncidentAnalysisAgentOptions>>().Value;
-			var apiKey = string.IsNullOrWhiteSpace(options.ApiKey)
-				? Environment.GetEnvironmentVariable("IRA_AGENT_API_KEY")
-				: options.ApiKey;
-
-			return string.IsNullOrWhiteSpace(apiKey)
-				? serviceProvider.GetRequiredService<PromptBasedIncidentAnalysisAgent>()
-				: serviceProvider.GetRequiredService<OpenAIIncidentAnalysisAgent>();
-		});
+		services.AddTransient<IIncidentAnalysisAgent, ResilientIncidentAnalysisAgent>();
 
 		return services;
 	}

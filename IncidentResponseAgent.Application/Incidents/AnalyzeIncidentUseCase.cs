@@ -54,7 +54,13 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 			runbookResult.Runbooks.Count,
 			logResult.Entries.Count,
 			metricsResult.Samples.Count);
-		var analysisText = await _incidentAnalysisAgent.AnalyzeAsync(incident, sessionContext, cancellationToken);
+		var agentContext = new IncidentAnalysisAgentContext
+		{
+			Runbooks = runbookResult,
+			Logs = logResult,
+			Metrics = metricsResult
+		};
+		var analysisText = await _incidentAnalysisAgent.AnalyzeAsync(incident, sessionContext, agentContext, cancellationToken);
 		var structuredAnalysis = AgentStructuredAnalysisParser.TryParse(analysisText);
 		var confidence = structuredAnalysis?.Confidence ?? ExtractConfidence(analysisText) ?? "Low";
 		var nextSessionContext = sessionContext with

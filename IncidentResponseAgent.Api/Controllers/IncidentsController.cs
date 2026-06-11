@@ -14,13 +14,16 @@ public sealed class IncidentsController : ControllerBase
 {
     private readonly IAnalyzeIncidentUseCase _analyzeIncidentUseCase;
     private readonly IGetRecentIncidentAnalysesUseCase _getRecentIncidentAnalysesUseCase;
+    private readonly IIncidentSignalMonitor _incidentSignalMonitor;
 
     public IncidentsController(
         IAnalyzeIncidentUseCase analyzeIncidentUseCase,
-        IGetRecentIncidentAnalysesUseCase getRecentIncidentAnalysesUseCase)
+        IGetRecentIncidentAnalysesUseCase getRecentIncidentAnalysesUseCase,
+        IIncidentSignalMonitor incidentSignalMonitor)
     {
         _analyzeIncidentUseCase = analyzeIncidentUseCase;
         _getRecentIncidentAnalysesUseCase = getRecentIncidentAnalysesUseCase;
+        _incidentSignalMonitor = incidentSignalMonitor;
     }
 
     [HttpPost("analyze")]
@@ -93,6 +96,27 @@ public sealed class IncidentsController : ControllerBase
             Confidence = result.Confidence,
             Notes = result.Notes,
             CreatedAtUtc = result.CreatedAtUtc
+        }).ToArray());
+    }
+
+    [HttpGet("detected")]
+    [ProducesResponseType(typeof(IReadOnlyList<DetectedIncidentResponse>), StatusCodes.Status200OK)]
+    public async Task<ActionResult<IReadOnlyList<DetectedIncidentResponse>>> GetDetectedAsync(
+        CancellationToken cancellationToken)
+    {
+        var results = await _incidentSignalMonitor.DetectAsync(cancellationToken);
+        return Ok(results.Select(result => new DetectedIncidentResponse
+        {
+            Id = result.Id,
+            Title = result.Title,
+            Description = result.Description,
+            Severity = result.Severity.ToString(),
+            ServiceName = result.ServiceName,
+            Environment = result.Environment,
+            DetectedAtUtc = result.DetectedAtUtc,
+            Source = result.Source,
+            Signals = result.Signals,
+            SuggestedTags = result.SuggestedTags
         }).ToArray());
     }
 
