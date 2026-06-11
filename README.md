@@ -17,12 +17,15 @@ It also includes a static frontend served by the API and optional Qdrant vector 
 - Falls back to local embeddings if Hugging Face is unavailable.
 - Searches local JSON-backed log samples.
 - Queries local JSON-backed metric samples.
+- Scans operational logs and metrics for likely incident candidates.
 - Persists incident analysis records.
 - Persists multi-turn investigation session state in SQLite.
-- Uses a Microsoft Agent Framework `AIAgent` with tool registration when a model key is configured.
+- Uses an incident analysis agent when a model key is configured.
+- The agent receives deterministic runbook, log, and metric evidence gathered by the application, then returns strict JSON analysis.
 - Falls back to a local prompt-based agent when no model key is configured.
 - Returns structured evidence, hypotheses, recommended actions, confidence, notes, and session context.
 - Exposes RAG diagnostics so retrieval quality can be inspected directly.
+- Exposes detected incident candidates so the frontend can self-report likely incidents.
 - Includes rubric-based evaluation scaffolding and built-in evaluation scenarios.
 - Returns structured `ProblemDetails` for invalid requests and provider failures.
 
@@ -43,7 +46,7 @@ The solution follows clean architecture boundaries:
   SQLite storage, Markdown runbook indexing, embedding providers, local log/metric providers, session persistence, and incident record persistence.
 
 - `IncidentResponseAgent.Agent`
-  Microsoft Agent Framework integration, agent instructions, tool registration, OpenAI-compatible agent execution, and local prompt fallback.
+  Incident analysis agent instructions, OpenAI-compatible agent execution, and local prompt fallback.
 
 Dependency direction:
 
@@ -163,6 +166,8 @@ Do not commit real keys.
 
 The agent uses an OpenAI-compatible endpoint. OpenRouter is the easiest drop-in provider for this project.
 
+The current model-backed path is an agent, but it deliberately avoids relying on free-model tool-calling loops. The application gathers runbooks, logs, and metrics first, then sends that evidence to `OpenAIIncidentAnalysisAgent`, which asks the model for strict JSON reasoning. This is more reliable with free OpenRouter models than letting the model drive every tool call itself.
+
 Get an OpenRouter key:
 
 - https://openrouter.ai/settings/keys
@@ -173,7 +178,7 @@ Set it with environment variables:
 ```powershell
 $env:IRA_AGENT_API_KEY = "your-openrouter-key"
 $env:IRA_AGENT_ENDPOINT = "https://openrouter.ai/api/v1"
-$env:IRA_AGENT_MODEL = "nvidia/nemotron-3-super-120b-a12b:free"
+$env:IRA_AGENT_MODEL = "nex-agi/nex-n2-pro:free"
 ```
 
 Or in `IncidentResponseAgent.Api/appsettings.Development.json`:
@@ -183,7 +188,7 @@ Or in `IncidentResponseAgent.Api/appsettings.Development.json`:
   "Agent": {
     "IncidentAnalysis": {
       "Provider": "OpenAI-compatible provider",
-      "Model": "nvidia/nemotron-3-super-120b-a12b:free",
+      "Model": "nex-agi/nex-n2-pro:free",
       "Endpoint": "https://openrouter.ai/api/v1",
       "ApiKey": "your-openrouter-key"
     }
@@ -193,9 +198,25 @@ Or in `IncidentResponseAgent.Api/appsettings.Development.json`:
 
 If no key is configured, the app uses the local prompt-based fallback so development and tests still work.
 
+If the configured model provider is slow, unavailable, or rejects the request, the app falls back to the local analyzer instead of leaving the request stuck indefinitely. Free OpenRouter models can queue or time out, so the default model timeout is intentionally bounded:
+
+```json
+{
+  "Agent": {
+    "IncidentAnalysis": {
+      "AnalysisTimeoutSeconds": 75
+    }
+  }
+}
+```
+
+The API always gathers deterministic runbook, log, and metric evidence before asking the model. Treat the structured evidence list as the source of truth if a free model returns vague or inconsistent prose.
+
+During local testing, `nex-agi/nex-n2-pro:free` responded faster and followed strict JSON better than the previous Nemotron free model. Free model availability changes over time, so you can swap the model id without changing application code.
+
 ## Local Operational Data
 
-The project includes sample operational signals:
+The project includes sample operational signals. These are not logs from your PC and they are not coming from a live app yet. They are bundled JSON fixtures that let the product demonstrate monitoring, detection, RAG, and analysis without needing Azure, Datadog, Splunk, Prometheus, or another paid service.
 
 ```text
 IncidentResponseAgent.Infrastructure/Tools/SampleData/logs.json
@@ -206,8 +227,65 @@ These files are copied to the API output folder and used by:
 
 - `LocalJsonLogSearchProvider`
 - `LocalJsonMetricsProvider`
+- `LocalOperationalSignalMonitor`
 
-If no local data matches a query, deterministic fallback signals are returned so the incident workflow remains usable.
+If no local data matches a query, the app now returns an empty log or metric result by default so it does not invent operational evidence. You can enable deterministic fallback log and metric samples for demos:
+
+```json
+{
+  "Tools": {
+    "OperationalData": {
+      "UseDeterministicFallbacks": true
+    }
+  }
+}
+```
+
+When the API runs, those files are copied into the API output folder and read from there by default:
+
+```text
+IncidentResponseAgent.Api/bin/Debug/net10.0/Tools/SampleData/logs.json
+IncidentResponseAgent.Api/bin/Debug/net10.0/Tools/SampleData/metrics.json
+```
+
+The current detector is therefore in sample mode. It detects incidents from those files because no real application log stream or metric backend has been connected yet.
+
+## Automatic Incident Detection
+
+People usually learn about incidents from alerts, dashboards, log errors, metric threshold breaches, customer reports, support tickets, or manual escalation from another team. This app now supports both paths:
+
+- automatic detection from logs and metrics
+- manual incident submission when a human spots something the monitor missed
+
+The local monitor scans the configured free operational data sources and turns suspicious signals into incident candidates. Today it detects:
+
+- high `request_error_rate` for `checkout-api`
+- elevated `request_error_rate` for `auth-api`
+- high `queue_depth` for `orders-worker`
+- error/warning log patterns such as `500`, `timeout`, `latency`, `backlog`, and `failure`
+
+Detection is exposed through:
+
+```http
+GET http://localhost:5155/api/incidents/detected
+```
+
+The frontend calls this endpoint on load and refreshes it every 30 seconds. Each detected card can be copied into the manual incident form or analyzed immediately.
+
+Configure detection thresholds in `appsettings.Development.json`:
+
+```json
+{
+  "Tools": {
+    "OperationalData": {
+      "HighErrorRateThreshold": 25,
+      "CriticalErrorRateThreshold": 40,
+      "QueueDepthWarningThreshold": 700,
+      "MaxDetectedIncidents": 10
+    }
+  }
+}
+```
 
 Override paths in `appsettings.Development.json`:
 
@@ -221,6 +299,36 @@ Override paths in `appsettings.Development.json`:
   }
 }
 ```
+
+To connect your own local data without adding a new provider, create JSON files with the same shape as the sample files and point `LogEntriesPath` / `MetricSamplesPath` at them. To monitor a real service directly, add an implementation of `ILogSearchProvider` and `IMetricsProvider` for the system you use, such as Prometheus, Elasticsearch, OpenSearch, Splunk, or plain files written by your app.
+
+You can also push signals into the app over HTTP. This is the simplest free live-monitoring path for another local service:
+
+```http
+POST http://localhost:5155/api/signals/logs
+Content-Type: application/json
+
+{
+  "source": "checkout-api",
+  "level": "Error",
+  "message": "HTTP 500 during checkout",
+  "correlationId": "corr-123"
+}
+```
+
+```http
+POST http://localhost:5155/api/signals/metrics
+Content-Type: application/json
+
+{
+  "metricName": "request_error_rate",
+  "serviceName": "checkout-api",
+  "environment": "production",
+  "value": 42.6
+}
+```
+
+The Monitor tab scans those files and self-reports candidates when thresholds or log patterns match.
 
 ## Persistence
 
@@ -284,11 +392,17 @@ http://localhost:5155
 
 The frontend lets you:
 
+- scan logs and metrics for detected incident candidates
 - submit an incident
+- analyze a detected incident with one click
+- switch between Monitor, Analyze, Runbooks, History, and Sources tabs
+- filter and sort detected incidents
+- use dark mode
 - reuse a session id for follow-up turns
 - inspect structured analysis output
 - run RAG searches directly
 - view recent persisted analyses
+- see where runbooks, logs, metrics, and vectors are coming from
 - see embedding/vector store status
 
 No npm install or frontend build step is required.
@@ -344,6 +458,45 @@ Get recent analyses:
 
 ```http
 GET http://localhost:5155/api/incidents/recent?maxResults=5
+```
+
+Get detected incidents:
+
+```http
+GET http://localhost:5155/api/incidents/detected
+```
+
+Ingest a log signal:
+
+```http
+POST http://localhost:5155/api/signals/logs
+Content-Type: application/json
+
+{
+  "source": "checkout-api",
+  "level": "Error",
+  "message": "HTTP 500 during checkout"
+}
+```
+
+Ingest a metric signal:
+
+```http
+POST http://localhost:5155/api/signals/metrics
+Content-Type: application/json
+
+{
+  "metricName": "request_error_rate",
+  "serviceName": "checkout-api",
+  "environment": "production",
+  "value": 42.6
+}
+```
+
+Inspect connected sources:
+
+```http
+GET http://localhost:5155/api/operations/sources
 ```
 
 Inspect RAG retrieval:
@@ -477,7 +630,7 @@ Good next engineering upgrades:
 - Replace local JSON metrics with Prometheus, Azure Monitor, or Datadog metrics.
 - Move incident record persistence from JSON file to SQLite or a relational database.
 - Add OpenTelemetry traces for agent calls, tool calls, and RAG retrieval.
-- Add a frontend for incident submission and investigation sessions.
+- Add real-time push updates with SignalR instead of frontend polling.
 - Add more evaluation fixtures and regression tests.
 - Add a dedicated vector database adapter if you want Qdrant, Chroma, LanceDB, or pgvector.
 
