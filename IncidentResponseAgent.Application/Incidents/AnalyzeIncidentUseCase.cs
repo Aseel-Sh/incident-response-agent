@@ -44,10 +44,17 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 			incident.Severity,
 			incident.ServiceName,
 			incident.Environment);
-		var sessionContext = await _incidentAnalysisSessionStore.GetOrCreateAsync(sessionId, cancellationToken);
-		var runbookResult = await _runbookRetrievalService.RetrieveAsync(BuildRunbookRetrievalRequest(incident), cancellationToken);
-		var logResult = await _logSearchProvider.SearchAsync(BuildLogSearchRequest(incident), cancellationToken);
-		var metricsResult = await _metricsProvider.QueryAsync(BuildMetricsQueryRequest(incident), cancellationToken);
+		var sessionContextTask = _incidentAnalysisSessionStore.GetOrCreateAsync(sessionId, cancellationToken);
+		var runbookResultTask = _runbookRetrievalService.RetrieveAsync(BuildRunbookRetrievalRequest(incident), cancellationToken);
+		var logResultTask = _logSearchProvider.SearchAsync(BuildLogSearchRequest(incident), cancellationToken);
+		var metricsResultTask = _metricsProvider.QueryAsync(BuildMetricsQueryRequest(incident), cancellationToken);
+
+		await Task.WhenAll(sessionContextTask, runbookResultTask, logResultTask, metricsResultTask);
+
+		var sessionContext = await sessionContextTask;
+		var runbookResult = await runbookResultTask;
+		var logResult = await logResultTask;
+		var metricsResult = await metricsResultTask;
 		_logger.LogInformation(
 			"Incident evidence gathered for IncidentId={IncidentId}: Runbooks={RunbookCount} Logs={LogCount} MetricSamples={MetricSampleCount}.",
 			incident.Id,

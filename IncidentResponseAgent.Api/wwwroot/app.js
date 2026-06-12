@@ -6,6 +6,7 @@ const analysisStatus = requireElement("#analysisStatus");
 const ragSummary = requireElement("#ragSummary");
 const ragResults = requireElement("#ragResults");
 const recentOutput = requireElement("#recentOutput");
+const historyDetail = requireElement("#historyDetail");
 const detectedOutput = requireElement("#detectedOutput");
 const sourcesOutput = requireElement("#sourcesOutput");
 const lastScan = requireElement("#lastScan");
@@ -24,9 +25,9 @@ const scanFeedback = requireElement("#scanFeedback");
 const tabCopy = {
   monitor: ["Live Triage", "Monitor", "Detected candidates from logs and metrics, ready for one-click analysis."],
   analyze: ["Agent Workspace", "Analyze", "Manual or detected incidents flow through evidence, RAG, model reasoning, and fallback metadata."],
-  runbooks: ["Knowledge Base", "Runbooks", "Matched chunks, scores, source files, embeddings, and vector store diagnostics."],
-  history: ["Investigation Trail", "History", "Recent analyses with sessions, turns, confidence, notes, and provider metadata."],
-  sources: ["Connectivity", "Sources", "Runtime paths for logs, metrics, runbooks, vector storage, sessions, and signal ingestion."],
+  runbooks: ["Knowledge Base", "Runbooks", "Matched chunks and relevant sections from your runbook library."],
+  history: ["Investigation Trail", "History", "Recent analyses with sessions, turns, and provider metadata."],
+  sources: ["Connectivity", "Sources", "Connected log and metric sources."],
   evaluation: ["Quality Gate", "Evaluation", "Rubric scenarios for evidence, hypotheses, recommendations, and expected operational signals."]
 };
 
@@ -66,7 +67,11 @@ const loadingSteps = [
 
 let detectedCandidates = [];
 let sourceRows = [];
+let recentAnalyses = [];
 let loadingTimer = null;
+let hasLoadedRecent = false;
+let hasLoadedRunbooks = false;
+let hasLoadedEvaluation = false;
 
 document.querySelectorAll(".nav-tab").forEach((button) => {
   button.addEventListener("click", () => activateTab(button.dataset.tab));
@@ -78,6 +83,17 @@ requireElement("#recentButton").addEventListener("click", loadRecent);
 scanButton.addEventListener("click", () => loadDetected({ userInitiated: true }));
 incidentSearch.addEventListener("input", renderDetectedCandidates);
 incidentSort.addEventListener("change", renderDetectedCandidates);
+recentOutput.addEventListener("click", (event) => {
+  const button = event.target.closest("button[data-history-id]");
+  if (!button) {
+    return;
+  }
+
+  const item = recentAnalyses.find((analysis) => analysis.incidentId === button.dataset.historyId);
+  if (item) {
+    renderHistoryDetail(item);
+  }
+});
 
 detectedOutput.addEventListener("click", async (event) => {
   const button = event.target.closest("button[data-action]");
@@ -133,6 +149,8 @@ function activateTab(tabName) {
   workspaceEyebrow.textContent = eyebrow;
   workspaceTitle.textContent = title;
   workspaceDescription.textContent = description;
+
+  loadTabData(tabName);
 }
 
 function toggleTheme() {
@@ -206,10 +224,31 @@ async function loadEvaluation() {
   evaluationOutput.innerHTML = `<div class="empty-state">Loading evaluation scenarios...</div>`;
   try {
     const scenarios = normalizeArray(await requestJson("/api/evaluation/scenarios"));
+    hasLoadedEvaluation = true;
     evaluationOutput.innerHTML = scenarios.map(renderEvaluationScenario).join("") || `<div class="empty-state">No evaluation scenarios configured.</div>`;
     hydrateIcons(evaluationOutput);
   } catch (error) {
     renderError(evaluationOutput, error);
+  }
+}
+
+function loadTabData(tabName) {
+  switch (tabName) {
+    case "runbooks":
+      if (!hasLoadedRunbooks) {
+        void searchRag();
+      }
+      break;
+    case "history":
+      if (!hasLoadedRecent) {
+        void loadRecent();
+      }
+      break;
+    case "evaluation":
+      if (!hasLoadedEvaluation) {
+        void loadEvaluation();
+      }
+      break;
   }
 }
 
@@ -294,7 +333,8 @@ async function analyzeCurrentIncident() {
     });
     incidentForm.sessionId.value = result.sessionId;
     renderAnalysis(result);
-    await Promise.all([loadRecent(), searchRag()]);
+    void loadRecent({ silent: true });
+    void searchRag({ silent: true });
     showToast("Analysis complete", `Session ${result.sessionId}, turn ${result.sessionTurnNumber}.`, result.usedFallbackAnalysis ? "warning" : "success");
   } catch (error) {
     renderError(analysisOutput, error);
@@ -305,18 +345,28 @@ async function analyzeCurrentIncident() {
   }
 }
 
-async function searchRag() {
-  ragResults.innerHTML = `<div class="empty-state">Searching runbooks...</div>`;
-  ragSummary.textContent = "";
+async function searchRag({ silent = false } = {}) {
+  if (!silent) {
+    ragResults.innerHTML = `<div class="empty-state">Searching runbooks...</div>`;
+    ragSummary.textContent = "";
+  }
 
   const form = new FormData(ragForm);
   const incidentFormData = new FormData(incidentForm);
-  const query = encodeURIComponent(form.get("query") || "");
+  const rawQuery = String(form.get("query") || "").trim();
+  if (!rawQuery) {
+    ragSummary.textContent = "";
+    ragResults.innerHTML = `<div class="empty-state">Enter a query to search runbooks.</div>`;
+    return;
+  }
+
+  const query = encodeURIComponent(rawQuery);
   const serviceName = encodeURIComponent(incidentFormData.get("serviceName") || "");
   const environment = encodeURIComponent(incidentFormData.get("environment") || "");
 
   try {
     const result = await requestJson(`/api/runbooks/search?query=${query}&serviceName=${serviceName}&environment=${environment}&maxResults=5`);
+    hasLoadedRunbooks = true;
     ragSummary.innerHTML = `
       <span>Matches: <strong>${result.matches.length}</strong></span>
       <span>Knowledge base: <strong>runbooks</strong></span>
@@ -328,11 +378,18 @@ async function searchRag() {
   }
 }
 
-async function loadRecent() {
-  recentOutput.innerHTML = `<div class="empty-state">Loading recent analyses...</div>`;
+async function loadRecent({ silent = false } = {}) {
+  if (!silent) {
+    recentOutput.innerHTML = `<div class="empty-state">Loading recent analyses...</div>`;
+  }
+
   try {
-    const results = await requestJson("/api/incidents/recent?maxResults=8");
-    recentOutput.innerHTML = results.map(renderHistoryItem).join("") || `<div class="empty-state">No saved analyses yet.</div>`;
+    recentAnalyses = await requestJson("/api/incidents/recent?maxResults=8");
+    hasLoadedRecent = true;
+    recentOutput.innerHTML = recentAnalyses.map(renderHistoryItem).join("") || `<div class="empty-state">No saved analyses yet.</div>`;
+    if (recentAnalyses.length > 0) {
+      renderHistoryDetail(recentAnalyses[0]);
+    }
     hydrateIcons(recentOutput);
   } catch (error) {
     renderError(recentOutput, error);
@@ -343,7 +400,6 @@ function renderHistoryItem(item) {
   const providerMode = item.usedFallbackAnalysis
     ? `<span class="status-pill status-warning">fallback</span>`
     : `<span class="status-pill status-connected">model</span>`;
-  const confidence = item.confidence || "unknown";
 
   return `
     <article class="history-card">
@@ -352,17 +408,78 @@ function renderHistoryItem(item) {
           <h4>${escapeHtml(item.incidentSummary)}</h4>
           <p>${escapeHtml(formatNotes(item.notes))}</p>
           <div class="badge-row">
-            <span class="badge">Session ${escapeHtml(shortenId(item.sessionId))}</span>
-            <span class="badge">Turn ${item.sessionTurnNumber}</span>
-            <span class="badge">${escapeHtml(formatAnalysisProvider(item))}</span>
+            <span class="badge badge-info">Session ${escapeHtml(shortenId(item.sessionId))}</span>
+            <span class="badge badge-info">Turn ${item.sessionTurnNumber}</span>
           </div>
         </div>
       </div>
       <div class="history-aside">
         ${providerMode}
-        <span class="confidence-inline">${escapeHtml(confidence)} confidence</span>
+        <button class="secondary compact-button" type="button" data-history-id="${escapeHtml(item.incidentId)}">View</button>
       </div>
     </article>
+  `;
+}
+
+function renderHistoryDetail(item) {
+  const parsed = parseAnalysisText(item.analysisText);
+  historyDetail.innerHTML = `
+    <p class="eyebrow">Selected run</p>
+    <div class="history-detail-header">
+      <h4>${escapeHtml(item.incidentSummary)}</h4>
+      <span class="status-pill ${item.usedFallbackAnalysis ? "status-warning" : "status-connected"}">${item.usedFallbackAnalysis ? "fallback" : "model"}</span>
+    </div>
+    <p class="meta">Session ${escapeHtml(shortenId(item.sessionId))} | Turn ${item.sessionTurnNumber} | ${escapeHtml(item.confidence || "unknown")} confidence</p>
+    <p>${escapeHtml(formatNotes(item.notes))}</p>
+    ${renderHistoryAnalysis(parsed)}
+  `;
+  hydrateIcons(historyDetail);
+}
+
+function parseAnalysisText(value) {
+  const text = String(value || "").trim();
+  if (!text) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    return { notes: text };
+  }
+}
+
+function renderHistoryAnalysis(analysis) {
+  if (!analysis) {
+    return `<p class="meta analysis-text">No analysis text was stored.</p>`;
+  }
+
+  return `
+    <div class="history-analysis">
+      ${analysis.summary ? `<p class="history-summary">${escapeHtml(analysis.summary)}</p>` : ""}
+      ${renderHistoryList("Evidence", analysis.evidence, (item) => item.summary || item.details)}
+      ${renderHistoryList("Hypotheses", analysis.hypotheses, (item) => item.description)}
+      ${renderHistoryList("Actions", analysis.recommendedActions, (item) => item.description)}
+      ${analysis.notes ? `<p class="meta">${escapeHtml(formatNotes(analysis.notes))}</p>` : ""}
+    </div>
+  `;
+}
+
+function renderHistoryList(title, values, pickText) {
+  const items = (values || [])
+    .map(pickText)
+    .filter(Boolean)
+    .slice(0, 4);
+
+  if (items.length === 0) {
+    return "";
+  }
+
+  return `
+    <section class="history-section">
+      <h5>${escapeHtml(title)}</h5>
+      <ul>${items.map((value) => `<li>${escapeHtml(value)}</li>`).join("")}</ul>
+    </section>
   `;
 }
 
@@ -395,13 +512,8 @@ function renderSource(item) {
           <h4><span data-icon="${escapeHtml(iconName)}" aria-hidden="true"></span> ${escapeHtml(item.name)}</h4>
           <p>${escapeHtml(item.description)}</p>
         </div>
-        <span class="status-token status-${escapeHtml(String(item.status).toLowerCase())}"><i></i>${escapeHtml(item.status)}</span>
+        <span class="status-dot status-${escapeHtml(String(item.status).toLowerCase())}"><i></i></span>
       </div>
-      <dl>
-        <div><dt>Mode</dt><dd>${escapeHtml(item.mode)}</dd></div>
-        <div><dt>Type</dt><dd>${escapeHtml(item.type)}</dd></div>
-        <div><dt>Location</dt><dd>${escapeHtml(item.location)}</dd></div>
-      </dl>
     </article>
   `;
 }
@@ -425,54 +537,47 @@ function renderLoadingSteps() {
 function renderAnalysis(result) {
   const confidence = result.confidence || "Unknown";
   const providerMode = inferProviderMode(result);
-  analysisStatus.textContent = `Completed session ${result.sessionId}, turn ${result.sessionTurnNumber}.`;
+  const providerText = result.usedFallbackAnalysis && result.fallbackReason
+    ? `Completed with local fallback: ${result.fallbackReason}`
+    : `Completed with ${formatAnalysisProvider(result)}.`;
+  analysisStatus.textContent = providerText;
   analysisOutput.className = "";
   analysisOutput.innerHTML = `
-    <div class="analysis-hero">
+    <div class="analysis-brief">
       <div>
-        <span class="status-pill ${providerMode.className}">${escapeHtml(providerMode.label)}</span>
+        <div class="brief-meta">
+          <span class="status-pill ${providerMode.className}">${escapeHtml(providerMode.label)}</span>
+          <span class="confidence-label confidence-${escapeHtml(String(confidence).toLowerCase())}">${escapeHtml(confidence)} confidence</span>
+          <span>Turn ${result.sessionTurnNumber}</span>
+        </div>
         <h4>${escapeHtml(result.incidentSummary)}</h4>
-        <p class="meta">Session ${escapeHtml(result.sessionId)} | Turn ${result.sessionTurnNumber} | ${escapeHtml(formatAnalysisProvider(result))}</p>
+        <p class="meta">${escapeHtml(formatAnalysisProvider(result))}${result.fallbackReason ? ` | ${escapeHtml(result.fallbackReason)}` : ""}</p>
       </div>
-      ${renderConfidenceMeter(confidence)}
     </div>
-    <div class="section-block">
-      <h4>Evidence</h4>
-      <div class="result-list">${result.retrievedEvidence.map(renderEvidence).join("")}</div>
-    </div>
-    <div class="section-block">
-      <h4>Hypotheses</h4>
-      <div class="result-list">${result.rootCauseHypotheses.map(renderHypothesis).join("")}</div>
-    </div>
-    <div class="section-block">
-      <h4>Recommended Actions</h4>
-      <div class="result-list">${result.recommendedActions.map(renderAction).join("")}</div>
-    </div>
-    <div class="section-block">
+    ${renderAnalysisGroup("Recommended Actions", result.recommendedActions, renderAction)}
+    ${renderAnalysisGroup("Evidence", result.retrievedEvidence, renderEvidence)}
+    ${renderAnalysisGroup("Hypotheses", result.rootCauseHypotheses, renderHypothesis)}
+    <section class="analysis-section">
       <h4>Notes</h4>
       <p>${escapeHtml(formatNotes(result.notes))}</p>
-    </div>
+    </section>
   `;
   hydrateIcons(analysisOutput);
 }
 
-function renderConfidenceMeter(confidence) {
-  const score = confidenceScore(confidence);
+function renderAnalysisGroup(title, items, renderer) {
   return `
-    <div class="confidence-card">
-      <span>Confidence</span>
-      <strong>${escapeHtml(confidence)}</strong>
-      <div class="confidence-track" aria-hidden="true">
-        <div style="width: ${score}%"></div>
-      </div>
-    </div>
+    <section class="analysis-section">
+      <h4>${escapeHtml(title)}</h4>
+      <div class="analysis-list">${(items || []).map(renderer).join("") || `<p class="meta">No ${escapeHtml(title.toLowerCase())} returned.</p>`}</div>
+    </section>
   `;
 }
 
 function renderEvidence(item) {
   return `
-    <article class="result-item evidence">
-      <h4><span data-icon="search" aria-hidden="true"></span> ${escapeHtml(formatEvidenceSource(item.source || "evidence"))}</h4>
+    <article class="analysis-line evidence">
+      <h5><span data-icon="search" aria-hidden="true"></span> ${escapeHtml(formatEvidenceSource(item.source || "evidence"))}</h5>
       <p>${escapeHtml(item.summary)}</p>
       <p class="meta">${escapeHtml(item.details || "")}</p>
     </article>
@@ -481,23 +586,30 @@ function renderEvidence(item) {
 
 function renderHypothesis(item) {
   return `
-    <article class="result-item hypothesis">
-      <h4><span data-icon="brain" aria-hidden="true"></span> ${escapeHtml(item.inferenceStrength)} / ${escapeHtml(item.confidence || "unknown")}</h4>
+    <article class="analysis-line hypothesis">
+      <h5><span data-icon="brain" aria-hidden="true"></span> ${escapeHtml(item.inferenceStrength)} / ${escapeHtml(item.confidence || "unknown")}</h5>
       <p>${escapeHtml(item.description)}</p>
-      <div class="badge-row">${(item.evidenceReferences || []).map((value) => `<span class="badge">${escapeHtml(value)}</span>`).join("")}</div>
+      ${renderInlineRefs(item.evidenceReferences)}
     </article>
   `;
 }
 
 function renderAction(item) {
   return `
-    <article class="result-item action">
-      <h4><span data-icon="check" aria-hidden="true"></span> ${escapeHtml(item.priority)}</h4>
+    <article class="analysis-line action">
+      <h5><span data-icon="check" aria-hidden="true"></span> ${escapeHtml(item.priority)}</h5>
       <p>${escapeHtml(item.description)}</p>
       <p class="meta">${escapeHtml(item.rationale || "")}</p>
-      <div class="badge-row">${(item.supportingSignals || []).map((value) => `<span class="badge">${escapeHtml(value)}</span>`).join("")}</div>
+      ${renderInlineRefs(item.supportingSignals)}
     </article>
   `;
+}
+
+function renderInlineRefs(values) {
+  const refs = (values || []).filter(Boolean);
+  return refs.length > 0
+    ? `<p class="meta">${refs.map(escapeHtml).join(" | ")}</p>`
+    : "";
 }
 
 function renderRagMatch(item) {
@@ -514,19 +626,21 @@ function renderRagMatch(item) {
 function renderEvaluationScenario(item) {
   return `
     <article class="evaluation-card">
-      <div class="evaluation-card-header">
-        <div>
-          <h4><span data-icon="check" aria-hidden="true"></span> ${escapeHtml(item.title)}</h4>
-          <p class="meta">${escapeHtml(item.name)} | ${escapeHtml(item.serviceName || "unknown service")} / ${escapeHtml(item.environment || "unknown environment")}</p>
+      <div class="evaluation-card-body">
+        <div class="evaluation-card-header">
+          <div>
+            <h4><span data-icon="check" aria-hidden="true"></span> ${escapeHtml(item.title)}</h4>
+            <p class="meta">${escapeHtml(item.name)} | ${escapeHtml(item.serviceName || "unknown service")} / ${escapeHtml(item.environment || "unknown environment")}</p>
+          </div>
         </div>
-        <span class="severity severity-${escapeHtml(String(item.severity).toLowerCase())}">${escapeHtml(item.severity)}</span>
+        <div class="badge-row">${(item.tags || []).map((value) => `<span class="badge">${escapeHtml(value)}</span>`).join("")}</div>
+        <div class="rubric-columns">
+          <div><strong><span data-icon="search" aria-hidden="true"></span> Evidence</strong>${renderBadges(item.expectedEvidenceSignals)}</div>
+          <div><strong><span data-icon="brain" aria-hidden="true"></span> Hypotheses</strong>${renderBadges(item.expectedHypothesisThemes)}</div>
+          <div><strong><span data-icon="check" aria-hidden="true"></span> Actions</strong>${renderBadges(item.expectedActionThemes)}</div>
+        </div>
       </div>
-      <div class="badge-row">${(item.tags || []).map((value) => `<span class="badge">${escapeHtml(value)}</span>`).join("")}</div>
-      <div class="rubric-columns">
-        <div><strong><span data-icon="search" aria-hidden="true"></span> Evidence</strong>${renderBadges(item.expectedEvidenceSignals)}</div>
-        <div><strong><span data-icon="brain" aria-hidden="true"></span> Hypotheses</strong>${renderBadges(item.expectedHypothesisThemes)}</div>
-        <div><strong><span data-icon="check" aria-hidden="true"></span> Actions</strong>${renderBadges(item.expectedActionThemes)}</div>
-      </div>
+      <span class="severity severity-${escapeHtml(String(item.severity).toLowerCase())}">${escapeHtml(item.severity)}</span>
     </article>
   `;
 }
@@ -773,9 +887,6 @@ function initializeApp() {
   checkHealth();
   loadSources();
   loadDetected({ userInitiated: true });
-  searchRag();
-  loadRecent();
-  loadEvaluation();
   window.setInterval(loadDetected, 30000);
 }
 

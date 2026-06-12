@@ -4,15 +4,11 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Incident Response Agent</title>
-  <link rel="stylesheet" href="/styles.css?v=20260611-ui-refresh">
+  <link rel="stylesheet" href="/styles.css?v=20260612-actions-first">
 </head>
 <body>
   <div class="app-shell">
     <aside class="sidebar">
-      <div class="brand">
-        <h1>Incident Response Agent</h1>
-      </div>
-
       <nav class="nav-tabs" aria-label="Primary">
         <button class="nav-tab active" type="button" data-tab="monitor" data-icon="radar">Monitor</button>
         <button class="nav-tab" type="button" data-tab="analyze" data-icon="brain">Analyze</button>
@@ -22,7 +18,10 @@
         <button class="nav-tab" type="button" data-tab="evaluation" data-icon="check">Evaluation</button>
       </nav>
 
-      <p id="lastScan" class="sidebar-meta">No scan yet</p>
+      <div class="sidebar-footer">
+        <p id="lastScan" class="sidebar-meta">No scan yet</p>
+        <button id="themeToggle" class="theme-toggle icon-only" type="button" data-icon="moon" aria-label="Toggle theme"></button>
+      </div>
     </aside>
 
     <main class="workspace">
@@ -33,10 +32,9 @@
           <p id="workspaceDescription">Detected candidates, agent analysis, RAG, history, source visibility, and evaluation checks in one console.</p>
         </div>
         <div class="header-actions">
-          <div class="status" id="healthStatus">Checking API</div>
+          <span id="healthStatus" class="status-pill status-pending" aria-live="polite">Checking</span>
           <button id="scanButton" type="button" data-icon="refresh">Scan Now</button>
           <button id="sampleButton" class="secondary" type="button" data-icon="wand">Load Sample</button>
-          <button id="themeToggle" class="theme-toggle icon-only" type="button" data-icon="moon" aria-label="Toggle theme"></button>
         </div>
       </header>
 
@@ -177,77 +175,23 @@
               <p>Saved investigation runs with sessions, turns, confidence, and provider metadata.</p>
             </div>
           </div>
-          <div id="recentOutput" class="result-list"></div>
+          <div class="history-layout">
+            <div id="recentOutput" class="history-list"></div>
+            <aside id="historyDetail" class="history-detail">
+              <p class="eyebrow">Selected run</p>
+              <h4>No analysis selected</h4>
+              <p class="meta">Choose a saved run to inspect the stored analysis text.</p>
+            </aside>
+          </div>
         </section>
       </section>
 
       <section id="sourcesView" class="tab-view">
-        <section class="panel connector-panel">
-          <div class="panel-header">
-            <div>
-              <h3><span data-icon="plug" aria-hidden="true"></span> Signal Ingestion</h3>
-              <p>Free local path for connecting any app, script, or background job.</p>
-            </div>
-          </div>
-          <div class="connector-grid">
-            <article>
-              <h4><span data-icon="terminal" aria-hidden="true"></span> Log signal</h4>
-              <pre><code>curl -X POST http://localhost:5270/api/signals/logs \
-  -H "Content-Type: application/json" \
-  -d '{
-    "source": "checkout-api",
-    "level": "Error",
-    "message": "HTTP 500 during checkout"
-  }'</code></pre>
-            </article>
-            <article>
-              <h4><span data-icon="chart" aria-hidden="true"></span> Metric signal</h4>
-              <pre><code>curl -X POST http://localhost:5270/api/signals/metrics \
-  -H "Content-Type: application/json" \
-  -d '{
-    "metricName": "request_error_rate",
-    "serviceName": "checkout-api",
-    "environment": "production",
-    "value": 42.6
-  }'</code></pre>
-            </article>
-          </div>
-          <div class="connect-steps">
-            <article><strong>1</strong><span>Point your app logger at <code>/api/signals/logs</code>.</span></article>
-            <article><strong>2</strong><span>Send service metrics to <code>/api/signals/metrics</code>.</span></article>
-            <article><strong>3</strong><span>Use Monitor to scan, then Analyze the generated candidate.</span></article>
-          </div>
-          <details class="payload-details">
-            <summary>Raw JSON payloads</summary>
-            <div class="connector-grid">
-              <article>
-                <h4><span data-icon="terminal" aria-hidden="true"></span> Log body</h4>
-                <pre><code>POST /api/signals/logs
-{
-  "source": "checkout-api",
-  "level": "Error",
-  "message": "HTTP 500 during checkout"
-}</code></pre>
-              </article>
-              <article>
-                <h4><span data-icon="chart" aria-hidden="true"></span> Metric body</h4>
-                <pre><code>POST /api/signals/metrics
-{
-  "metricName": "request_error_rate",
-  "serviceName": "checkout-api",
-  "environment": "production",
-  "value": 42.6
-}</code></pre>
-              </article>
-            </div>
-          </details>
-        </section>
-
         <section class="panel">
           <div class="panel-header">
             <div>
               <h3><span data-icon="database" aria-hidden="true"></span> Connected Sources</h3>
-              <p>Runtime paths and vector configuration used by the app.</p>
+              <p>Logs and metrics sources.</p>
             </div>
           </div>
           <div id="sourcesOutput" class="source-list"></div>
@@ -269,6 +213,6 @@
   </div>
   <div id="toastRegion" class="toast-region" aria-live="polite" aria-atomic="true"></div>
 
-  <script src="/app.js?v=20260611-ui-refresh"></script>
+  <script src="/app.js?v=20260612-actions-first"></script>
 </body>
 </html>
