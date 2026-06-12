@@ -61,10 +61,7 @@ const iconPaths = {
   wand: '<path d="M15 4V2"/><path d="M15 16v-2"/><path d="M8 9H6"/><path d="M20 9h-2"/><path d="m17.8 6.2 1.4-1.4"/><path d="m10.8 13.2-1.4 1.4"/><path d="m10.8 4.8-1.4-1.4"/><path d="m17.8 11.8 1.4 1.4"/><path d="m3 21 9-9"/>'
 };
 const loadingSteps = [
-  "Incident details submitted",
-  "Runbook, log, and metric retrieval in progress",
-  "Agent/model response pending",
-  "Final response will appear here"
+  "The API is gathering evidence and waiting for the agent response."
 ];
 
 let detectedCandidates = [];
@@ -146,8 +143,9 @@ function toggleTheme() {
 
 function applyTheme(theme) {
   document.documentElement.dataset.theme = theme;
-  themeToggle.textContent = theme === "dark" ? "Light Mode" : "Dark Mode";
   themeToggle.dataset.icon = theme === "dark" ? "sparkles" : "moon";
+  themeToggle.innerHTML = "";
+  themeToggle.dataset.iconHydrated = "";
   hydrateIcons(themeToggle);
 }
 
@@ -320,9 +318,8 @@ async function searchRag() {
   try {
     const result = await requestJson(`/api/runbooks/search?query=${query}&serviceName=${serviceName}&environment=${environment}&maxResults=5`);
     ragSummary.innerHTML = `
-      <span>Embeddings: <strong>${escapeHtml(result.embeddingProvider)}</strong> / ${escapeHtml(result.embeddingModel)}</span>
-      <span>Vector store: <strong>${escapeHtml(result.vectorStoreProvider || "sqlite")}</strong>${result.vectorStoreCollection ? ` / ${escapeHtml(result.vectorStoreCollection)}` : ""}</span>
       <span>Matches: <strong>${result.matches.length}</strong></span>
+      <span>Knowledge base: <strong>runbooks</strong></span>
     `;
     ragResults.innerHTML = result.matches.map(renderRagMatch).join("") || `<div class="empty-state">No matches.</div>`;
     hydrateIcons(ragResults);
@@ -351,10 +348,9 @@ function renderHistoryItem(item) {
   return `
     <article class="history-card">
       <div class="history-card-main">
-        <div class="history-icon" data-icon="history" aria-hidden="true"></div>
         <div>
           <h4>${escapeHtml(item.incidentSummary)}</h4>
-          <p>${escapeHtml(item.notes || "No notes captured.")}</p>
+          <p>${escapeHtml(formatNotes(item.notes))}</p>
           <div class="badge-row">
             <span class="badge">Session ${escapeHtml(shortenId(item.sessionId))}</span>
             <span class="badge">Turn ${item.sessionTurnNumber}</span>
@@ -364,7 +360,7 @@ function renderHistoryItem(item) {
       </div>
       <div class="history-aside">
         ${providerMode}
-        ${renderConfidenceMeter(confidence)}
+        <span class="confidence-inline">${escapeHtml(confidence)} confidence</span>
       </div>
     </article>
   `;
@@ -399,7 +395,7 @@ function renderSource(item) {
           <h4><span data-icon="${escapeHtml(iconName)}" aria-hidden="true"></span> ${escapeHtml(item.name)}</h4>
           <p>${escapeHtml(item.description)}</p>
         </div>
-        <span class="status-pill status-${escapeHtml(String(item.status).toLowerCase())}">${escapeHtml(item.status)}</span>
+        <span class="status-token status-${escapeHtml(String(item.status).toLowerCase())}"><i></i>${escapeHtml(item.status)}</span>
       </div>
       <dl>
         <div><dt>Mode</dt><dd>${escapeHtml(item.mode)}</dd></div>
@@ -419,11 +415,9 @@ function renderLoadingAnalysis() {
 function renderLoadingSteps() {
   return `
     <div class="loading-panel">
-      <h4><span data-icon="activity" aria-hidden="true"></span> Analysis running</h4>
+      <h4><span data-icon="activity" aria-hidden="true"></span> Waiting for analysis</h4>
       <div class="progress-rail" aria-hidden="true"><span></span></div>
-      <ul>
-        ${loadingSteps.map((step, index) => `<li class="${index === 0 ? "active" : ""}">${escapeHtml(step)}</li>`).join("")}
-      </ul>
+      <p>${escapeHtml(loadingSteps[0])}</p>
     </div>
   `;
 }
@@ -456,7 +450,7 @@ function renderAnalysis(result) {
     </div>
     <div class="section-block">
       <h4>Notes</h4>
-      <p>${escapeHtml(result.notes || "")}</p>
+      <p>${escapeHtml(formatNotes(result.notes))}</p>
     </div>
   `;
   hydrateIcons(analysisOutput);
@@ -511,7 +505,7 @@ function renderRagMatch(item) {
     <article class="result-item">
       <h4><span data-icon="book" aria-hidden="true"></span> ${escapeHtml(item.title)}</h4>
       <p>${escapeHtml(item.summary)}</p>
-      <p class="meta">Score ${item.score} | ${escapeHtml(item.sectionPath || "root")}</p>
+      <p class="meta">${escapeHtml(item.sectionPath || "root")}</p>
       <div class="badge-row">${(item.tags || []).slice(0, 8).map((value) => `<span class="badge">${escapeHtml(value)}</span>`).join("")}</div>
     </article>
   `;
@@ -539,6 +533,20 @@ function renderEvaluationScenario(item) {
 
 function renderBadges(values) {
   return `<div class="badge-row">${(values || []).map((value) => `<span class="badge">${escapeHtml(value)}</span>`).join("")}</div>`;
+}
+
+function formatNotes(value) {
+  const text = String(value || "").trim();
+  if (!text) {
+    return "No notes captured.";
+  }
+
+  const fixed = text.replaceAll("configureLocal", "configured. Local");
+  const sentences = fixed
+    .split(/(?<=[.!?])\s+/)
+    .map((sentence) => sentence.trim())
+    .filter(Boolean);
+  return [...new Set(sentences)].join(" ");
 }
 
 function fillIncidentForm(item) {

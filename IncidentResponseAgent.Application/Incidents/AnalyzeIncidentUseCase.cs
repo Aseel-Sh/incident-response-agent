@@ -94,8 +94,10 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 				? structuredAnalysis.RecommendedActions
 				: BuildRecommendedActions(incident, runbookResult, logResult, metricsResult),
 			Confidence = confidence,
-			Notes = structuredAnalysis?.Notes
-				?? "Agent returned unstructured analysis, so the application used deterministic evidence, hypotheses, and actions."
+			Notes = BuildNotes(
+				structuredAnalysis?.Notes
+					?? "Agent returned unstructured analysis, so the application used deterministic evidence, hypotheses, and actions.",
+				agentResult)
 		};
 
 		await _incidentRecordStore.SaveAsync(incident, result, cancellationToken);
@@ -107,6 +109,21 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 			result.Confidence);
 
 		return result;
+	}
+
+	private static string BuildNotes(string notes, IncidentAgentExecutionResult agentResult)
+	{
+		if (!agentResult.UsedFallback || string.IsNullOrWhiteSpace(agentResult.FallbackReason))
+		{
+			return notes;
+		}
+
+		if (notes.Contains(agentResult.FallbackReason, StringComparison.OrdinalIgnoreCase))
+		{
+			return notes;
+		}
+
+		return $"{notes} Fallback reason: {agentResult.FallbackReason}";
 	}
 
 	private static IReadOnlyList<IncidentAnalysisEvidenceItem> MergeEvidence(

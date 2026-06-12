@@ -160,7 +160,7 @@ public sealed class PromptBasedIncidentAnalysisAgent : IIncidentAnalysisAgent
 				}
 			],
 			Confidence = "Low",
-			Notes = "Local prompt-based fallback used because no agent API key is configured."
+			Notes = "Local prompt-based fallback produced this analysis."
 		};
 
 		return JsonSerializer.Serialize(new

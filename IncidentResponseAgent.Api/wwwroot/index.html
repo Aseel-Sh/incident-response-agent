@@ -10,11 +10,7 @@
   <div class="app-shell">
     <aside class="sidebar">
       <div class="brand">
-        <div class="brand-mark" data-icon="sparkles" aria-hidden="true"></div>
-        <div>
-          <p class="eyebrow">Ops Copilot</p>
-          <h1>Incident Response Agent</h1>
-        </div>
+        <h1>Incident Response Agent</h1>
       </div>
 
       <nav class="nav-tabs" aria-label="Primary">
@@ -26,41 +22,7 @@
         <button class="nav-tab" type="button" data-tab="evaluation" data-icon="check">Evaluation</button>
       </nav>
 
-      <section class="sidebar-card">
-        <div class="card-title">
-          <span data-icon="activity" aria-hidden="true"></span>
-          <h2>Signal Scan</h2>
-        </div>
-        <dl class="metric-grid">
-          <div>
-            <dt>Total</dt>
-            <dd id="totalDetected">0</dd>
-          </div>
-          <div>
-            <dt>Critical</dt>
-            <dd id="criticalDetected">0</dd>
-          </div>
-          <div>
-            <dt>Logs</dt>
-            <dd id="logDetected">0</dd>
-          </div>
-          <div>
-            <dt>Metrics</dt>
-            <dd id="metricDetected">0</dd>
-          </div>
-        </dl>
-      </section>
-
-      <section class="sidebar-card connection-card">
-        <div class="card-title">
-          <span data-icon="server" aria-hidden="true"></span>
-          <h2>Runtime</h2>
-        </div>
-        <div class="status" id="healthStatus">Checking API</div>
-        <p id="lastScan" class="meta">No scan yet</p>
-      </section>
-
-      <button id="themeToggle" class="theme-toggle" type="button" data-icon="moon" aria-label="Toggle theme">Theme</button>
+      <p id="lastScan" class="sidebar-meta">No scan yet</p>
     </aside>
 
     <main class="workspace">
@@ -71,29 +33,12 @@
           <p id="workspaceDescription">Detected candidates, agent analysis, RAG, history, source visibility, and evaluation checks in one console.</p>
         </div>
         <div class="header-actions">
+          <div class="status" id="healthStatus">Checking API</div>
           <button id="scanButton" type="button" data-icon="refresh">Scan Now</button>
           <button id="sampleButton" class="secondary" type="button" data-icon="wand">Load Sample</button>
+          <button id="themeToggle" class="theme-toggle icon-only" type="button" data-icon="moon" aria-label="Toggle theme"></button>
         </div>
       </header>
-
-      <section class="workflow-strip" aria-label="Incident workflow">
-        <article>
-          <span data-icon="radar" aria-hidden="true"></span>
-          <div><strong>Detect</strong><p>Logs and metrics</p></div>
-        </article>
-        <article>
-          <span data-icon="brain" aria-hidden="true"></span>
-          <div><strong>Analyze</strong><p>Agent reasoning</p></div>
-        </article>
-        <article>
-          <span data-icon="book" aria-hidden="true"></span>
-          <div><strong>Retrieve</strong><p>Runbook RAG</p></div>
-        </article>
-        <article>
-          <span data-icon="check" aria-hidden="true"></span>
-          <div><strong>Evaluate</strong><p>Rubric scenarios</p></div>
-        </article>
-      </section>
 
       <section id="monitorView" class="tab-view active">
         <div class="panel">
@@ -112,6 +57,24 @@
               </select>
             </div>
           </div>
+          <dl class="monitor-stats">
+            <div>
+              <dt>Total</dt>
+              <dd id="totalDetected">0</dd>
+            </div>
+            <div>
+              <dt>Critical</dt>
+              <dd id="criticalDetected">0</dd>
+            </div>
+            <div>
+              <dt>Logs</dt>
+              <dd id="logDetected">0</dd>
+            </div>
+            <div>
+              <dt>Metrics</dt>
+              <dd id="metricDetected">0</dd>
+            </div>
+          </dl>
           <div id="scanFeedback" class="scan-feedback"></div>
           <div id="detectedOutput" class="incident-table"></div>
         </div>

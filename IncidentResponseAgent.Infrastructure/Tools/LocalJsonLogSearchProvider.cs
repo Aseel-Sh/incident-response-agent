@@ -63,7 +63,7 @@ public sealed class LocalJsonLogSearchProvider : ILogSearchProvider
 			return await new DeterministicFallbackLogSearchProvider().SearchAsync(request, cancellationToken).ConfigureAwait(false);
 		}
 
-		_logger.LogInformation("Log search query {Query} returned {Count} local entries.", request.Query, matches.Length);
+		_logger.LogDebug("Log search query {Query} returned {Count} local entries.", request.Query, matches.Length);
 		return new LogSearchResult { Entries = matches };
 	}
 
