@@ -75,9 +75,43 @@ internal sealed class HuggingFaceRunbookEmbeddingProvider : IRunbookEmbeddingPro
 		}
 
 		var first = element[0];
-		return first.ValueKind == JsonValueKind.Array
-			? first.EnumerateArray().Select(value => (float)value.GetDouble()).ToArray()
-			: element.EnumerateArray().Select(value => (float)value.GetDouble()).ToArray();
+		if (first.ValueKind != JsonValueKind.Array)
+		{
+			return element.EnumerateArray().Select(value => (float)value.GetDouble()).ToArray();
+		}
+
+		var nested = element.EnumerateArray()
+			.Where(item => item.ValueKind == JsonValueKind.Array)
+			.Select(item => item.EnumerateArray().Select(value => (float)value.GetDouble()).ToArray())
+			.Where(vector => vector.Length > 0)
+			.ToArray();
+
+		if (nested.Length == 0)
+		{
+			return Array.Empty<float>();
+		}
+
+		if (nested.Length == 1)
+		{
+			return nested[0];
+		}
+
+		var dimensions = nested.Min(vector => vector.Length);
+		var pooled = new float[dimensions];
+		foreach (var vector in nested)
+		{
+			for (var index = 0; index < dimensions; index++)
+			{
+				pooled[index] += vector[index];
+			}
+		}
+
+		for (var index = 0; index < dimensions; index++)
+		{
+			pooled[index] /= nested.Length;
+		}
+
+		return pooled;
 	}
 
 	private static string ResolveApiKey(RunbookRetrievalOptions options)

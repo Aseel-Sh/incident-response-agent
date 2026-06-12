@@ -52,6 +52,10 @@ public sealed class IncidentsController : ControllerBase
             SessionContextSummary = result.SessionContextSummary,
             IncidentSummary = result.IncidentSummary,
             AnalysisText = result.AnalysisText,
+            AnalysisProvider = result.AnalysisProvider,
+            AnalysisModel = result.AnalysisModel,
+            UsedFallbackAnalysis = result.UsedFallbackAnalysis,
+            FallbackReason = result.FallbackReason,
             RetrievedEvidence = result.Evidence.Select(item => new IncidentResponseAgent.Api.Contracts.Incidents.IncidentAnalysisEvidenceItem
             {
                 Summary = item.Summary,
@@ -91,6 +95,10 @@ public sealed class IncidentsController : ControllerBase
             IncidentId = result.IncidentId,
             IncidentSummary = result.IncidentSummary,
             AnalysisText = result.AnalysisText,
+            AnalysisProvider = result.AnalysisProvider,
+            AnalysisModel = result.AnalysisModel,
+            UsedFallbackAnalysis = result.UsedFallbackAnalysis,
+            FallbackReason = result.FallbackReason,
             SessionId = result.SessionId,
             SessionTurnNumber = result.SessionTurnNumber,
             Confidence = result.Confidence,

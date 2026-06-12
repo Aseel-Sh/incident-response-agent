@@ -44,6 +44,15 @@ public sealed class RubricIncidentAnalysisEvaluator : IIncidentAnalysisEvaluator
 				failed);
 		}
 
+		foreach (var expectedTheme in scenario.ExpectedHypothesisThemes)
+		{
+			Check(
+				Contains(result.Hypotheses.Select(hypothesis => $"{hypothesis.Description} {hypothesis.InferenceStrength} {hypothesis.Confidence} {string.Join(' ', hypothesis.SupportingEvidence)} {string.Join(' ', hypothesis.EvidenceReferences)}"), expectedTheme),
+				$"hypotheses mention '{expectedTheme}'",
+				passed,
+				failed);
+		}
+
 		foreach (var expectedTheme in scenario.ExpectedActionThemes)
 		{
 			Check(

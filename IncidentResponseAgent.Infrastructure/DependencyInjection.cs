@@ -13,7 +13,9 @@ public static class DependencyInjection
 	public static IServiceCollection AddInfrastructure(this IServiceCollection services)
 	{
 		services.AddSingleton<ILogSearchProvider, LocalJsonLogSearchProvider>();
-		services.AddSingleton<IMetricsProvider, LocalJsonMetricsProvider>();
+		services.AddSingleton<LocalJsonMetricsProvider>();
+		services.AddSingleton<IMetricsProvider>(provider => provider.GetRequiredService<LocalJsonMetricsProvider>());
+		services.AddSingleton<IMetricSeriesCatalog>(provider => provider.GetRequiredService<LocalJsonMetricsProvider>());
 		services.AddSingleton<IRunbookRetrievalService, SemanticRunbookRetrievalService>();
 		services.AddSingleton<IRunbookRetrievalDiagnosticsService>(serviceProvider =>
 			(IRunbookRetrievalDiagnosticsService)serviceProvider.GetRequiredService<IRunbookRetrievalService>());

@@ -1,6 +1,7 @@
 using System.Text.Json;
 using IncidentResponseAgent.Application.Incidents;
 using IncidentResponseAgent.Domain.Incidents;
+using Microsoft.Extensions.Options;
 
 namespace IncidentResponseAgent.Infrastructure.Incidents;
 
@@ -14,8 +15,21 @@ public sealed class FileIncidentRecordStore : IIncidentRecordStore
 	private readonly SemaphoreSlim _fileLock = new(1, 1);
 	private readonly string _filePath;
 
-	public FileIncidentRecordStore()
+	public FileIncidentRecordStore(IOptions<IncidentStorageOptions> options)
 	{
+		var configuredPath = options.Value?.IncidentRecordsPath;
+		if (!string.IsNullOrWhiteSpace(configuredPath))
+		{
+			_filePath = Path.GetFullPath(Environment.ExpandEnvironmentVariables(configuredPath));
+			var configuredDirectory = Path.GetDirectoryName(_filePath);
+			if (!string.IsNullOrWhiteSpace(configuredDirectory))
+			{
+				Directory.CreateDirectory(configuredDirectory);
+			}
+
+			return;
+		}
+
 		var rootFolder = Path.Combine(
 			Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
 			"IncidentResponseAgent");

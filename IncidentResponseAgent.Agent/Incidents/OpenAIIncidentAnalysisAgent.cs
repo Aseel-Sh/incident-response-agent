@@ -39,7 +39,7 @@ public sealed class OpenAIIncidentAnalysisAgent : IIncidentAnalysisAgent
 		_logger = logger;
 	}
 
-	public async Task<string> AnalyzeAsync(
+	public async Task<IncidentAgentExecutionResult> AnalyzeAsync(
 		Incident incident,
 		IncidentAnalysisSessionContext? sessionContext = null,
 		IncidentAnalysisAgentContext? agentContext = null,
@@ -108,7 +108,13 @@ public sealed class OpenAIIncidentAnalysisAgent : IIncidentAnalysisAgent
 			incident.Id,
 			completion?.Model ?? model,
 			content.Length);
-		return content;
+		return new IncidentAgentExecutionResult
+		{
+			AnalysisText = content,
+			Provider = "openai-compatible",
+			Model = completion?.Model ?? model,
+			UsedFallback = false
+		};
 	}
 
 	private async Task<IncidentAnalysisAgentContext> BuildAgentContextAsync(Incident incident, CancellationToken cancellationToken)

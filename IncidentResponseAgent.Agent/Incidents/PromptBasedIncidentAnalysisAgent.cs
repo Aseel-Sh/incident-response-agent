@@ -32,7 +32,7 @@ public sealed class PromptBasedIncidentAnalysisAgent : IIncidentAnalysisAgent
 		_runbookRetrievalService = runbookRetrievalService;
 	}
 
-	public async Task<string> AnalyzeAsync(
+	public async Task<IncidentAgentExecutionResult> AnalyzeAsync(
 		Incident incident,
 		IncidentAnalysisSessionContext? sessionContext = null,
 		IncidentAnalysisAgentContext? agentContext = null,
@@ -55,7 +55,14 @@ public sealed class PromptBasedIncidentAnalysisAgent : IIncidentAnalysisAgent
 		var response = BuildAnalysisText(incident, profile, prompt, sessionContext, runbookResult.Runbooks, logResult, metricsResult);
 		_logger.LogInformation("Local prompt-based incident analysis completed for IncidentId={IncidentId}.", incident.Id);
 
-		return response;
+		return new IncidentAgentExecutionResult
+		{
+			AnalysisText = response,
+			Provider = "local-prompt",
+			Model = "local",
+			UsedFallback = true,
+			FallbackReason = "No model-backed analysis was used."
+		};
 	}
 
 	private static LogSearchRequest BuildLogSearchRequest(Incident incident)

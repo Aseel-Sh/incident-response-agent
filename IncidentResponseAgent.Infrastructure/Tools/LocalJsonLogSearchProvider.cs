@@ -41,9 +41,9 @@ public sealed class LocalJsonLogSearchProvider : ILogSearchProvider
 
 		var matches = entries
 			.Where(entry => IsInWindow(entry, request.StartTime, request.EndTime))
-			.Where(entry => string.IsNullOrWhiteSpace(serviceName) || entry.Source.Contains(serviceName, StringComparison.OrdinalIgnoreCase))
+			.Where(entry => MatchesService(entry, serviceName))
 			.Where(entry => string.IsNullOrWhiteSpace(environment) || entry.Message.Contains(environment, StringComparison.OrdinalIgnoreCase))
-			.Select(entry => new { Entry = entry, Score = Score(entry, queryTokens) })
+			.Select(entry => new { Entry = entry, Score = Score(entry, queryTokens, serviceName, environment) })
 			.Where(match => match.Score > 0)
 			.OrderByDescending(match => match.Score)
 			.ThenByDescending(match => match.Entry.Timestamp)
@@ -106,7 +106,19 @@ public sealed class LocalJsonLogSearchProvider : ILogSearchProvider
 		return true;
 	}
 
-	private static int Score(LogSearchEntry entry, HashSet<string> queryTokens)
+	private static bool MatchesService(LogSearchEntry entry, string? serviceName)
+	{
+		if (string.IsNullOrWhiteSpace(serviceName))
+		{
+			return true;
+		}
+
+		var haystack = Tokenize($"{entry.Source} {entry.Message} {entry.CorrelationId}");
+		var serviceTokens = Tokenize(serviceName);
+		return serviceTokens.Count == 0 || haystack.Overlaps(serviceTokens);
+	}
+
+	private static int Score(LogSearchEntry entry, HashSet<string> queryTokens, string? serviceName, string? environment)
 	{
 		var haystack = Tokenize($"{entry.Source} {entry.Level} {entry.Message} {entry.CorrelationId}");
 		var score = 0;
@@ -116,6 +128,37 @@ public sealed class LocalJsonLogSearchProvider : ILogSearchProvider
 			{
 				score++;
 			}
+		}
+
+		var serviceTokens = Tokenize(serviceName);
+		foreach (var token in serviceTokens)
+		{
+			if (haystack.Contains(token))
+			{
+				score += 2;
+			}
+		}
+
+		var environmentTokens = Tokenize(environment);
+		foreach (var token in environmentTokens)
+		{
+			if (haystack.Contains(token))
+			{
+				score++;
+			}
+		}
+
+		if (entry.Level.Equals("Critical", StringComparison.OrdinalIgnoreCase))
+		{
+			score += 3;
+		}
+		else if (entry.Level.Equals("Error", StringComparison.OrdinalIgnoreCase))
+		{
+			score += 2;
+		}
+		else if (entry.Level.Equals("Warning", StringComparison.OrdinalIgnoreCase))
+		{
+			score++;
 		}
 
 		return score;

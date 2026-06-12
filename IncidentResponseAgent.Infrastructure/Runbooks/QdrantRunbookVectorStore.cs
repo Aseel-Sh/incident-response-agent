@@ -1,5 +1,6 @@
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Net;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -33,7 +34,7 @@ internal sealed class QdrantRunbookVectorStore
 		var apiKey = ResolveApiKey(options);
 		if (!string.IsNullOrWhiteSpace(apiKey))
 		{
-			_httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+			_httpClient.DefaultRequestHeaders.TryAddWithoutValidation("api-key", apiKey);
 		}
 	}
 
@@ -52,6 +53,23 @@ internal sealed class QdrantRunbookVectorStore
 
 		try
 		{
+			var existingState = await TryGetCollectionStateAsync(cancellationToken).ConfigureAwait(false);
+			if (existingState is { Exists: true })
+			{
+				if (existingState.VectorSize is null || existingState.VectorSize == vectorSize)
+				{
+					return true;
+				}
+
+				_available = false;
+				_logger.LogWarning(
+					"Qdrant collection {CollectionName} vector size is {ExistingVectorSize}, expected {ExpectedVectorSize}. Falling back to SQLite vector search.",
+					CollectionName,
+					existingState.VectorSize,
+					vectorSize);
+				return false;
+			}
+
 			var body = new
 			{
 				vectors = new
@@ -145,6 +163,55 @@ internal sealed class QdrantRunbookVectorStore
 		}
 	}
 
+	public async Task<bool> DeleteRunbookAsync(string runbookId, CancellationToken cancellationToken)
+	{
+		if (!_available || string.IsNullOrWhiteSpace(runbookId))
+		{
+			return false;
+		}
+
+		try
+		{
+			var body = new
+			{
+				filter = new
+				{
+					must = new object[]
+					{
+						new
+						{
+							key = "runbookId",
+							match = new { value = runbookId }
+						}
+					}
+				}
+			};
+
+			using var response = await _httpClient.PostAsJsonAsync(
+				$"/collections/{Uri.EscapeDataString(CollectionName)}/points/delete?wait=true",
+				body,
+				SerializerOptions,
+				cancellationToken).ConfigureAwait(false);
+
+			if (!response.IsSuccessStatusCode)
+			{
+				_logger.LogWarning("Qdrant stale runbook cleanup failed with status {StatusCode}. SQLite vector search remains authoritative.", response.StatusCode);
+				return false;
+			}
+
+			return true;
+		}
+		catch (OperationCanceledException)
+		{
+			throw;
+		}
+		catch (Exception exception)
+		{
+			_logger.LogWarning(exception, "Qdrant stale runbook cleanup failed. SQLite vector search remains authoritative.");
+			return false;
+		}
+	}
+
 	public async Task<IReadOnlyList<QdrantRunbookMatch>> SearchAsync(float[] queryVector, int limit, CancellationToken cancellationToken)
 	{
 		if (!_available || queryVector.Length == 0)
@@ -212,6 +279,29 @@ internal sealed class QdrantRunbookVectorStore
 			Score: point.Score);
 	}
 
+	private async Task<QdrantCollectionState> TryGetCollectionStateAsync(CancellationToken cancellationToken)
+	{
+		using var response = await _httpClient.GetAsync(
+			$"/collections/{Uri.EscapeDataString(CollectionName)}",
+			cancellationToken).ConfigureAwait(false);
+
+		if (response.StatusCode == HttpStatusCode.NotFound)
+		{
+			return new QdrantCollectionState(false, null);
+		}
+
+		if (!response.IsSuccessStatusCode)
+		{
+			_available = false;
+			_logger.LogWarning("Qdrant collection state check failed with status {StatusCode}. Falling back to SQLite vector search.", response.StatusCode);
+			return new QdrantCollectionState(false, null);
+		}
+
+		await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+		var envelope = await JsonSerializer.DeserializeAsync<QdrantCollectionEnvelope>(stream, SerializerOptions, cancellationToken).ConfigureAwait(false);
+		return new QdrantCollectionState(true, envelope?.Result?.VectorSize);
+	}
+
 	private static string NormalizeEndpoint(string endpoint)
 	{
 		return string.IsNullOrWhiteSpace(endpoint) ? "http://localhost:6333" : endpoint.Trim().TrimEnd('/');
@@ -237,6 +327,34 @@ internal sealed class QdrantRunbookVectorStore
 	}
 
 	private sealed record QdrantSearchEnvelope(IReadOnlyList<QdrantScoredPoint>? Result);
+
+	private sealed record QdrantCollectionState(bool Exists, int? VectorSize);
+
+	private sealed record QdrantCollectionEnvelope(QdrantCollectionInfo? Result);
+
+	private sealed record QdrantCollectionInfo
+	{
+		public QdrantCollectionConfig? Config { get; init; }
+
+		public int? VectorSize => Config?.Params?.Vectors?.VectorSize ?? Config?.Params?.Vectors?.Size;
+	}
+
+	private sealed record QdrantCollectionConfig
+	{
+		public QdrantCollectionParams? Params { get; init; }
+	}
+
+	private sealed record QdrantCollectionParams
+	{
+		public QdrantVectorParams? Vectors { get; init; }
+	}
+
+	private sealed record QdrantVectorParams
+	{
+		public int? VectorSize { get; init; }
+
+		public int? Size { get; init; }
+	}
 
 	private sealed record QdrantScoredPoint(double Score, QdrantPayload? Payload);
 

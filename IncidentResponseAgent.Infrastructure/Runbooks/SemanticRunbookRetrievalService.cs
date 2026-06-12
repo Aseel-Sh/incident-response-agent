@@ -11,6 +11,7 @@ namespace IncidentResponseAgent.Infrastructure.Runbooks;
 
 public sealed class SemanticRunbookRetrievalService : IRunbookRetrievalService, IRunbookRetrievalDiagnosticsService
 {
+	private const string IndexVersion = "rag-index-v2";
 	private static readonly JsonSerializerOptions SerializerOptions = new(JsonSerializerDefaults.Web);
 	private readonly IRunbookEmbeddingProvider _embeddingProvider;
 	private readonly ILogger<SemanticRunbookRetrievalService> _logger;
@@ -130,26 +131,28 @@ public sealed class SemanticRunbookRetrievalService : IRunbookRetrievalService, 
 
 		if (qdrantMatches.Count > 0)
 		{
-			return qdrantMatches
+			var matches = qdrantMatches
 				.Select(match => ToScoredRunbookChunk(match, queryTokens, serviceTokens, environmentTokens))
 				.Where(match => match.Score >= _options.MinimumRelevanceScore || HasLexicalOverlap(match.Chunk, queryTokens, serviceTokens, environmentTokens))
 				.OrderByDescending(match => match.Score)
 				.ThenBy(match => match.Chunk.DocumentTitle, StringComparer.OrdinalIgnoreCase)
 				.ThenBy(match => match.Chunk.Ordinal)
-				.Take(limit)
 				.ToArray();
+
+			return DiversifyBySection(matches).Take(limit).ToArray();
 		}
 
 		var chunks = await LoadChunksAsync(cancellationToken).ConfigureAwait(false);
 
-		return chunks
+		var scored = chunks
 			.Select(chunk => new ScoredRunbookChunk(chunk, Score(chunk, queryVector, queryTokens, serviceTokens, environmentTokens)))
 			.Where(match => match.Score >= _options.MinimumRelevanceScore || HasLexicalOverlap(match.Chunk, queryTokens, serviceTokens, environmentTokens))
 			.OrderByDescending(match => match.Score)
 			.ThenBy(match => match.Chunk.DocumentTitle, StringComparer.OrdinalIgnoreCase)
 			.ThenBy(match => match.Chunk.Ordinal)
-			.Take(limit)
 			.ToArray();
+
+		return DiversifyBySection(scored).Take(limit).ToArray();
 	}
 
 	private async Task EnsureInitializedAsync(CancellationToken cancellationToken)
@@ -170,6 +173,7 @@ public sealed class SemanticRunbookRetrievalService : IRunbookRetrievalService, 
 			await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
 			await EnsureSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
 			await IndexMarkdownRunbooksAsync(connection, cancellationToken).ConfigureAwait(false);
+			await UpsertSqliteIndexToQdrantAsync(connection, cancellationToken).ConfigureAwait(false);
 			_logger.LogInformation(
 				"Runbook RAG index ready. Provider={EmbeddingProvider} Model={EmbeddingModel} DatabasePath={DatabasePath} KnowledgeBasePath={KnowledgeBasePath}",
 				_embeddingProvider.ProviderName,
@@ -186,12 +190,16 @@ public sealed class SemanticRunbookRetrievalService : IRunbookRetrievalService, 
 
 	private async Task IndexMarkdownRunbooksAsync(SqliteConnection connection, CancellationToken cancellationToken)
 	{
-		foreach (var source in LoadRunbookSources())
+		var sources = LoadRunbookSources();
+		var currentDocumentIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+		foreach (var source in sources)
 		{
 			cancellationToken.ThrowIfCancellationRequested();
 
 			var document = ParseDocument(source.Path, source.Content);
-			var contentHash = ComputeHash(source.Content);
+			currentDocumentIds.Add(document.Id);
+			var contentHash = ComputeHash($"{IndexVersion}\n{source.Content}");
 			var existingState = await GetExistingDocumentIndexStateAsync(connection, document.Id, cancellationToken).ConfigureAwait(false);
 			if (existingState is not null &&
 			    string.Equals(existingState.ContentHash, contentHash, StringComparison.Ordinal) &&
@@ -238,6 +246,39 @@ public sealed class SemanticRunbookRetrievalService : IRunbookRetrievalService, 
 				_embeddingProvider.ProviderName,
 				_embeddingProvider.ModelName);
 		}
+
+		var removedDocumentIds = await DeleteMissingDocumentsAsync(connection, currentDocumentIds, cancellationToken).ConfigureAwait(false);
+		if (_qdrantVectorStore is not null)
+		{
+			foreach (var removedDocumentId in removedDocumentIds)
+			{
+				await _qdrantVectorStore.DeleteRunbookAsync(removedDocumentId, cancellationToken).ConfigureAwait(false);
+			}
+		}
+	}
+
+	private async Task UpsertSqliteIndexToQdrantAsync(SqliteConnection connection, CancellationToken cancellationToken)
+	{
+		if (_qdrantVectorStore is null)
+		{
+			return;
+		}
+
+		var chunks = await LoadChunksAsync(connection, cancellationToken).ConfigureAwait(false);
+		if (chunks.Count == 0)
+		{
+			return;
+		}
+
+		var collectionReady = await _qdrantVectorStore.EnsureCollectionAsync(chunks[0].Embedding.Length, cancellationToken).ConfigureAwait(false);
+		if (!collectionReady)
+		{
+			return;
+		}
+
+		await _qdrantVectorStore.UpsertAsync(
+			chunks.Select(ToVectorPoint).ToArray(),
+			cancellationToken).ConfigureAwait(false);
 	}
 
 	private async Task<RunbookDocumentIndexState?> GetExistingDocumentIndexStateAsync(SqliteConnection connection, string documentId, CancellationToken cancellationToken)
@@ -310,6 +351,60 @@ on conflict(id) do update set
 		await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
 	}
 
+	private async Task<IReadOnlyList<string>> DeleteMissingDocumentsAsync(
+		SqliteConnection connection,
+		HashSet<string> currentDocumentIds,
+		CancellationToken cancellationToken)
+	{
+		var existingIds = await LoadDocumentIdsAsync(connection, cancellationToken).ConfigureAwait(false);
+		var missingIds = existingIds
+			.Where(id => !currentDocumentIds.Contains(id))
+			.ToArray();
+
+		if (missingIds.Length == 0)
+		{
+			return Array.Empty<string>();
+		}
+
+		using var transaction = connection.BeginTransaction();
+		foreach (var missingId in missingIds)
+		{
+			await DeleteChunksAsync(connection, transaction, missingId, cancellationToken).ConfigureAwait(false);
+			await DeleteDocumentAsync(connection, transaction, missingId, cancellationToken).ConfigureAwait(false);
+		}
+
+		await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+		_logger.LogInformation("Pruned {Count} removed runbooks from the SQLite RAG index.", missingIds.Length);
+		return missingIds;
+	}
+
+	private static async Task<IReadOnlyList<string>> LoadDocumentIdsAsync(SqliteConnection connection, CancellationToken cancellationToken)
+	{
+		await using var command = connection.CreateCommand();
+		command.CommandText = "select id from runbook_documents;";
+		var ids = new List<string>();
+		await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+		while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+		{
+			ids.Add(reader.GetString(0));
+		}
+
+		return ids;
+	}
+
+	private static async Task DeleteDocumentAsync(
+		SqliteConnection connection,
+		SqliteTransaction transaction,
+		string documentId,
+		CancellationToken cancellationToken)
+	{
+		await using var command = connection.CreateCommand();
+		command.Transaction = transaction;
+		command.CommandText = "delete from runbook_documents where id = $documentId;";
+		command.Parameters.AddWithValue("$documentId", documentId);
+		await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+	}
+
 	private async Task InsertChunkAsync(
 		SqliteConnection connection,
 		SqliteTransaction transaction,
@@ -360,6 +455,11 @@ values (
 	private async Task<IReadOnlyList<RunbookChunkRecord>> LoadChunksAsync(CancellationToken cancellationToken)
 	{
 		await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+		return await LoadChunksAsync(connection, cancellationToken).ConfigureAwait(false);
+	}
+
+	private static async Task<IReadOnlyList<RunbookChunkRecord>> LoadChunksAsync(SqliteConnection connection, CancellationToken cancellationToken)
+	{
 		await using var command = connection.CreateCommand();
 		command.CommandText = """
 select
@@ -684,8 +784,53 @@ create index if not exists ix_runbook_documents_content_hash on runbook_document
 		score += CountMatches(haystack, environmentTokens) * 0.04;
 		score += chunk.Tags.Any(tag => serviceTokens.Contains(tag)) ? 0.2 : 0;
 		score += chunk.Tags.Any(tag => queryTokens.Contains(tag)) ? 0.15 : 0;
+		score += SectionPriorityBoost(chunk.SectionPath);
 
 		return Math.Min(score, 1);
+	}
+
+	private static double SectionPriorityBoost(string sectionPath)
+	{
+		if (string.IsNullOrWhiteSpace(sectionPath))
+		{
+			return 0;
+		}
+
+		if (ContainsAny(sectionPath, "Trigger", "Purpose", "Initial Verification", "Diagnosis", "Decision", "Mitigation"))
+		{
+			return 0.18;
+		}
+
+		if (ContainsAny(sectionPath, "Post-Incident", "Related Links", "Communication", "Resolution"))
+		{
+			return -0.3;
+		}
+
+		if (ContainsAny(sectionPath, "Metadata", "Required Access"))
+		{
+			return -0.05;
+		}
+
+		return 0;
+	}
+
+	private static bool ContainsAny(string value, params string[] terms)
+	{
+		return terms.Any(term => value.Contains(term, StringComparison.OrdinalIgnoreCase));
+	}
+
+	private static IReadOnlyList<ScoredRunbookChunk> DiversifyBySection(IReadOnlyList<ScoredRunbookChunk> matches)
+	{
+		return matches
+			.GroupBy(match => $"{match.Chunk.DocumentId}:{match.Chunk.SectionPath}", StringComparer.OrdinalIgnoreCase)
+			.Select(group => group
+				.OrderByDescending(match => match.Score)
+				.ThenBy(match => match.Chunk.Ordinal)
+				.First())
+			.OrderByDescending(match => match.Score)
+			.ThenBy(match => match.Chunk.DocumentTitle, StringComparer.OrdinalIgnoreCase)
+			.ThenBy(match => match.Chunk.Ordinal)
+			.ToArray();
 	}
 
 	private static int CountMatches(HashSet<string> haystack, HashSet<string> needles)
@@ -710,6 +855,21 @@ create index if not exists ix_runbook_documents_content_hash on runbook_document
 	{
 		var haystack = RunbookTextAnalysis.Tokenize(chunk.SearchText);
 		return haystack.Overlaps(queryTokens) || haystack.Overlaps(serviceTokens) || haystack.Overlaps(environmentTokens);
+	}
+
+	private static RunbookVectorPoint ToVectorPoint(RunbookChunkRecord chunk)
+	{
+		return new RunbookVectorPoint(
+			chunk.DocumentId,
+			chunk.DocumentTitle,
+			chunk.DocumentSummary,
+			chunk.Tags,
+			chunk.SourcePath,
+			chunk.Ordinal,
+			chunk.SectionPath,
+			chunk.Text,
+			chunk.SearchText,
+			chunk.Embedding);
 	}
 
 	private static byte[] SerializeVector(float[] vector)

@@ -63,6 +63,9 @@ public sealed class SignalsController : ControllerBase
 		CancellationToken cancellationToken)
 	{
 		var path = ResolvePath(_options.MetricSamplesPath, Path.Combine("Tools", "SampleData", "metrics.json"));
+		var metricName = request.MetricName.Trim();
+		var serviceName = request.ServiceName.Trim();
+		var environment = request.Environment.Trim();
 		var sample = new MetricSample
 		{
 			Timestamp = request.Timestamp ?? DateTimeOffset.UtcNow,
@@ -74,17 +77,17 @@ public sealed class SignalsController : ControllerBase
 		{
 			var series = await ReadJsonArrayAsync<MetricSeriesDocument>(path, cancellationToken).ConfigureAwait(false);
 			var existing = series.FirstOrDefault(item =>
-				item.MetricName.Equals(request.MetricName, StringComparison.OrdinalIgnoreCase) &&
-				item.ServiceName.Equals(request.ServiceName, StringComparison.OrdinalIgnoreCase) &&
-				item.Environment.Equals(request.Environment, StringComparison.OrdinalIgnoreCase));
+				item.MetricName.Equals(metricName, StringComparison.OrdinalIgnoreCase) &&
+				item.ServiceName.Equals(serviceName, StringComparison.OrdinalIgnoreCase) &&
+				item.Environment.Equals(environment, StringComparison.OrdinalIgnoreCase));
 
 			if (existing is null)
 			{
 				series.Add(new MetricSeriesDocument
 				{
-					MetricName = request.MetricName.Trim(),
-					ServiceName = request.ServiceName.Trim(),
-					Environment = request.Environment.Trim(),
+					MetricName = metricName,
+					ServiceName = serviceName,
+					Environment = environment,
 					Samples = [sample]
 				});
 			}

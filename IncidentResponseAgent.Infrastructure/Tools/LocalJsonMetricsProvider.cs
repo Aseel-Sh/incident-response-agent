@@ -5,7 +5,7 @@ using Microsoft.Extensions.Options;
 
 namespace IncidentResponseAgent.Infrastructure.Tools;
 
-public sealed class LocalJsonMetricsProvider : IMetricsProvider
+public sealed class LocalJsonMetricsProvider : IMetricsProvider, IMetricSeriesCatalog
 {
 	private static readonly JsonSerializerOptions SerializerOptions = new(JsonSerializerDefaults.Web)
 	{
@@ -63,6 +63,16 @@ public sealed class LocalJsonMetricsProvider : IMetricsProvider
 			.OrderBy(sample => sample.Timestamp)
 			.ToArray();
 
+		if (samples.Length == 0 && (request.StartTime is not null || request.EndTime is not null))
+		{
+			_logger.LogInformation("Metric query {MetricName} matched a local series for {ServiceName}/{Environment}, but no samples were inside the requested time window. Returning an empty local result.", request.MetricName, serviceName, environment);
+			return new MetricsQueryResult
+			{
+				MetricName = $"{request.MetricName} ({serviceName}/{environment})",
+				Samples = Array.Empty<MetricSample>()
+			};
+		}
+
 		if (samples.Length == 0)
 		{
 			samples = matchedSeries.Samples.OrderBy(sample => sample.Timestamp).TakeLast(5).ToArray();
@@ -74,6 +84,11 @@ public sealed class LocalJsonMetricsProvider : IMetricsProvider
 			MetricName = $"{request.MetricName} ({serviceName}/{environment})",
 			Samples = samples
 		};
+	}
+
+	public async Task<IReadOnlyList<MetricSeries>> ListSeriesAsync(CancellationToken cancellationToken = default)
+	{
+		return await LoadSeriesAsync(cancellationToken).ConfigureAwait(false);
 	}
 
 	private async Task<IReadOnlyList<MetricSeries>> LoadSeriesAsync(CancellationToken cancellationToken)
@@ -100,14 +115,4 @@ public sealed class LocalJsonMetricsProvider : IMetricsProvider
 		return Path.Combine(AppContext.BaseDirectory, "Tools", "SampleData", "metrics.json");
 	}
 
-	private sealed record MetricSeries
-	{
-		public required string MetricName { get; init; }
-
-		public required string ServiceName { get; init; }
-
-		public required string Environment { get; init; }
-
-		public IReadOnlyList<MetricSample> Samples { get; init; } = Array.Empty<MetricSample>();
-	}
 }

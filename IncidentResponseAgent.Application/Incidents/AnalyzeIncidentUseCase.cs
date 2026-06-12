@@ -60,7 +60,8 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 			Logs = logResult,
 			Metrics = metricsResult
 		};
-		var analysisText = await _incidentAnalysisAgent.AnalyzeAsync(incident, sessionContext, agentContext, cancellationToken);
+		var agentResult = await _incidentAnalysisAgent.AnalyzeAsync(incident, sessionContext, agentContext, cancellationToken);
+		var analysisText = agentResult.AnalysisText;
 		var structuredAnalysis = AgentStructuredAnalysisParser.TryParse(analysisText);
 		var confidence = structuredAnalysis?.Confidence ?? ExtractConfidence(analysisText) ?? "Low";
 		var nextSessionContext = sessionContext with
@@ -81,6 +82,10 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 			IncidentId = incident.Id,
 			IncidentSummary = structuredAnalysis?.Summary ?? BuildSummary(incident),
 			AnalysisText = analysisText,
+			AnalysisProvider = agentResult.Provider,
+			AnalysisModel = agentResult.Model,
+			UsedFallbackAnalysis = agentResult.UsedFallback,
+			FallbackReason = agentResult.FallbackReason,
 			Evidence = MergeEvidence(BuildEvidence(incident, runbookResult, logResult, metricsResult), structuredAnalysis?.Evidence),
 			Hypotheses = structuredAnalysis?.Hypotheses.Count > 0
 				? structuredAnalysis.Hypotheses
@@ -89,7 +94,8 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 				? structuredAnalysis.RecommendedActions
 				: BuildRecommendedActions(incident, runbookResult, logResult, metricsResult),
 			Confidence = confidence,
-			Notes = structuredAnalysis?.Notes ?? "Application orchestration captured incident details, RAG runbooks, logs, metrics, session state, and agent analysis."
+			Notes = structuredAnalysis?.Notes
+				?? "Agent returned unstructured analysis, so the application used deterministic evidence, hypotheses, and actions."
 		};
 
 		await _incidentRecordStore.SaveAsync(incident, result, cancellationToken);
@@ -130,7 +136,7 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 	{
 		return new LogSearchRequest
 		{
-			Query = incident.Title,
+			Query = BuildOperationalQuery(incident),
 			ServiceName = incident.ServiceName,
 			Environment = incident.Environment,
 			StartTime = incident.Timestamp?.AddHours(-1),
@@ -143,12 +149,32 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 	{
 		return new MetricsQueryRequest
 		{
-			MetricName = "request_error_rate",
+			MetricName = SelectMetricName(incident),
 			ServiceName = incident.ServiceName,
 			Environment = incident.Environment,
 			StartTime = incident.Timestamp?.AddHours(-1),
 			EndTime = incident.Timestamp
 		};
+	}
+
+	private static string BuildOperationalQuery(Incident incident)
+	{
+		var parts = new List<string> { incident.Title, incident.Description };
+		parts.AddRange(incident.Tags);
+		return string.Join(' ', parts.Where(part => !string.IsNullOrWhiteSpace(part)));
+	}
+
+	private static string SelectMetricName(Incident incident)
+	{
+		var query = BuildOperationalQuery(incident);
+		return ContainsAny(query, "queue", "backlog", "consumer", "worker")
+			? "queue_depth"
+			: "request_error_rate";
+	}
+
+	private static bool ContainsAny(string value, params string[] terms)
+	{
+		return terms.Any(term => value.Contains(term, StringComparison.OrdinalIgnoreCase));
 	}
 
 	private static string BuildSessionSummary(IncidentAnalysisSessionContext sessionContext)

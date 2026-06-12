@@ -4,26 +4,33 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Incident Response Agent</title>
-  <link rel="stylesheet" href="/styles.css?v=20260610-frontend-fix">
+  <link rel="stylesheet" href="/styles.css?v=20260611-ui-refresh">
 </head>
 <body>
   <div class="app-shell">
     <aside class="sidebar">
       <div class="brand">
-        <p class="eyebrow">Ops Console</p>
-        <h1>Incident Response Agent</h1>
+        <div class="brand-mark" data-icon="sparkles" aria-hidden="true"></div>
+        <div>
+          <p class="eyebrow">Ops Copilot</p>
+          <h1>Incident Response Agent</h1>
+        </div>
       </div>
 
       <nav class="nav-tabs" aria-label="Primary">
-        <button class="nav-tab active" type="button" data-tab="monitor">Monitor</button>
-        <button class="nav-tab" type="button" data-tab="analyze">Analyze</button>
-        <button class="nav-tab" type="button" data-tab="runbooks">Runbooks</button>
-        <button class="nav-tab" type="button" data-tab="history">History</button>
-        <button class="nav-tab" type="button" data-tab="sources">Sources</button>
+        <button class="nav-tab active" type="button" data-tab="monitor" data-icon="radar">Monitor</button>
+        <button class="nav-tab" type="button" data-tab="analyze" data-icon="brain">Analyze</button>
+        <button class="nav-tab" type="button" data-tab="runbooks" data-icon="book">Runbooks</button>
+        <button class="nav-tab" type="button" data-tab="history" data-icon="history">History</button>
+        <button class="nav-tab" type="button" data-tab="sources" data-icon="plug">Sources</button>
+        <button class="nav-tab" type="button" data-tab="evaluation" data-icon="check">Evaluation</button>
       </nav>
 
       <section class="sidebar-card">
-        <h2>Analytics</h2>
+        <div class="card-title">
+          <span data-icon="activity" aria-hidden="true"></span>
+          <h2>Signal Scan</h2>
+        </div>
         <dl class="metric-grid">
           <div>
             <dt>Total</dt>
@@ -34,52 +41,69 @@
             <dd id="criticalDetected">0</dd>
           </div>
           <div>
-            <dt>Log Signals</dt>
+            <dt>Logs</dt>
             <dd id="logDetected">0</dd>
           </div>
           <div>
-            <dt>Metric Signals</dt>
+            <dt>Metrics</dt>
             <dd id="metricDetected">0</dd>
           </div>
         </dl>
       </section>
 
-      <section class="sidebar-card">
-        <h2>Connection</h2>
+      <section class="sidebar-card connection-card">
+        <div class="card-title">
+          <span data-icon="server" aria-hidden="true"></span>
+          <h2>Runtime</h2>
+        </div>
         <div class="status" id="healthStatus">Checking API</div>
-        <p id="lastScan" class="meta">Not scanned yet</p>
+        <p id="lastScan" class="meta">No scan yet</p>
       </section>
 
-      <button id="themeToggle" class="secondary full-width" type="button">Dark Mode</button>
+      <button id="themeToggle" class="theme-toggle" type="button" data-icon="moon" aria-label="Toggle theme">Theme</button>
     </aside>
 
     <main class="workspace">
       <header class="workspace-header">
         <div>
-          <p class="eyebrow">Sample signal mode</p>
+          <p class="eyebrow" id="workspaceEyebrow">Live Triage</p>
           <h2 id="workspaceTitle">Monitor</h2>
-          <p id="workspaceDescription">This app is currently detecting incidents from bundled sample JSON logs and metrics. Connect real providers later by changing the configured source paths or adding provider adapters.</p>
+          <p id="workspaceDescription">Detected candidates, agent analysis, RAG, history, source visibility, and evaluation checks in one console.</p>
         </div>
         <div class="header-actions">
-          <button id="scanButton" type="button">Scan Now</button>
-          <button id="sampleButton" class="secondary" type="button">Load Sample</button>
+          <button id="scanButton" type="button" data-icon="refresh">Scan Now</button>
+          <button id="sampleButton" class="secondary" type="button" data-icon="wand">Load Sample</button>
         </div>
       </header>
 
-      <section class="notice">
-        <strong>No live app is being monitored yet.</strong>
-        Detection is coming from local sample files copied into the API output folder. The monitor is proving the workflow before you wire real logs and metrics.
+      <section class="workflow-strip" aria-label="Incident workflow">
+        <article>
+          <span data-icon="radar" aria-hidden="true"></span>
+          <div><strong>Detect</strong><p>Logs and metrics</p></div>
+        </article>
+        <article>
+          <span data-icon="brain" aria-hidden="true"></span>
+          <div><strong>Analyze</strong><p>Agent reasoning</p></div>
+        </article>
+        <article>
+          <span data-icon="book" aria-hidden="true"></span>
+          <div><strong>Retrieve</strong><p>Runbook RAG</p></div>
+        </article>
+        <article>
+          <span data-icon="check" aria-hidden="true"></span>
+          <div><strong>Evaluate</strong><p>Rubric scenarios</p></div>
+        </article>
       </section>
 
       <section id="monitorView" class="tab-view active">
         <div class="panel">
           <div class="panel-header">
             <div>
-              <h3>Detected Incidents</h3>
-              <p>Auto-generated candidates from the current log and metric sources.</p>
+              <h3><span data-icon="radar" aria-hidden="true"></span> Detected Incidents</h3>
+              <p>Auto-generated candidates from the active signal sources.</p>
             </div>
             <div class="toolbar">
-              <input id="incidentSearch" type="search" placeholder="Search service, title, signal">
+              <input id="incidentSearch" type="search" placeholder="Search service, signal, title">
               <select id="incidentSort" aria-label="Sort detected incidents">
                 <option value="severity">Severity</option>
                 <option value="time">Newest</option>
@@ -88,6 +112,7 @@
               </select>
             </div>
           </div>
+          <div id="scanFeedback" class="scan-feedback"></div>
           <div id="detectedOutput" class="incident-table"></div>
         </div>
       </section>
@@ -97,8 +122,8 @@
           <section class="panel">
             <div class="panel-header">
               <div>
-                <h3>Incident Details</h3>
-                <p>Use a detected incident or enter one manually.</p>
+                <h3><span data-icon="file" aria-hidden="true"></span> Incident Details</h3>
+                <p>Manual entry stays available for missed or human-reported incidents.</p>
               </div>
             </div>
 
@@ -144,17 +169,17 @@
               </label>
 
               <div class="actions wide">
-                <button id="analyzeButton" type="submit">Analyze Incident</button>
-                <button id="recentButton" class="secondary" type="button">Refresh History</button>
+                <button id="analyzeButton" type="submit" data-icon="play">Analyze Incident</button>
+                <button id="recentButton" class="secondary" type="button" data-icon="history">Refresh History</button>
               </div>
             </form>
           </section>
 
-          <section class="panel">
+          <section class="panel analysis-panel">
             <div class="panel-header">
               <div>
-                <h3>Analysis Output</h3>
-                <p id="analysisStatus">Run analysis to generate evidence, hypotheses, and actions.</p>
+                <h3><span data-icon="brain" aria-hidden="true"></span> Agent Output</h3>
+                <p id="analysisStatus">Evidence, hypotheses, actions, confidence, and provider status appear here.</p>
               </div>
             </div>
             <div id="analysisOutput" class="empty-state">No analysis yet.</div>
@@ -166,14 +191,14 @@
         <section class="panel">
           <div class="panel-header">
             <div>
-              <h3>Runbook Search</h3>
-              <p>Search the RAG index and inspect vector/embedding status.</p>
+              <h3><span data-icon="book" aria-hidden="true"></span> Runbook Search</h3>
+              <p>Search matched chunks, scores, source files, embedding provider, and vector store.</p>
             </div>
           </div>
 
           <form id="ragForm" class="search-bar">
             <input name="query" value="checkout 5xx latency" aria-label="RAG query">
-            <button type="submit">Search</button>
+            <button type="submit" data-icon="search">Search</button>
           </form>
 
           <div id="ragSummary" class="summary-strip"></div>
@@ -185,8 +210,8 @@
         <section class="panel">
           <div class="panel-header">
             <div>
-              <h3>Recent Analyses</h3>
-              <p>Saved investigations from previous analysis runs.</p>
+              <h3><span data-icon="history" aria-hidden="true"></span> Recent Analyses</h3>
+              <p>Saved investigation runs with sessions, turns, confidence, and provider metadata.</p>
             </div>
           </div>
           <div id="recentOutput" class="result-list"></div>
@@ -197,46 +222,90 @@
         <section class="panel connector-panel">
           <div class="panel-header">
             <div>
-              <h3>Connect A Live App</h3>
-              <p>Send logs and metrics here from any app, script, or background job. The Monitor tab scans these signals.</p>
+              <h3><span data-icon="plug" aria-hidden="true"></span> Signal Ingestion</h3>
+              <p>Free local path for connecting any app, script, or background job.</p>
             </div>
           </div>
           <div class="connector-grid">
             <article>
-              <h4>Log signal</h4>
-              <pre><code>POST /api/signals/logs
+              <h4><span data-icon="terminal" aria-hidden="true"></span> Log signal</h4>
+              <pre><code>curl -X POST http://localhost:5270/api/signals/logs \
+  -H "Content-Type: application/json" \
+  -d '{
+    "source": "checkout-api",
+    "level": "Error",
+    "message": "HTTP 500 during checkout"
+  }'</code></pre>
+            </article>
+            <article>
+              <h4><span data-icon="chart" aria-hidden="true"></span> Metric signal</h4>
+              <pre><code>curl -X POST http://localhost:5270/api/signals/metrics \
+  -H "Content-Type: application/json" \
+  -d '{
+    "metricName": "request_error_rate",
+    "serviceName": "checkout-api",
+    "environment": "production",
+    "value": 42.6
+  }'</code></pre>
+            </article>
+          </div>
+          <div class="connect-steps">
+            <article><strong>1</strong><span>Point your app logger at <code>/api/signals/logs</code>.</span></article>
+            <article><strong>2</strong><span>Send service metrics to <code>/api/signals/metrics</code>.</span></article>
+            <article><strong>3</strong><span>Use Monitor to scan, then Analyze the generated candidate.</span></article>
+          </div>
+          <details class="payload-details">
+            <summary>Raw JSON payloads</summary>
+            <div class="connector-grid">
+              <article>
+                <h4><span data-icon="terminal" aria-hidden="true"></span> Log body</h4>
+                <pre><code>POST /api/signals/logs
 {
   "source": "checkout-api",
   "level": "Error",
   "message": "HTTP 500 during checkout"
 }</code></pre>
-            </article>
-            <article>
-              <h4>Metric signal</h4>
-              <pre><code>POST /api/signals/metrics
+              </article>
+              <article>
+                <h4><span data-icon="chart" aria-hidden="true"></span> Metric body</h4>
+                <pre><code>POST /api/signals/metrics
 {
   "metricName": "request_error_rate",
   "serviceName": "checkout-api",
   "environment": "production",
   "value": 42.6
 }</code></pre>
-            </article>
-          </div>
+              </article>
+            </div>
+          </details>
         </section>
 
         <section class="panel">
           <div class="panel-header">
             <div>
-              <h3>Connected Sources</h3>
-              <p>These are the exact sources the app is currently reading.</p>
+              <h3><span data-icon="database" aria-hidden="true"></span> Connected Sources</h3>
+              <p>Runtime paths and vector configuration used by the app.</p>
             </div>
           </div>
           <div id="sourcesOutput" class="source-list"></div>
         </section>
       </section>
+
+      <section id="evaluationView" class="tab-view">
+        <section class="panel">
+          <div class="panel-header">
+            <div>
+              <h3><span data-icon="check" aria-hidden="true"></span> Evaluation Scenarios</h3>
+              <p>Rubric-style checks for evidence, hypotheses, recommendations, and expected signals.</p>
+            </div>
+          </div>
+          <div id="evaluationOutput" class="evaluation-grid"></div>
+        </section>
+      </section>
     </main>
   </div>
+  <div id="toastRegion" class="toast-region" aria-live="polite" aria-atomic="true"></div>
 
-  <script src="/app.js?v=20260610-frontend-fix"></script>
+  <script src="/app.js?v=20260611-ui-refresh"></script>
 </body>
 </html>

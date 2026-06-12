@@ -24,7 +24,7 @@ public sealed class ResilientIncidentAnalysisAgent : IIncidentAnalysisAgent
 		_logger = logger;
 	}
 
-	public async Task<string> AnalyzeAsync(
+	public async Task<IncidentAgentExecutionResult> AnalyzeAsync(
 		Incident incident,
 		IncidentAnalysisSessionContext? sessionContext = null,
 		IncidentAnalysisAgentContext? agentContext = null,
@@ -32,7 +32,8 @@ public sealed class ResilientIncidentAnalysisAgent : IIncidentAnalysisAgent
 	{
 		if (!HasConfiguredApiKey())
 		{
-			return await _fallbackAgent.AnalyzeAsync(incident, sessionContext, agentContext, cancellationToken).ConfigureAwait(false);
+			var fallbackResult = await _fallbackAgent.AnalyzeAsync(incident, sessionContext, agentContext, cancellationToken).ConfigureAwait(false);
+			return fallbackResult with { FallbackReason = "Agent API key is not configured." };
 		}
 
 		var timeout = TimeSpan.FromSeconds(Math.Clamp(_options.AnalysisTimeoutSeconds, 5, 120));
@@ -46,12 +47,14 @@ public sealed class ResilientIncidentAnalysisAgent : IIncidentAnalysisAgent
 		catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
 		{
 			_logger.LogWarning("OpenAI-compatible incident analysis timed out after {TimeoutSeconds} seconds. Falling back to local analysis.", timeout.TotalSeconds);
-			return await _fallbackAgent.AnalyzeAsync(incident, sessionContext, agentContext, cancellationToken).ConfigureAwait(false);
+			var fallbackResult = await _fallbackAgent.AnalyzeAsync(incident, sessionContext, agentContext, cancellationToken).ConfigureAwait(false);
+			return fallbackResult with { FallbackReason = $"OpenAI-compatible analysis timed out after {timeout.TotalSeconds:0} seconds." };
 		}
 		catch (Exception exception) when (IsProviderFailure(exception))
 		{
 			_logger.LogWarning(exception, "OpenAI-compatible incident analysis failed. Falling back to local analysis.");
-			return await _fallbackAgent.AnalyzeAsync(incident, sessionContext, agentContext, cancellationToken).ConfigureAwait(false);
+			var fallbackResult = await _fallbackAgent.AnalyzeAsync(incident, sessionContext, agentContext, cancellationToken).ConfigureAwait(false);
+			return fallbackResult with { FallbackReason = $"OpenAI-compatible analysis failed: {exception.GetType().Name}." };
 		}
 	}
 

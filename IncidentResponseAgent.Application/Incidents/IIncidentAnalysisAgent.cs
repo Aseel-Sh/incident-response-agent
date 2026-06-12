@@ -4,7 +4,7 @@ namespace IncidentResponseAgent.Application.Incidents;
 
 public interface IIncidentAnalysisAgent
 {
-	Task<string> AnalyzeAsync(
+	Task<IncidentAgentExecutionResult> AnalyzeAsync(
 		Incident incident,
 		IncidentAnalysisSessionContext? sessionContext = null,
 		IncidentAnalysisAgentContext? agentContext = null,

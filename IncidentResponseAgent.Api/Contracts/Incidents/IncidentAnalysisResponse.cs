@@ -12,6 +12,14 @@ public sealed record IncidentAnalysisResponse
 
     public string AnalysisText { get; init; } = string.Empty;
 
+    public string AnalysisProvider { get; init; } = string.Empty;
+
+    public string? AnalysisModel { get; init; }
+
+    public bool UsedFallbackAnalysis { get; init; }
+
+    public string? FallbackReason { get; init; }
+
     public IReadOnlyList<IncidentAnalysisEvidenceItem> RetrievedEvidence { get; init; } = Array.Empty<IncidentAnalysisEvidenceItem>();
 
     public IReadOnlyList<IncidentHypothesis> RootCauseHypotheses { get; init; } = Array.Empty<IncidentHypothesis>();

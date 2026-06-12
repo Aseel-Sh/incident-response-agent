@@ -10,5 +10,7 @@ public sealed record IncidentAnalysisEvaluationScenario
 
 	public IReadOnlyList<string> ExpectedEvidenceSignals { get; init; } = Array.Empty<string>();
 
+	public IReadOnlyList<string> ExpectedHypothesisThemes { get; init; } = Array.Empty<string>();
+
 	public IReadOnlyList<string> ExpectedActionThemes { get; init; } = Array.Empty<string>();
 }

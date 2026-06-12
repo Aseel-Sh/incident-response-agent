@@ -8,6 +8,14 @@ public sealed record GetRecentIncidentAnalysesResult
 
 	public required string AnalysisText { get; init; }
 
+	public string AnalysisProvider { get; init; } = string.Empty;
+
+	public string? AnalysisModel { get; init; }
+
+	public bool UsedFallbackAnalysis { get; init; }
+
+	public string? FallbackReason { get; init; }
+
 	public required string SessionId { get; init; }
 
 	public required int SessionTurnNumber { get; init; }

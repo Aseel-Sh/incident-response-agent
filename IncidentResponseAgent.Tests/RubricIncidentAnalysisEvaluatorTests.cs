@@ -21,6 +21,7 @@ public sealed class RubricIncidentAnalysisEvaluatorTests
 			Name = "checkout failure",
 			Incident = incident,
 			ExpectedEvidenceSignals = ["rag.runbook", "tool.logs"],
+			ExpectedHypothesisThemes = ["regression"],
 			ExpectedActionThemes = ["blast radius"]
 		};
 		var result = new IncidentAnalysisResult
@@ -42,5 +43,40 @@ public sealed class RubricIncidentAnalysisEvaluatorTests
 
 		Assert.Equal(1.00m, evaluation.Score);
 		Assert.Empty(evaluation.FailedChecks);
+	}
+
+	[Fact]
+	public void EvaluateFailsMissingExpectedHypothesisThemes()
+	{
+		var incident = new Incident(
+			Guid.NewGuid(),
+			"Orders queue backlog growing",
+			"Queue depth is increasing.",
+			IncidentSeverity.Medium,
+			serviceName: "orders-worker",
+			environment: "production");
+		var scenario = new IncidentAnalysisEvaluationScenario
+		{
+			Name = "queue backlog",
+			Incident = incident,
+			ExpectedEvidenceSignals = ["tool.metrics"],
+			ExpectedHypothesisThemes = ["queue"],
+			ExpectedActionThemes = ["runbook"]
+		};
+		var result = new IncidentAnalysisResult
+		{
+			IncidentId = incident.Id,
+			IncidentSummary = "Medium incident reported for orders-worker.",
+			AnalysisText = "Summary",
+			Evidence = [new IncidentAnalysisEvidenceItem { Source = "tool.metrics", Summary = "queue_depth sample", Details = "900" }],
+			Hypotheses = [new IncidentHypothesis { Description = "Generic operational issue", Confidence = "Low", InferenceStrength = "Weak" }],
+			RecommendedActions = [new IncidentActionRecommendation { Description = "Follow the runbook", Priority = "High", Rationale = "Use known steps." }],
+			Confidence = "Low"
+		};
+
+		var evaluation = new RubricIncidentAnalysisEvaluator().Evaluate(scenario, result);
+
+		Assert.Contains("hypotheses mention 'queue'", evaluation.FailedChecks);
+		Assert.True(evaluation.Score < 1.00m);
 	}
 }

@@ -2,7 +2,7 @@ using System.ComponentModel.DataAnnotations;
 
 namespace IncidentResponseAgent.Api.Contracts.Signals;
 
-public sealed record IngestLogEntryRequest
+public sealed record IngestLogEntryRequest : IValidatableObject
 {
 	public DateTimeOffset? Timestamp { get; init; }
 
@@ -20,4 +20,22 @@ public sealed record IngestLogEntryRequest
 
 	[MaxLength(120)]
 	public string? CorrelationId { get; init; }
+
+	public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
+	{
+		if (string.IsNullOrWhiteSpace(Source))
+		{
+			yield return new ValidationResult("Source is required.", [nameof(Source)]);
+		}
+
+		if (string.IsNullOrWhiteSpace(Level))
+		{
+			yield return new ValidationResult("Level is required.", [nameof(Level)]);
+		}
+
+		if (string.IsNullOrWhiteSpace(Message))
+		{
+			yield return new ValidationResult("Message is required.", [nameof(Message)]);
+		}
+	}
 }

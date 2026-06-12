@@ -1,4 +1,5 @@
 using IncidentResponseAgent.Api.Contracts.Operations;
+using IncidentResponseAgent.Infrastructure.Incidents;
 using IncidentResponseAgent.Infrastructure.Runbooks;
 using IncidentResponseAgent.Infrastructure.Tools;
 using Microsoft.AspNetCore.Mvc;
@@ -12,13 +13,16 @@ public sealed class OperationsController : ControllerBase
 {
 	private readonly OperationalDataOptions _operationalDataOptions;
 	private readonly RunbookRetrievalOptions _runbookRetrievalOptions;
+	private readonly IncidentStorageOptions _incidentStorageOptions;
 
 	public OperationsController(
 		IOptions<OperationalDataOptions> operationalDataOptions,
-		IOptions<RunbookRetrievalOptions> runbookRetrievalOptions)
+		IOptions<RunbookRetrievalOptions> runbookRetrievalOptions,
+		IOptions<IncidentStorageOptions> incidentStorageOptions)
 	{
 		_operationalDataOptions = operationalDataOptions.Value ?? new OperationalDataOptions();
 		_runbookRetrievalOptions = runbookRetrievalOptions.Value ?? new RunbookRetrievalOptions();
+		_incidentStorageOptions = incidentStorageOptions.Value ?? new IncidentStorageOptions();
 	}
 
 	[HttpGet("sources")]
@@ -28,6 +32,9 @@ public sealed class OperationsController : ControllerBase
 		var logPath = ResolveFilePath(_operationalDataOptions.LogEntriesPath, Path.Combine("Tools", "SampleData", "logs.json"));
 		var metricPath = ResolveFilePath(_operationalDataOptions.MetricSamplesPath, Path.Combine("Tools", "SampleData", "metrics.json"));
 		var runbookPath = ResolveDirectoryPath(_runbookRetrievalOptions.KnowledgeBasePath, Path.Combine("Runbooks", "KnowledgeBase"));
+		var runbookDatabasePath = ResolveLocalDataFilePath(_runbookRetrievalOptions.DatabasePath, "runbook-rag.sqlite");
+		var sessionDatabasePath = ResolveLocalDataFilePath(_incidentStorageOptions.SessionDatabasePath, "incident-sessions.sqlite");
+		var incidentRecordsPath = ResolveLocalDataFilePath(_incidentStorageOptions.IncidentRecordsPath, "incident-records.json");
 
 		return Ok(new[]
 		{
@@ -65,7 +72,34 @@ public sealed class OperationsController : ControllerBase
 				Mode = _runbookRetrievalOptions.VectorStoreProvider,
 				Location = $"{_runbookRetrievalOptions.QdrantEndpoint} / {_runbookRetrievalOptions.QdrantCollectionName}",
 				Status = "configured",
-				Description = "The app tries Qdrant first and falls back to local SQLite vector search when Qdrant is unavailable."
+				Description = "The app tries this Qdrant collection first when the provider is enabled."
+			},
+			new OperationalSourceResponse
+			{
+				Name = "Runbook Vector Cache",
+				Type = "database",
+				Mode = "sqlite-fallback",
+				Location = runbookDatabasePath,
+				Status = System.IO.File.Exists(runbookDatabasePath) ? "connected" : "pending",
+				Description = "SQLite stores indexed runbook chunks and embeddings, and is the persistent fallback when Qdrant is unavailable."
+			},
+			new OperationalSourceResponse
+			{
+				Name = "Investigation Sessions",
+				Type = "database",
+				Mode = string.IsNullOrWhiteSpace(_incidentStorageOptions.SessionDatabasePath) ? "local" : "configured",
+				Location = sessionDatabasePath,
+				Status = System.IO.File.Exists(sessionDatabasePath) ? "connected" : "pending",
+				Description = "Multi-turn analysis uses this SQLite database to remember the previous incident and analysis summary for each session ID."
+			},
+			new OperationalSourceResponse
+			{
+				Name = "Incident History",
+				Type = "file",
+				Mode = string.IsNullOrWhiteSpace(_incidentStorageOptions.IncidentRecordsPath) ? "local" : "configured",
+				Location = incidentRecordsPath,
+				Status = System.IO.File.Exists(incidentRecordsPath) ? "connected" : "pending",
+				Description = "Recent analyses are saved here so the History tab can show previous runs."
 			}
 		});
 	}
@@ -88,5 +122,18 @@ public sealed class OperationsController : ControllerBase
 		}
 
 		return Path.Combine(AppContext.BaseDirectory, defaultRelativePath);
+	}
+
+	private static string ResolveLocalDataFilePath(string? configuredPath, string defaultFileName)
+	{
+		if (!string.IsNullOrWhiteSpace(configuredPath))
+		{
+			return Path.GetFullPath(Environment.ExpandEnvironmentVariables(configuredPath));
+		}
+
+		return Path.Combine(
+			Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+			"IncidentResponseAgent",
+			defaultFileName);
 	}
 }

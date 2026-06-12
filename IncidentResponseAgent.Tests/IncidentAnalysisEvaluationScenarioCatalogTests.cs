@@ -14,6 +14,7 @@ public sealed class IncidentAnalysisEvaluationScenarioCatalogTests
 		Assert.All(scenarios, scenario =>
 		{
 			Assert.NotEmpty(scenario.ExpectedEvidenceSignals);
+			Assert.NotEmpty(scenario.ExpectedHypothesisThemes);
 			Assert.NotEmpty(scenario.ExpectedActionThemes);
 			Assert.NotEqual(Guid.Empty, scenario.Incident.Id);
 		});

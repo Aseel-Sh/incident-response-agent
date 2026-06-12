@@ -86,7 +86,13 @@ internal static class MarkdownRunbookChunker
 
 	private static void UpdateHeadingPath(List<string> headingPath, int headingLevel, string headingText)
 	{
-		var targetCount = Math.Max(headingLevel - 1, 0);
+		if (headingLevel <= 1)
+		{
+			headingPath.Clear();
+			return;
+		}
+
+		var targetCount = Math.Max(headingLevel - 2, 0);
 		if (headingPath.Count > targetCount)
 		{
 			headingPath.RemoveRange(targetCount, headingPath.Count - targetCount);

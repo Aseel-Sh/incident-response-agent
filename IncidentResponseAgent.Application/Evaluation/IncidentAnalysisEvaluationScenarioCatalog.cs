@@ -18,6 +18,7 @@ public static class IncidentAnalysisEvaluationScenarioCatalog
 				environment: "production",
 				tags: ["checkout", "5xx", "latency"]),
 			ExpectedEvidenceSignals = ["rag.runbook", "tool.logs", "tool.metrics"],
+			ExpectedHypothesisThemes = ["regression", "checkout"],
 			ExpectedActionThemes = ["blast radius", "runbook"]
 		},
 		new IncidentAnalysisEvaluationScenario
@@ -31,7 +32,8 @@ public static class IncidentAnalysisEvaluationScenarioCatalog
 				serviceName: "orders-worker",
 				environment: "production",
 				tags: ["queue", "backlog", "worker"]),
-			ExpectedEvidenceSignals = ["rag.runbook", "tool.logs"],
+			ExpectedEvidenceSignals = ["rag.runbook", "tool.logs", "tool.metrics"],
+			ExpectedHypothesisThemes = ["queue", "orders-worker"],
 			ExpectedActionThemes = ["metrics", "runbook"]
 		}
 	];

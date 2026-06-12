@@ -11,16 +11,16 @@ namespace IncidentResponseAgent.Infrastructure.Incidents;
 public sealed class LocalOperationalSignalMonitor : IIncidentSignalMonitor
 {
 	private readonly ILogSearchProvider _logSearchProvider;
-	private readonly IMetricsProvider _metricsProvider;
+	private readonly IMetricSeriesCatalog _metricSeriesCatalog;
 	private readonly OperationalDataOptions _options;
 
 	public LocalOperationalSignalMonitor(
 		ILogSearchProvider logSearchProvider,
-		IMetricsProvider metricsProvider,
+		IMetricSeriesCatalog metricSeriesCatalog,
 		IOptions<OperationalDataOptions> options)
 	{
 		_logSearchProvider = logSearchProvider;
-		_metricsProvider = metricsProvider;
+		_metricSeriesCatalog = metricSeriesCatalog;
 		_options = options.Value ?? new OperationalDataOptions();
 	}
 
@@ -31,7 +31,7 @@ public sealed class LocalOperationalSignalMonitor : IIncidentSignalMonitor
 		candidates.AddRange(await DetectLogIncidentsAsync(cancellationToken).ConfigureAwait(false));
 
 		return candidates
-			.GroupBy(candidate => $"{candidate.ServiceName}|{candidate.Environment}|{candidate.Title}", StringComparer.OrdinalIgnoreCase)
+			.GroupBy(candidate => BuildMergeKey(candidate), StringComparer.OrdinalIgnoreCase)
 			.Select(group => Merge(group.ToArray()))
 			.OrderByDescending(candidate => candidate.Severity)
 			.ThenByDescending(candidate => candidate.DetectedAtUtc)
@@ -41,43 +41,36 @@ public sealed class LocalOperationalSignalMonitor : IIncidentSignalMonitor
 
 	private async Task<IReadOnlyList<DetectedIncidentCandidate>> DetectMetricIncidentsAsync(CancellationToken cancellationToken)
 	{
-		var checks = new[]
-		{
-			new MetricCheck("request_error_rate", "checkout-api", "production", _options.HighErrorRateThreshold, _options.CriticalErrorRateThreshold, "checkout", "5xx"),
-			new MetricCheck("request_error_rate", "auth-api", "production", 8m, _options.HighErrorRateThreshold, "auth", "login"),
-			new MetricCheck("queue_depth", "orders-worker", "production", _options.QueueDepthWarningThreshold, 1500m, "queue", "backlog")
-		};
-
 		var candidates = new List<DetectedIncidentCandidate>();
-		foreach (var check in checks)
+		var series = await _metricSeriesCatalog.ListSeriesAsync(cancellationToken).ConfigureAwait(false);
+		foreach (var item in series)
 		{
-			var result = await _metricsProvider.QueryAsync(new MetricsQueryRequest
+			var check = BuildMetricCheck(item);
+			if (check is null)
 			{
-				MetricName = check.MetricName,
-				ServiceName = check.ServiceName,
-				Environment = check.Environment
-			}, cancellationToken).ConfigureAwait(false);
+				continue;
+			}
 
-			var latest = result.Samples.OrderBy(sample => sample.Timestamp).LastOrDefault();
+			var latest = item.Samples.OrderBy(sample => sample.Timestamp).LastOrDefault();
 			if (latest is null || latest.Value < check.WarningThreshold)
 			{
 				continue;
 			}
 
 			var severity = latest.Value >= check.CriticalThreshold ? IncidentSeverity.Critical : IncidentSeverity.High;
-			var readableMetric = check.MetricName.Replace('_', ' ');
+			var readableMetric = item.MetricName.Replace('_', ' ');
 			candidates.Add(new DetectedIncidentCandidate
 			{
-				Id = StableId($"{check.MetricName}:{check.ServiceName}:{check.Environment}:{latest.Timestamp:O}:{latest.Value}"),
-				Title = $"{check.ServiceName} {readableMetric} threshold breached",
-				Description = $"{check.ServiceName} in {check.Environment} has {readableMetric} at {latest.Value}, above the configured threshold of {check.WarningThreshold}.",
+				Id = StableId($"{item.MetricName}:{item.ServiceName}:{item.Environment}:{latest.Timestamp:O}:{latest.Value}"),
+				Title = $"{item.ServiceName} {readableMetric} threshold breached",
+				Description = $"{item.ServiceName} in {item.Environment} has {readableMetric} at {latest.Value}, above the configured threshold of {check.WarningThreshold}.",
 				Severity = severity,
-				ServiceName = check.ServiceName,
-				Environment = check.Environment,
+				ServiceName = item.ServiceName,
+				Environment = item.Environment,
 				DetectedAtUtc = latest.Timestamp,
 				Source = "metrics",
-				Signals = new[] { $"{check.MetricName}={latest.Value}", $"threshold={check.WarningThreshold}" },
-				SuggestedTags = new[] { check.PrimaryTag, check.SecondaryTag, check.MetricName }
+				Signals = new[] { $"{item.MetricName}={latest.Value}", $"threshold={check.WarningThreshold}" },
+				SuggestedTags = BuildMetricTags(item.MetricName, item.ServiceName)
 			});
 		}
 
@@ -139,6 +132,13 @@ public sealed class LocalOperationalSignalMonitor : IIncidentSignalMonitor
 		};
 	}
 
+	private static string BuildMergeKey(DetectedIncidentCandidate candidate)
+	{
+		var service = string.IsNullOrWhiteSpace(candidate.ServiceName) ? candidate.Title : candidate.ServiceName;
+		var environment = string.IsNullOrWhiteSpace(candidate.Environment) ? "unknown" : candidate.Environment;
+		return $"{service}|{environment}";
+	}
+
 	private static string InferEnvironment(IEnumerable<LogSearchEntry> entries)
 	{
 		return entries.Any(entry => entry.Message.Contains("production", StringComparison.OrdinalIgnoreCase))
@@ -159,6 +159,36 @@ public sealed class LocalOperationalSignalMonitor : IIncidentSignalMonitor
 		return tags.Count == 0 ? new[] { "logs" } : tags;
 	}
 
+	private MetricCheck? BuildMetricCheck(MetricSeries series)
+	{
+		if (series.MetricName.Equals("request_error_rate", StringComparison.OrdinalIgnoreCase))
+		{
+			var warningThreshold = series.ServiceName.Contains("auth", StringComparison.OrdinalIgnoreCase)
+				? Math.Min(8m, _options.HighErrorRateThreshold)
+				: _options.HighErrorRateThreshold;
+
+			return new MetricCheck(warningThreshold, _options.CriticalErrorRateThreshold);
+		}
+
+		if (series.MetricName.Equals("queue_depth", StringComparison.OrdinalIgnoreCase))
+		{
+			return new MetricCheck(_options.QueueDepthWarningThreshold, Math.Max(1500m, _options.QueueDepthWarningThreshold * 2));
+		}
+
+		return null;
+	}
+
+	private static IReadOnlyList<string> BuildMetricTags(string metricName, string serviceName)
+	{
+		var tags = new List<string> { metricName };
+		AddIfContains(tags, serviceName, "checkout");
+		AddIfContains(tags, serviceName, "auth");
+		AddIfContains(tags, metricName, "queue");
+		AddIfContains(tags, metricName, "backlog");
+		AddIfContains(tags, metricName, "error", "5xx");
+		return tags.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+	}
+
 	private static void AddIfContains(ICollection<string> tags, string text, string token, string? tag = null)
 	{
 		if (text.Contains(token, StringComparison.OrdinalIgnoreCase))
@@ -174,11 +204,6 @@ public sealed class LocalOperationalSignalMonitor : IIncidentSignalMonitor
 	}
 
 	private sealed record MetricCheck(
-		string MetricName,
-		string ServiceName,
-		string Environment,
 		decimal WarningThreshold,
-		decimal CriticalThreshold,
-		string PrimaryTag,
-		string SecondaryTag);
+		decimal CriticalThreshold);
 }
