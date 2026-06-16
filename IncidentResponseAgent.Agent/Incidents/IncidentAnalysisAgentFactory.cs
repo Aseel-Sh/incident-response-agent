@@ -6,6 +6,7 @@ public sealed class IncidentAnalysisAgentFactory : IIncidentAnalysisAgentFactory
 	private const string ModelEnvironmentVariable = "IRA_AGENT_MODEL";
 	private const string EndpointEnvironmentVariable = "IRA_AGENT_ENDPOINT";
 	private const string ApiKeyEnvironmentVariable = "IRA_AGENT_API_KEY";
+	private const string OpenRouterApiKeyEnvironmentVariable = "OPENROUTER_API_KEY";
 
 	public IncidentAnalysisAgentProfile Create()
 	{
@@ -14,7 +15,7 @@ public sealed class IncidentAnalysisAgentFactory : IIncidentAnalysisAgentFactory
 			Provider = GetValue(ProviderEnvironmentVariable, "unset"),
 			Model = GetValue(ModelEnvironmentVariable, "unset"),
 			Endpoint = GetValue(EndpointEnvironmentVariable),
-			ApiKey = GetValue(ApiKeyEnvironmentVariable)
+			ApiKey = GetValue(ApiKeyEnvironmentVariable, OpenRouterApiKeyEnvironmentVariable)
 		};
 
 		return new IncidentAnalysisAgentProfile
@@ -27,10 +28,18 @@ public sealed class IncidentAnalysisAgentFactory : IIncidentAnalysisAgentFactory
 		};
 	}
 
-	private static string? GetValue(string key)
+	private static string? GetValue(params string[] keys)
 	{
-		var value = Environment.GetEnvironmentVariable(key);
-		return string.IsNullOrWhiteSpace(value) ? null : value;
+		foreach (var key in keys)
+		{
+			var value = Environment.GetEnvironmentVariable(key);
+			if (!string.IsNullOrWhiteSpace(value))
+			{
+				return value;
+			}
+		}
+
+		return null;
 	}
 
 	private static string GetValue(string key, string fallback)

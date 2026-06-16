@@ -13,4 +13,8 @@ public sealed record OperationalSourceResponse
 	public required string Status { get; init; }
 
 	public required string Description { get; init; }
+
+	public bool IsDemoMode { get; init; }
+
+	public IReadOnlyList<string> Capabilities { get; init; } = Array.Empty<string>();
 }

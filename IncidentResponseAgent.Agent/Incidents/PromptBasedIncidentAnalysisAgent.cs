@@ -51,8 +51,17 @@ public sealed class PromptBasedIncidentAnalysisAgent : IIncidentAnalysisAgent
 			sessionContext,
 			runbookResult.Runbooks,
 			BuildLogHighlights(logResult),
-			BuildMetricHighlights(metricsResult));
-		var response = BuildAnalysisText(incident, profile, prompt, sessionContext, runbookResult.Runbooks, logResult, metricsResult);
+			BuildMetricHighlights(metricsResult),
+			agentContext?.SimilarIncidents ?? Array.Empty<SimilarIncidentMatch>());
+		var response = BuildAnalysisText(
+			incident,
+			profile,
+			prompt,
+			sessionContext,
+			runbookResult.Runbooks,
+			logResult,
+			metricsResult,
+			agentContext?.SimilarIncidents ?? Array.Empty<SimilarIncidentMatch>());
 		_logger.LogInformation("Local prompt-based incident analysis completed for IncidentId={IncidentId}.", incident.Id);
 
 		return new IncidentAgentExecutionResult
@@ -108,16 +117,19 @@ public sealed class PromptBasedIncidentAnalysisAgent : IIncidentAnalysisAgent
 		IncidentAnalysisSessionContext? sessionContext,
 		IReadOnlyCollection<RunbookDocument> runbooks,
 		LogSearchResult logResult,
-		MetricsQueryResult metricsResult)
+		MetricsQueryResult metricsResult,
+		IReadOnlyList<SimilarIncidentMatch> similarIncidents)
 	{
 		var serviceName = string.IsNullOrWhiteSpace(incident.ServiceName) ? "the impacted service" : incident.ServiceName;
 		var promptLength = prompt.Length;
 		var logCount = logResult.Entries.Count;
 		var metricCount = metricsResult.Samples.Count;
 		var runbookCount = runbooks.Count;
+		var similarIncidentCount = similarIncidents.Count;
 		var primaryRunbook = runbooks.FirstOrDefault()?.Title ?? "none";
 		var primaryLogMessage = logResult.Entries.FirstOrDefault()?.Message ?? "none";
 		var primaryMetric = metricsResult.Samples.FirstOrDefault()?.Value;
+		var primarySimilar = similarIncidents.FirstOrDefault();
 		var sessionLine = sessionContext is null
 			? "Session: new investigation"
 			: $"Session: {sessionContext.SessionId} turn {sessionContext.TurnNumber + 1} (previous turn {sessionContext.TurnNumber}).";
@@ -133,9 +145,9 @@ public sealed class PromptBasedIncidentAnalysisAgent : IIncidentAnalysisAgent
 			[
 				new IncidentAnalysisEvidenceItem
 				{
-					Summary = $"{logCount} log entries, {metricCount} metric samples, and {runbookCount} runbook chunks were gathered.",
+					Summary = $"{logCount} log entries, {metricCount} metric samples, {runbookCount} runbook chunks, and {similarIncidentCount} similar incidents were gathered.",
 					Source = "agent.local",
-					Details = $"{sessionLine} Primary runbook: {primaryRunbook}. Primary log: {primaryLogMessage}. Primary metric: {metricText}."
+					Details = $"{sessionLine} Primary runbook: {primaryRunbook}. Primary log: {primaryLogMessage}. Primary metric: {metricText}. Similar incident: {primarySimilar?.IncidentSummary ?? "none"}."
 				}
 			],
 			Hypotheses =
@@ -145,8 +157,8 @@ public sealed class PromptBasedIncidentAnalysisAgent : IIncidentAnalysisAgent
 					Description = $"Recent service or dependency change may be affecting {serviceName}.",
 					InferenceStrength = "Medium",
 					Confidence = "Low",
-					SupportingEvidence = [$"Prompt size: {promptLength} characters.", $"Primary runbook: {primaryRunbook}."],
-					EvidenceReferences = ["agent.local", "rag.runbooks", "tool.logs", "tool.metrics"]
+					SupportingEvidence = [$"Prompt size: {promptLength} characters.", $"Primary runbook: {primaryRunbook}.", $"Similar incidents: {similarIncidentCount}."],
+					EvidenceReferences = ["agent.local", "rag.runbooks", "tool.logs", "tool.metrics", "history.incidents"]
 				}
 			],
 			RecommendedActions =
@@ -155,8 +167,10 @@ public sealed class PromptBasedIncidentAnalysisAgent : IIncidentAnalysisAgent
 				{
 					Description = "Confirm blast radius, review recent changes, and follow the most relevant runbook.",
 					Priority = "High",
-					Rationale = "The local fallback can summarize gathered signals but cannot perform model reasoning.",
-					SupportingSignals = ["rag.runbooks", "tool.logs", "tool.metrics"]
+					Rationale = primarySimilar is null
+						? "The local fallback can summarize gathered signals but cannot perform model reasoning."
+						: $"A similar previous incident exists: {primarySimilar.IncidentSummary}.",
+					SupportingSignals = ["rag.runbooks", "tool.logs", "tool.metrics", "history.incidents"]
 				}
 			],
 			Confidence = "Low",

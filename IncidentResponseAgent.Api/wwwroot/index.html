@@ -3,216 +3,235 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Incident Response Agent</title>
-  <link rel="stylesheet" href="/styles.css?v=20260612-actions-first">
+  <title>incidentOps</title>
+  <link rel="stylesheet" href="/styles.css?v=20260615-figma-truth-pass-4">
 </head>
 <body>
   <div class="app-shell">
     <aside class="sidebar">
+      <div class="brand">
+        <span class="brand-mark"></span>
+        <strong>incidentOps</strong>
+      </div>
       <nav class="nav-tabs" aria-label="Primary">
-        <button class="nav-tab active" type="button" data-tab="monitor" data-icon="radar">Monitor</button>
-        <button class="nav-tab" type="button" data-tab="analyze" data-icon="brain">Analyze</button>
-        <button class="nav-tab" type="button" data-tab="runbooks" data-icon="book">Runbooks</button>
+        <button class="nav-tab active" type="button" data-tab="dashboard" data-icon="radar">Dashboard</button>
+        <button class="nav-tab" type="button" data-tab="analysis" data-icon="brain">Analysis</button>
         <button class="nav-tab" type="button" data-tab="history" data-icon="history">History</button>
         <button class="nav-tab" type="button" data-tab="sources" data-icon="plug">Sources</button>
+        <button class="nav-tab" type="button" data-tab="ingestion" data-icon="terminal">Ingestion</button>
+        <button class="nav-tab" type="button" data-tab="rag" data-icon="book">RAG</button>
         <button class="nav-tab" type="button" data-tab="evaluation" data-icon="check">Evaluation</button>
+        <button class="nav-tab" type="button" data-tab="monitor" data-icon="activity">Monitor</button>
+        <button class="nav-tab" type="button" data-tab="config" data-icon="database">Config</button>
       </nav>
-
       <div class="sidebar-footer">
-        <p id="lastScan" class="sidebar-meta">No scan yet</p>
+        <span id="appVersion">v2.4.1</span>
+        <span>Last scan: 2m ago</span>
         <button id="themeToggle" class="theme-toggle icon-only" type="button" data-icon="moon" aria-label="Toggle theme"></button>
       </div>
     </aside>
 
     <main class="workspace">
-      <header class="workspace-header">
+      <header class="topbar">
         <div>
-          <p class="eyebrow" id="workspaceEyebrow">Live Triage</p>
-          <h2 id="workspaceTitle">Monitor</h2>
-          <p id="workspaceDescription">Detected candidates, agent analysis, RAG, history, source visibility, and evaluation checks in one console.</p>
+          <p class="eyebrow" id="workspaceEyebrow">Operations backlog</p>
+          <h1 id="workspaceTitle">Dashboard</h1>
         </div>
-        <div class="header-actions">
-          <span id="healthStatus" class="status-pill status-pending" aria-live="polite">Checking</span>
-          <button id="scanButton" type="button" data-icon="refresh">Scan Now</button>
-          <button id="sampleButton" class="secondary" type="button" data-icon="wand">Load Sample</button>
+        <div class="topbar-actions">
+          <span id="healthStatus" class="status-pill status-pending">Checking</span>
+          <span id="demoModePill" class="status-pill status-warning">Demo Mode</span>
+          <button id="scanButton" class="top-icon" type="button" data-icon="moon" aria-label="Toggle theme"></button>
         </div>
       </header>
 
-      <section id="monitorView" class="tab-view active">
-        <div class="panel">
-          <div class="panel-header">
-            <div>
-              <h3><span data-icon="radar" aria-hidden="true"></span> Detected Incidents</h3>
-              <p>Auto-generated candidates from the active signal sources.</p>
-            </div>
-            <div class="toolbar">
-              <input id="incidentSearch" type="search" placeholder="Search service, signal, title">
-              <select id="incidentSort" aria-label="Sort detected incidents">
-                <option value="severity">Severity</option>
-                <option value="time">Newest</option>
-                <option value="source">Source</option>
-                <option value="service">Service</option>
-              </select>
+      <section id="dashboardView" class="tab-view active">
+        <div id="sourceModeBanner" class="mode-banner"></div>
+        <dl class="metric-strip">
+          <div><dt>New</dt><dd id="newCount">0</dd></div>
+          <div><dt>Investigating</dt><dd id="investigatingCount">0</dd></div>
+          <div><dt>Mitigated</dt><dd id="mitigatedCount">0</dd></div>
+          <div><dt>Resolved</dt><dd id="resolvedCount">0</dd></div>
+        </dl>
+        <section class="panel">
+          <div class="toolbar backlog-toolbar">
+            <input id="incidentSearch" type="search" placeholder="Search by title or service...">
+            <button id="manualIncidentButton" class="secondary compact-button" type="button" data-icon="play">Create Incident</button>
+            <div id="statusFilters" class="chip-row">
+              <button class="filter-chip active" type="button" data-status="all">All</button>
+              <button class="filter-chip" type="button" data-status="new">New</button>
+              <button class="filter-chip" type="button" data-status="ack">Ack</button>
+              <button class="filter-chip" type="button" data-status="active">Active</button>
+              <button class="filter-chip" type="button" data-status="mitigated">Mitigated</button>
+              <button class="filter-chip" type="button" data-status="resolved">Resolved</button>
             </div>
           </div>
-          <dl class="monitor-stats">
-            <div>
-              <dt>Total</dt>
-              <dd id="totalDetected">0</dd>
-            </div>
-            <div>
-              <dt>Critical</dt>
-              <dd id="criticalDetected">0</dd>
-            </div>
-            <div>
-              <dt>Logs</dt>
-              <dd id="logDetected">0</dd>
-            </div>
-            <div>
-              <dt>Metrics</dt>
-              <dd id="metricDetected">0</dd>
-            </div>
-          </dl>
-          <div id="scanFeedback" class="scan-feedback"></div>
-          <div id="detectedOutput" class="incident-table"></div>
-        </div>
+          <div id="detectedOutput" class="incident-backlog"></div>
+        </section>
       </section>
 
-      <section id="analyzeView" class="tab-view">
-        <div class="split-layout">
-          <section class="panel">
-            <div class="panel-header">
-              <div>
-                <h3><span data-icon="file" aria-hidden="true"></span> Incident Details</h3>
-                <p>Manual entry stays available for missed or human-reported incidents.</p>
-              </div>
+      <section id="analysisView" class="tab-view">
+        <div class="page-heading compact-only">
+          <h2>Incident analysis</h2>
+          <p>Evidence, runbook steps, and related incidents for the selected signal.</p>
+        </div>
+        <div class="analysis-layout">
+          <section class="panel compact-panel">
+            <div class="section-title">
+              <h2>Incident input</h2>
+              <button id="sampleButton" class="secondary compact-button" type="button" data-icon="wand">Sample</button>
             </div>
-
             <form id="incidentForm" class="form-grid">
-              <label class="wide">
-                Title
-                <input name="title" required maxlength="200" value="Checkout 5xx spike">
-              </label>
-
-              <label>
-                Severity
-                <select name="severity" required>
-                  <option>Low</option>
-                  <option>Medium</option>
-                  <option selected>High</option>
-                  <option>Critical</option>
-                </select>
-              </label>
-
-              <label>
-                Service
-                <input name="serviceName" value="checkout-api">
-              </label>
-
-              <label>
-                Environment
-                <input name="environment" value="production">
-              </label>
-
-              <label>
-                Session ID
-                <input name="sessionId" placeholder="optional follow-up session">
-              </label>
-
-              <label class="wide">
-                Tags
-                <input name="tags" value="checkout, 5xx, latency">
-              </label>
-
-              <label class="wide">
-                Description
-                <textarea name="description" required maxlength="5000">Customers are seeing intermittent 500 responses during checkout. Error rate increased after the latest deployment.</textarea>
-              </label>
-
+              <label class="wide">Title<input name="title" required maxlength="200" value="Checkout 5xx spike"></label>
+              <label>Severity<select name="severity" required><option>Low</option><option>Medium</option><option selected>High</option><option>Critical</option></select></label>
+              <label>Service<input name="serviceName" value="checkout-api"></label>
+              <label>Environment<input name="environment" value="production"></label>
+              <label>Session ID<input name="sessionId" placeholder="optional follow-up session"></label>
+              <label class="wide">Tags<input name="tags" value="checkout, 5xx, latency"></label>
+              <label class="wide">Description<textarea name="description" required maxlength="5000">Customers are seeing intermittent 500 responses during checkout. Error rate increased after the latest deployment.</textarea></label>
               <div class="actions wide">
-                <button id="analyzeButton" type="submit" data-icon="play">Analyze Incident</button>
-                <button id="recentButton" class="secondary" type="button" data-icon="history">Refresh History</button>
+                <button id="analyzeButton" type="submit" data-icon="play">Analyze</button>
+                <button id="recentButton" class="secondary" type="button" data-icon="history">Refresh history</button>
               </div>
             </form>
           </section>
-
-          <section class="panel analysis-panel">
-            <div class="panel-header">
-              <div>
-                <h3><span data-icon="brain" aria-hidden="true"></span> Agent Output</h3>
-                <p id="analysisStatus">Evidence, hypotheses, actions, confidence, and provider status appear here.</p>
-              </div>
-            </div>
+          <section class="analysis-feed">
+            <div id="analysisStatus" class="analysis-status">Select a backlog incident or run manual analysis.</div>
             <div id="analysisOutput" class="empty-state">No analysis yet.</div>
           </section>
         </div>
       </section>
 
-      <section id="runbooksView" class="tab-view">
-        <section class="panel">
-          <div class="panel-header">
-            <div>
-              <h3><span data-icon="book" aria-hidden="true"></span> Runbook Search</h3>
-              <p>Search matched chunks, scores, source files, embedding provider, and vector store.</p>
-            </div>
-          </div>
-
-          <form id="ragForm" class="search-bar">
-            <input name="query" value="checkout 5xx latency" aria-label="RAG query">
-            <button type="submit" data-icon="search">Search</button>
-          </form>
-
-          <div id="ragSummary" class="summary-strip"></div>
-          <div id="ragResults" class="result-list"></div>
-        </section>
-      </section>
-
       <section id="historyView" class="tab-view">
+        <div class="page-heading">
+          <h2><span data-icon="history"></span>Incident History</h2>
+          <p><span id="historyTotal">0</span> total incidents</p>
+        </div>
+        <div class="section-title history-filters">
+          <div class="filter-icon" data-icon="search"></div>
+          <select id="historyServiceFilter" aria-label="Service filter"><option value="all">All services</option></select>
+          <select id="historySeverityFilter" aria-label="Severity filter"><option value="all">All severities</option></select>
+          <select id="historyConfidenceFilter" aria-label="Confidence filter"><option value="all">All confidence</option></select>
+          <select id="historyProviderFilter" aria-label="Provider filter"><option value="all">All providers</option></select>
+          <span id="historyResultCount" class="meta">0 results</span>
+          <button id="historyReloadButton" class="secondary compact-button hidden-control" type="button" data-icon="refresh">Reload</button>
+        </div>
         <section class="panel">
-          <div class="panel-header">
-            <div>
-              <h3><span data-icon="history" aria-hidden="true"></span> Recent Analyses</h3>
-              <p>Saved investigation runs with sessions, turns, confidence, and provider metadata.</p>
-            </div>
-          </div>
           <div class="history-layout">
             <div id="recentOutput" class="history-list"></div>
-            <aside id="historyDetail" class="history-detail">
-              <p class="eyebrow">Selected run</p>
-              <h4>No analysis selected</h4>
-              <p class="meta">Choose a saved run to inspect the stored analysis text.</p>
-            </aside>
           </div>
         </section>
       </section>
 
       <section id="sourcesView" class="tab-view">
+        <div class="page-heading">
+          <h2><span data-icon="database"></span>Sources</h2>
+          <p>Configured data sources and their capabilities</p>
+        </div>
         <section class="panel">
-          <div class="panel-header">
-            <div>
-              <h3><span data-icon="database" aria-hidden="true"></span> Connected Sources</h3>
-              <p>Logs and metrics sources.</p>
-            </div>
-          </div>
           <div id="sourcesOutput" class="source-list"></div>
         </section>
       </section>
 
-      <section id="evaluationView" class="tab-view">
+      <section id="ingestionView" class="tab-view">
+        <div class="page-heading">
+          <h2><span data-icon="activity"></span>Signal Ingestion</h2>
+          <p>Post log signals or metric samples for immediate analysis</p>
+        </div>
+        <div class="split-layout">
+          <section class="panel">
+            <div class="section-title"><h2><span data-icon="terminal"></span>POST LOG SIGNAL</h2></div>
+            <form id="logSignalForm" class="form-grid">
+              <label class="wide">Service<input name="source" value="checkout-service" required></label>
+              <label class="wide">Level<select name="level"><option>Error</option><option>Warning</option><option>Information</option><option>Critical</option></select></label>
+              <label class="wide">Message<textarea name="message" required>ERROR: connection pool timeout after 30s...</textarea></label>
+              <div class="form-actions wide">
+                <button type="submit" data-icon="terminal">Post Signal</button>
+                <button class="secondary rescan-button" type="button" data-rescan>Rescan</button>
+              </div>
+            </form>
+          </section>
+          <section class="panel">
+            <div class="section-title"><h2><span data-icon="chart"></span>POST METRIC SAMPLE</h2></div>
+            <form id="metricSignalForm" class="form-grid">
+              <label class="wide">Service<input name="serviceName" value="checkout-service" required></label>
+              <label>Metric name<input name="metricName" value="p95_latency" required></label>
+              <label>Value<input name="value" type="number" step="0.1" value="4200" required></label>
+              <label class="wide">Unit (optional)<input name="unit" value="ms"></label>
+              <input type="hidden" name="environment" value="prod">
+              <div class="form-actions wide">
+                <button type="submit" data-icon="chart">Post Metric</button>
+                <button class="secondary rescan-button" type="button" data-rescan>Rescan</button>
+              </div>
+            </form>
+          </section>
+        </div>
+        <div id="ingestionFeedback" class="scan-feedback"></div>
+      </section>
+
+      <section id="ragView" class="tab-view">
+        <div class="page-heading">
+          <h2><span data-icon="book"></span>RAG Diagnostics</h2>
+          <p>Embedding provider, vector store, and retrieval match quality</p>
+        </div>
         <section class="panel">
-          <div class="panel-header">
-            <div>
-              <h3><span data-icon="check" aria-hidden="true"></span> Evaluation Scenarios</h3>
-              <p>Rubric-style checks for evidence, hypotheses, recommendations, and expected signals.</p>
+          <div id="ragSummary" class="rag-summary"></div>
+          <form id="ragForm" class="search-bar"><input name="query" value="checkout 5xx latency" aria-label="RAG query"><button type="submit" data-icon="search">Search</button></form>
+          <div id="ragResults" class="result-list"></div>
+        </section>
+      </section>
+
+      <section id="evaluationView" class="tab-view">
+        <div class="page-heading">
+          <h2>Evaluation</h2>
+          <p>Run scenarios and compare output against rubric items</p>
+        </div>
+        <section class="panel">
+          <div id="evaluationOutput" class="evaluation-grid"></div>
+        </section>
+      </section>
+
+      <section id="monitorView" class="tab-view">
+        <div class="page-heading">
+          <h2><span data-icon="activity"></span>Live Monitor</h2>
+          <p>Polling interval, scan controls, and last scan result</p>
+        </div>
+        <section class="panel">
+          <div id="lastScan" class="monitor-summary">No scan yet</div>
+          <div id="scanFeedback" class="scan-feedback"></div>
+          <div class="monitor-controls">
+            <div class="section-title stacked">
+              <h3>Controls</h3>
+              <span class="meta">Polling interval: <strong id="pollingIntervalValue">30s</strong></span>
+            </div>
+            <input id="pollingIntervalSlider" class="polling-slider" type="range" min="10" max="300" step="10" value="30" aria-label="Polling interval">
+            <div class="slider-ticks"><span>10s</span><span>60s</span><span>120s</span><span>300s</span></div>
+            <div class="monitor-actions">
+              <button id="pauseScanButton" class="warning-button compact-button" type="button" data-icon="pause">Pause Scanning</button>
+              <button id="manualRefreshButton" class="compact-button" type="button" data-icon="refresh">Manual Refresh</button>
             </div>
           </div>
-          <div id="evaluationOutput" class="evaluation-grid"></div>
+        </section>
+      </section>
+
+      <section id="configView" class="tab-view">
+        <div class="page-heading">
+          <h2><span data-icon="database"></span>Configuration</h2>
+          <p>Current environment, provider, and mode summary</p>
+        </div>
+        <section class="panel">
+          <div id="configOutput" class="config-grid"></div>
         </section>
       </section>
     </main>
   </div>
+  <button class="help-button" type="button" aria-label="Help">?</button>
   <div id="toastRegion" class="toast-region" aria-live="polite" aria-atomic="true"></div>
-
-  <script src="/app.js?v=20260612-actions-first"></script>
+  <div id="historyModal" class="modal-backdrop" hidden>
+    <section class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="historyModalTitle">
+      <button id="historyModalClose" class="modal-close" type="button" aria-label="Close history detail">x</button>
+      <div id="historyDetail" class="history-detail"><p class="eyebrow">Selected run</p><h3 id="historyModalTitle">No analysis selected</h3><p class="meta">Choose a saved run to inspect evidence, actions, and provider mode.</p></div>
+    </section>
+  </div>
+  <script src="/app.js?v=20260615-figma-truth-pass-4"></script>
 </body>
 </html>

@@ -10,4 +10,6 @@ public sealed record IncidentAnalysisAgentContext
 	public required LogSearchResult Logs { get; init; }
 
 	public required MetricsQueryResult Metrics { get; init; }
+
+	public IReadOnlyList<SimilarIncidentMatch> SimilarIncidents { get; init; } = Array.Empty<SimilarIncidentMatch>();
 }

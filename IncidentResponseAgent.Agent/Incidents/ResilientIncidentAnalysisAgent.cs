@@ -54,7 +54,7 @@ public sealed class ResilientIncidentAnalysisAgent : IIncidentAnalysisAgent
 		{
 			_logger.LogWarning(exception, "OpenAI-compatible incident analysis failed. Falling back to local analysis.");
 			var fallbackResult = await _fallbackAgent.AnalyzeAsync(incident, sessionContext, agentContext, cancellationToken).ConfigureAwait(false);
-			return fallbackResult with { FallbackReason = $"OpenAI-compatible analysis failed: {exception.GetType().Name}." };
+			return fallbackResult with { FallbackReason = $"OpenAI-compatible analysis failed: {BuildFailureReason(exception)}" };
 		}
 	}
 
@@ -65,12 +65,27 @@ public sealed class ResilientIncidentAnalysisAgent : IIncidentAnalysisAgent
 			return true;
 		}
 
-		return !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("IRA_AGENT_API_KEY"));
+		return !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("IRA_AGENT_API_KEY"))
+			|| !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("OPENROUTER_API_KEY"));
 	}
 
 	private static bool IsProviderFailure(Exception exception)
 	{
 		return exception is HttpRequestException or TimeoutException or InvalidOperationException
 			|| exception.GetType().Name.Contains("ClientResultException", StringComparison.OrdinalIgnoreCase);
+	}
+
+	private static string BuildFailureReason(Exception exception)
+	{
+		var message = string.IsNullOrWhiteSpace(exception.Message)
+			? exception.GetType().Name
+			: exception.Message.Trim();
+
+		if (message.Length > 220)
+		{
+			message = string.Concat(message.AsSpan(0, 217), "...");
+		}
+
+		return $"{exception.GetType().Name} - {message}.";
 	}
 }

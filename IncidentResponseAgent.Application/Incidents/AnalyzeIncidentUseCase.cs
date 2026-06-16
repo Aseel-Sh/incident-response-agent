@@ -1,4 +1,5 @@
 using IncidentResponseAgent.Domain.Incidents;
+using IncidentResponseAgent.Domain.Runbooks;
 using IncidentResponseAgent.Application.Runbooks;
 using IncidentResponseAgent.Application.Tools;
 using Microsoft.Extensions.Logging;
@@ -48,28 +49,33 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 		var runbookResultTask = _runbookRetrievalService.RetrieveAsync(BuildRunbookRetrievalRequest(incident), cancellationToken);
 		var logResultTask = _logSearchProvider.SearchAsync(BuildLogSearchRequest(incident), cancellationToken);
 		var metricsResultTask = _metricsProvider.QueryAsync(BuildMetricsQueryRequest(incident), cancellationToken);
+		var similarIncidentsTask = _incidentRecordStore.FindSimilarAsync(incident, 3, cancellationToken);
 
-		await Task.WhenAll(sessionContextTask, runbookResultTask, logResultTask, metricsResultTask);
+		await Task.WhenAll(sessionContextTask, runbookResultTask, logResultTask, metricsResultTask, similarIncidentsTask);
 
 		var sessionContext = await sessionContextTask;
 		var runbookResult = await runbookResultTask;
 		var logResult = await logResultTask;
 		var metricsResult = await metricsResultTask;
+		var similarIncidents = await similarIncidentsTask;
 		_logger.LogInformation(
-			"Incident evidence gathered for IncidentId={IncidentId}: Runbooks={RunbookCount} Logs={LogCount} MetricSamples={MetricSampleCount}.",
+			"Incident evidence gathered for IncidentId={IncidentId}: Runbooks={RunbookCount} Logs={LogCount} MetricSamples={MetricSampleCount} SimilarIncidents={SimilarIncidentCount}.",
 			incident.Id,
 			runbookResult.Runbooks.Count,
 			logResult.Entries.Count,
-			metricsResult.Samples.Count);
+			metricsResult.Samples.Count,
+			similarIncidents.Count);
 		var agentContext = new IncidentAnalysisAgentContext
 		{
 			Runbooks = runbookResult,
 			Logs = logResult,
-			Metrics = metricsResult
+			Metrics = metricsResult,
+			SimilarIncidents = similarIncidents
 		};
 		var agentResult = await _incidentAnalysisAgent.AnalyzeAsync(incident, sessionContext, agentContext, cancellationToken);
 		var analysisText = agentResult.AnalysisText;
 		var structuredAnalysis = AgentStructuredAnalysisParser.TryParse(analysisText);
+		var usedDeterministicStructuredFallback = structuredAnalysis is null && !agentResult.UsedFallback;
 		var confidence = structuredAnalysis?.Confidence ?? ExtractConfidence(analysisText) ?? "Low";
 		var nextSessionContext = sessionContext with
 		{
@@ -89,17 +95,22 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 			IncidentId = incident.Id,
 			IncidentSummary = structuredAnalysis?.Summary ?? BuildSummary(incident),
 			AnalysisText = analysisText,
-			AnalysisProvider = agentResult.Provider,
+			AnalysisProvider = usedDeterministicStructuredFallback
+				? $"{agentResult.Provider}/deterministic-structured-fallback"
+				: agentResult.Provider,
 			AnalysisModel = agentResult.Model,
-			UsedFallbackAnalysis = agentResult.UsedFallback,
-			FallbackReason = agentResult.FallbackReason,
-			Evidence = MergeEvidence(BuildEvidence(incident, runbookResult, logResult, metricsResult), structuredAnalysis?.Evidence),
+			UsedFallbackAnalysis = agentResult.UsedFallback || usedDeterministicStructuredFallback,
+			FallbackReason = agentResult.FallbackReason
+				?? (usedDeterministicStructuredFallback
+					? "Model returned unstructured or invalid JSON; deterministic structured fields were used."
+					: null),
+			Evidence = MergeEvidence(BuildEvidence(incident, runbookResult, logResult, metricsResult, similarIncidents), structuredAnalysis?.Evidence),
 			Hypotheses = structuredAnalysis?.Hypotheses.Count > 0
 				? structuredAnalysis.Hypotheses
-				: BuildHypotheses(incident, runbookResult, logResult, metricsResult),
-			RecommendedActions = structuredAnalysis?.RecommendedActions.Count > 0
-				? structuredAnalysis.RecommendedActions
-				: BuildRecommendedActions(incident, runbookResult, logResult, metricsResult),
+				: BuildHypotheses(incident, runbookResult, logResult, metricsResult, similarIncidents),
+			RecommendedActions = MergeRecommendedActions(
+				BuildRecommendedActions(incident, runbookResult, logResult, metricsResult, similarIncidents),
+				structuredAnalysis?.RecommendedActions),
 			Confidence = confidence,
 			Notes = BuildNotes(
 				structuredAnalysis?.Notes
@@ -268,7 +279,8 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 		Incident incident,
 		RunbookRetrievalResult runbookResult,
 		LogSearchResult logResult,
-		MetricsQueryResult metricsResult)
+		MetricsQueryResult metricsResult,
+		IReadOnlyList<SimilarIncidentMatch> similarIncidents)
 	{
 		var evidence = new List<IncidentAnalysisEvidenceItem>
 		{
@@ -331,6 +343,16 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 			});
 		}
 
+		foreach (var similar in similarIncidents)
+		{
+			evidence.Add(new IncidentAnalysisEvidenceItem
+			{
+				Summary = $"Similar previous incident: {similar.IncidentSummary}",
+				Source = $"history.incident.{similar.IncidentId}",
+				Details = $"Score {similar.Score:0.00}; {similar.ServiceName}/{similar.Environment}; prior action: {similar.ResolutionSummary}"
+			});
+		}
+
 		return evidence;
 	}
 
@@ -338,7 +360,8 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 		Incident incident,
 		RunbookRetrievalResult runbookResult,
 		LogSearchResult logResult,
-		MetricsQueryResult metricsResult)
+		MetricsQueryResult metricsResult,
+		IReadOnlyList<SimilarIncidentMatch> similarIncidents)
 	{
 		var hypotheses = new List<IncidentHypothesis>
 		{
@@ -412,6 +435,23 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 			});
 		}
 
+		var strongestSimilar = similarIncidents.FirstOrDefault();
+		if (strongestSimilar is not null)
+		{
+			hypotheses.Add(new IncidentHypothesis
+			{
+				Description = $"This incident resembles previous incident '{strongestSimilar.IncidentSummary}'.",
+				InferenceStrength = strongestSimilar.Score >= 0.55 ? "Strong" : "Medium",
+				Confidence = strongestSimilar.Score >= 0.55 ? "Medium" : "Low",
+				SupportingEvidence =
+				[
+					$"Shared signals: {string.Join(", ", strongestSimilar.SharedSignals.Take(6))}.",
+					$"Prior action: {strongestSimilar.ResolutionSummary}."
+				],
+				EvidenceReferences = [$"history.incident.{strongestSimilar.IncidentId}"]
+			});
+		}
+
 		return hypotheses;
 	}
 
@@ -419,7 +459,8 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 		Incident incident,
 		RunbookRetrievalResult runbookResult,
 		LogSearchResult logResult,
-		MetricsQueryResult metricsResult)
+		MetricsQueryResult metricsResult,
+		IReadOnlyList<SimilarIncidentMatch> similarIncidents)
 	{
 		var actions = new List<IncidentActionRecommendation>();
 
@@ -434,33 +475,9 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 			});
 		}
 
-		actions.Add(new IncidentActionRecommendation
-		{
-			Description = "Confirm current blast radius and affected users.",
-			Priority = "High",
-			Rationale = "You need impact scope before choosing remediation.",
-			SupportingSignals = logResult.Entries.Count > 0 ? ["incident.description", "tool.logs"] : ["incident.description"]
-		});
-
-		actions.Add(new IncidentActionRecommendation
-		{
-			Description = "Review recent deployments, config changes, and dependency health.",
-			Priority = "High",
-			Rationale = "This often explains sudden regressions.",
-			SupportingSignals = ["rag.runbooks", "tool.logs", "tool.metrics"]
-		});
-
-		actions.Add(new IncidentActionRecommendation
-		{
-			Description = "Collect supporting logs and metrics before making a remediation decision.",
-			Priority = "Medium",
-			Rationale = "Evidence should drive the next action.",
-			SupportingSignals = ["tool.logs", "tool.metrics"]
-		});
-
 		if (incident.Severity is IncidentSeverity.High)
 		{
-			actions.Insert(0, new IncidentActionRecommendation
+			actions.Add(new IncidentActionRecommendation
 			{
 				Description = "Prioritize investigation of the most affected service path first.",
 				Priority = "High",
@@ -471,14 +488,56 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 
 		if (runbookResult.Runbooks.Count > 0)
 		{
+			actions.AddRange(BuildRunbookStepActions(runbookResult.Runbooks));
+		}
+
+		var similar = similarIncidents.FirstOrDefault();
+		if (similar is not null)
+		{
 			actions.Add(new IncidentActionRecommendation
 			{
-				Description = $"Follow the most relevant retrieved runbook: {runbookResult.Runbooks[0].Title}.",
+				Description = $"Compare against previous similar incident '{similar.IncidentSummary}' before choosing mitigation.",
 				Priority = "High",
-				Rationale = "RAG found operational guidance that matches the incident context.",
-				SupportingSignals = [$"rag.runbook.{runbookResult.Runbooks[0].Id}"]
+				Rationale = $"History match score {similar.Score:0.00}; previous action was: {similar.ResolutionSummary}",
+				SupportingSignals = [$"history.incident.{similar.IncidentId}"]
 			});
 		}
+
+		if (logResult.Entries.Count > 0)
+		{
+			var entry = logResult.Entries
+				.OrderByDescending(log => log.Timestamp)
+				.First();
+			actions.Add(new IncidentActionRecommendation
+			{
+				Description = $"Use the newest {entry.Source} log signal to validate whether the failure is still active: {entry.Message}.",
+				Priority = "High",
+				Rationale = "The newest matching log is the freshest operational clue available to the agent.",
+				SupportingSignals = ["tool.logs"]
+			});
+		}
+
+		if (metricsResult.Samples.Count > 0)
+		{
+			var latest = metricsResult.Samples
+				.OrderByDescending(sample => sample.Timestamp)
+				.First();
+			actions.Add(new IncidentActionRecommendation
+			{
+				Description = $"Verify the current {metricsResult.MetricName} trend after mitigation; latest sample is {latest.Value:0.##}.",
+				Priority = "High",
+				Rationale = "Resolution should be checked against the live metric, not only the initial symptom.",
+				SupportingSignals = ["tool.metrics"]
+			});
+		}
+
+		actions.Add(new IncidentActionRecommendation
+		{
+			Description = "Confirm current blast radius and affected users before broad mitigation.",
+			Priority = "High",
+			Rationale = "Impact scope determines whether to roll back, scale, disable traffic, or escalate.",
+			SupportingSignals = logResult.Entries.Count > 0 ? ["incident.description", "tool.logs"] : ["incident.description"]
+		});
 
 		if (metricsResult.Samples.Count == 0)
 		{
@@ -492,5 +551,79 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 		}
 
 		return actions;
+	}
+
+	private static IReadOnlyList<IncidentActionRecommendation> MergeRecommendedActions(
+		IReadOnlyList<IncidentActionRecommendation> deterministicActions,
+		IReadOnlyList<IncidentActionRecommendation>? agentActions)
+	{
+		var merged = new List<IncidentActionRecommendation>();
+		if (agentActions is { Count: > 0 })
+		{
+			merged.AddRange(agentActions);
+		}
+
+		merged.AddRange(deterministicActions);
+
+		return merged
+			.GroupBy(action => NormalizeAction(action.Description), StringComparer.OrdinalIgnoreCase)
+			.Select(group => group.First())
+			.Take(10)
+			.ToArray();
+	}
+
+	private static IReadOnlyList<IncidentActionRecommendation> BuildRunbookStepActions(IReadOnlyList<RunbookDocument> runbooks)
+	{
+		return runbooks
+			.SelectMany(runbook => ExtractActionPhrases(runbook)
+				.Select(action => new IncidentActionRecommendation
+				{
+					Description = action,
+					Priority = IsMitigationRunbook(runbook) ? "High" : "Medium",
+					Rationale = $"Concrete step extracted from retrieved runbook '{runbook.Title}'.",
+					SupportingSignals = [$"rag.runbook.{runbook.Id}"]
+				}))
+			.Take(4)
+			.ToArray();
+	}
+
+	private static IEnumerable<string> ExtractActionPhrases(RunbookDocument runbook)
+	{
+		var lines = runbook.Content
+			.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+			.Select(line => line.Trim('-', '*', ' ', '\t'))
+			.Select(line => Regex.Replace(line, @"^\d+\.\s*", string.Empty))
+			.Where(line => line.Length is >= 12 and <= 180)
+			.Where(line => StartsWithActionVerb(line))
+			.Select(line => line.EndsWith('.') ? line : $"{line}.")
+			.Distinct(StringComparer.OrdinalIgnoreCase);
+
+		foreach (var line in lines)
+		{
+			yield return line;
+		}
+	}
+
+	private static bool StartsWithActionVerb(string value)
+	{
+		var verbs = new[]
+		{
+			"Check", "Confirm", "Review", "Identify", "Compare", "Roll back", "Restart", "Scale",
+			"Disable", "Enable", "Escalate", "Notify", "Inspect", "Query", "Validate", "Collect"
+		};
+
+		return verbs.Any(verb => value.StartsWith(verb, StringComparison.OrdinalIgnoreCase));
+	}
+
+	private static bool IsMitigationRunbook(RunbookDocument runbook)
+	{
+		return runbook.Title.Contains("Mitigation", StringComparison.OrdinalIgnoreCase)
+			|| runbook.Content.Contains("roll back", StringComparison.OrdinalIgnoreCase)
+			|| runbook.Content.Contains("restart", StringComparison.OrdinalIgnoreCase);
+	}
+
+	private static string NormalizeAction(string description)
+	{
+		return Regex.Replace(description.ToLowerInvariant(), "[^a-z0-9]+", " ").Trim();
 	}
 }

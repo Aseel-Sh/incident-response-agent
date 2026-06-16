@@ -24,5 +24,7 @@ public sealed record RecentIncidentAnalysisResponse
 
 	public string? Notes { get; init; }
 
+	public IReadOnlyList<ActionOutcomeResponse> ActionOutcomes { get; init; } = Array.Empty<ActionOutcomeResponse>();
+
 	public required DateTimeOffset CreatedAtUtc { get; init; }
 }

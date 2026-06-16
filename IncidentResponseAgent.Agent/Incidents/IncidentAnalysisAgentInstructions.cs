@@ -12,13 +12,15 @@ public sealed class IncidentAnalysisAgentInstructions
 		IncidentAnalysisSessionContext? sessionContext,
 		IReadOnlyCollection<RunbookDocument> runbooks,
 		IReadOnlyList<string> logHighlights,
-		IReadOnlyList<string> metricHighlights)
+		IReadOnlyList<string> metricHighlights,
+		IReadOnlyList<SimilarIncidentMatch> similarIncidents)
 	{
 		ArgumentNullException.ThrowIfNull(incident);
 		ArgumentNullException.ThrowIfNull(profile);
 		ArgumentNullException.ThrowIfNull(runbooks);
 		ArgumentNullException.ThrowIfNull(logHighlights);
 		ArgumentNullException.ThrowIfNull(metricHighlights);
+		ArgumentNullException.ThrowIfNull(similarIncidents);
 
 		return $$"""
 You are {{profile.Name}}, an incident analysis agent.
@@ -85,6 +87,9 @@ Log evidence:
 
 Metric evidence:
 {{BuildBulletSection(metricHighlights)}}
+
+Similar previous incidents:
+{{BuildSimilarIncidentSection(similarIncidents)}}
 """;
 	}
 
@@ -106,6 +111,17 @@ Metric evidence:
 		}
 
 		return string.Join(Environment.NewLine, items.Select(item => $"- {item}"));
+	}
+
+	private static string BuildSimilarIncidentSection(IReadOnlyList<SimilarIncidentMatch> similarIncidents)
+	{
+		if (similarIncidents.Count == 0)
+		{
+			return "- None found.";
+		}
+
+		return string.Join(Environment.NewLine, similarIncidents.Select(incident =>
+			$"- {incident.IncidentSummary} ({incident.ServiceName}/{incident.Environment}, score {incident.Score:0.00}): previous action: {incident.ResolutionSummary}"));
 	}
 
 	private static string BuildSessionSection(IncidentAnalysisSessionContext? sessionContext)

@@ -15,15 +15,18 @@ public sealed class IncidentsController : ControllerBase
     private readonly IAnalyzeIncidentUseCase _analyzeIncidentUseCase;
     private readonly IGetRecentIncidentAnalysesUseCase _getRecentIncidentAnalysesUseCase;
     private readonly IIncidentSignalMonitor _incidentSignalMonitor;
+    private readonly IIncidentRecordStore _incidentRecordStore;
 
     public IncidentsController(
         IAnalyzeIncidentUseCase analyzeIncidentUseCase,
         IGetRecentIncidentAnalysesUseCase getRecentIncidentAnalysesUseCase,
-        IIncidentSignalMonitor incidentSignalMonitor)
+        IIncidentSignalMonitor incidentSignalMonitor,
+        IIncidentRecordStore incidentRecordStore)
     {
         _analyzeIncidentUseCase = analyzeIncidentUseCase;
         _getRecentIncidentAnalysesUseCase = getRecentIncidentAnalysesUseCase;
         _incidentSignalMonitor = incidentSignalMonitor;
+        _incidentRecordStore = incidentRecordStore;
     }
 
     [HttpPost("analyze")]
@@ -47,6 +50,7 @@ public sealed class IncidentsController : ControllerBase
 
         return Ok(new IncidentAnalysisResponse
         {
+            IncidentId = result.IncidentId,
             SessionId = result.SessionId,
             SessionTurnNumber = result.SessionTurnNumber,
             SessionContextSummary = result.SessionContextSummary,
@@ -77,9 +81,40 @@ public sealed class IncidentsController : ControllerBase
                 Rationale = action.Rationale,
                 SupportingSignals = action.SupportingSignals
             }).ToArray(),
+            ActionOutcomes = result.ActionOutcomes.Select(ToOutcomeResponse).ToArray(),
             Confidence = result.Confidence,
             Notes = result.Notes
         });
+    }
+
+    [HttpPost("{incidentId:guid}/outcomes")]
+    [ProducesResponseType(typeof(ActionOutcomeResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<ActionOutcomeResponse>> AddOutcomeAsync(
+        Guid incidentId,
+        [FromBody] ActionOutcomeRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(request.Description))
+        {
+            return BadRequest("Action outcome description is required.");
+        }
+
+        try
+        {
+            var outcome = await _incidentRecordStore.AddActionOutcomeAsync(
+                incidentId,
+                request.Description,
+                request.Status,
+                cancellationToken);
+
+            return Ok(ToOutcomeResponse(outcome));
+        }
+        catch (KeyNotFoundException)
+        {
+            return NotFound();
+        }
     }
 
     [HttpGet("recent")]
@@ -103,6 +138,7 @@ public sealed class IncidentsController : ControllerBase
             SessionTurnNumber = result.SessionTurnNumber,
             Confidence = result.Confidence,
             Notes = result.Notes,
+            ActionOutcomes = result.ActionOutcomes.Select(ToOutcomeResponse).ToArray(),
             CreatedAtUtc = result.CreatedAtUtc
         }).ToArray());
     }
@@ -131,5 +167,15 @@ public sealed class IncidentsController : ControllerBase
     private static IncidentSeverity ParseSeverity(string severity)
     {
         return Enum.Parse<IncidentSeverity>(severity, ignoreCase: true);
+    }
+
+    private static ActionOutcomeResponse ToOutcomeResponse(IncidentActionOutcome outcome)
+    {
+        return new ActionOutcomeResponse
+        {
+            Description = outcome.Description,
+            Status = outcome.Status,
+            LoggedAtUtc = outcome.LoggedAtUtc
+        };
     }
 }

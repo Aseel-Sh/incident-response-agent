@@ -33,6 +33,7 @@ public sealed class OperationsController : ControllerBase
 		var metricPath = ResolveFilePath(_operationalDataOptions.MetricSamplesPath, Path.Combine("Tools", "SampleData", "metrics.json"));
 		var runbookPath = ResolveDirectoryPath(_runbookRetrievalOptions.KnowledgeBasePath, Path.Combine("Runbooks", "KnowledgeBase"));
 		var runbookDatabasePath = ResolveLocalDataFilePath(_runbookRetrievalOptions.DatabasePath, "runbook-rag.sqlite");
+		var qdrantEnabled = string.Equals(_runbookRetrievalOptions.VectorStoreProvider, "Qdrant", StringComparison.OrdinalIgnoreCase);
 		var sessionDatabasePath = ResolveLocalDataFilePath(_incidentStorageOptions.SessionDatabasePath, "incident-sessions.sqlite");
 		var incidentRecordsPath = ResolveLocalDataFilePath(_incidentStorageOptions.IncidentRecordsPath, "incident-records.json");
 
@@ -45,7 +46,9 @@ public sealed class OperationsController : ControllerBase
 				Mode = string.IsNullOrWhiteSpace(_operationalDataOptions.LogEntriesPath) ? "sample" : "configured",
 				Location = logPath,
 				Status = System.IO.File.Exists(logPath) ? "connected" : "missing",
-				Description = "The detector searches this JSON file for errors, warnings, timeouts, latency, backlog, failures, and HTTP 500 signals."
+				Description = "The detector searches this JSON file for errors, warnings, timeouts, latency, backlog, failures, and HTTP 500 signals.",
+				IsDemoMode = string.IsNullOrWhiteSpace(_operationalDataOptions.LogEntriesPath),
+				Capabilities = ["file override", "HTTP ingestion", "polling detection"]
 			},
 			new OperationalSourceResponse
 			{
@@ -54,7 +57,9 @@ public sealed class OperationsController : ControllerBase
 				Mode = string.IsNullOrWhiteSpace(_operationalDataOptions.MetricSamplesPath) ? "sample" : "configured",
 				Location = metricPath,
 				Status = System.IO.File.Exists(metricPath) ? "connected" : "missing",
-				Description = "The detector reads this JSON file for request error rate and queue depth threshold breaches."
+				Description = "The detector reads this JSON file for request error rate and queue depth threshold breaches.",
+				IsDemoMode = string.IsNullOrWhiteSpace(_operationalDataOptions.MetricSamplesPath),
+				Capabilities = ["file override", "HTTP ingestion", "threshold detection"]
 			},
 			new OperationalSourceResponse
 			{
@@ -63,16 +68,24 @@ public sealed class OperationsController : ControllerBase
 				Mode = string.IsNullOrWhiteSpace(_runbookRetrievalOptions.KnowledgeBasePath) ? "bundled" : "configured",
 				Location = runbookPath,
 				Status = Directory.Exists(runbookPath) ? "connected" : "missing",
-				Description = "RAG chunks Markdown runbooks from this folder and retrieves matching guidance during analysis."
+				Description = "RAG chunks Markdown runbooks from this folder and retrieves matching guidance during analysis.",
+				IsDemoMode = string.IsNullOrWhiteSpace(_runbookRetrievalOptions.KnowledgeBasePath),
+				Capabilities = ["markdown RAG", "configurable folder", "SQLite vector cache"]
 			},
 			new OperationalSourceResponse
 			{
 				Name = "Vector Search",
 				Type = "database",
 				Mode = _runbookRetrievalOptions.VectorStoreProvider,
-				Location = $"{_runbookRetrievalOptions.QdrantEndpoint} / {_runbookRetrievalOptions.QdrantCollectionName}",
-				Status = "configured",
-				Description = "The app tries this Qdrant collection first when the provider is enabled."
+				Location = qdrantEnabled
+					? $"{_runbookRetrievalOptions.QdrantEndpoint} / {_runbookRetrievalOptions.QdrantCollectionName}"
+					: runbookDatabasePath,
+				Status = qdrantEnabled ? "configured" : (System.IO.File.Exists(runbookDatabasePath) ? "connected" : "pending"),
+				Description = qdrantEnabled
+					? "The app tries this Qdrant collection first when the provider is enabled."
+					: "SQLite is the configured local vector store for runbook retrieval.",
+				IsDemoMode = false,
+				Capabilities = qdrantEnabled ? ["Qdrant primary", "SQLite fallback"] : ["SQLite primary", "local embeddings", "semantic retrieval cache"]
 			},
 			new OperationalSourceResponse
 			{
@@ -81,7 +94,9 @@ public sealed class OperationsController : ControllerBase
 				Mode = "sqlite-fallback",
 				Location = runbookDatabasePath,
 				Status = System.IO.File.Exists(runbookDatabasePath) ? "connected" : "pending",
-				Description = "SQLite stores indexed runbook chunks and embeddings, and is the persistent fallback when Qdrant is unavailable."
+				Description = "SQLite stores indexed runbook chunks and embeddings, and is the persistent fallback when Qdrant is unavailable.",
+				IsDemoMode = false,
+				Capabilities = ["local embeddings", "semantic retrieval cache"]
 			},
 			new OperationalSourceResponse
 			{
@@ -90,7 +105,9 @@ public sealed class OperationsController : ControllerBase
 				Mode = string.IsNullOrWhiteSpace(_incidentStorageOptions.SessionDatabasePath) ? "local" : "configured",
 				Location = sessionDatabasePath,
 				Status = System.IO.File.Exists(sessionDatabasePath) ? "connected" : "pending",
-				Description = "Multi-turn analysis uses this SQLite database to remember the previous incident and analysis summary for each session ID."
+				Description = "Multi-turn analysis uses this SQLite database to remember the previous incident and analysis summary for each session ID.",
+				IsDemoMode = false,
+				Capabilities = ["multi-turn context", "session continuity"]
 			},
 			new OperationalSourceResponse
 			{
@@ -99,7 +116,9 @@ public sealed class OperationsController : ControllerBase
 				Mode = string.IsNullOrWhiteSpace(_incidentStorageOptions.IncidentRecordsPath) ? "local" : "configured",
 				Location = incidentRecordsPath,
 				Status = System.IO.File.Exists(incidentRecordsPath) ? "connected" : "pending",
-				Description = "Recent analyses are saved here so the History tab can show previous runs."
+				Description = "Recent analyses are saved here so the History tab can show previous runs and analysis can retrieve similar past incidents.",
+				IsDemoMode = false,
+				Capabilities = ["recent history", "similar incident retrieval"]
 			}
 		});
 	}

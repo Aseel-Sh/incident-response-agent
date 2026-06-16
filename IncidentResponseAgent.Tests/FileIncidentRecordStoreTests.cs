@@ -40,6 +40,56 @@ public sealed class FileIncidentRecordStoreTests : IDisposable
 		Assert.Equal(incident.Id, recent[0].Incident.Id);
 	}
 
+	[Fact]
+	public async Task FindSimilarAsyncReturnsRelatedPriorIncident()
+	{
+		var recordsPath = Path.Combine(_rootPath, "incident-records.json");
+		var store = new FileIncidentRecordStore(Options.Create(new IncidentStorageOptions { IncidentRecordsPath = recordsPath }));
+		var priorIncident = new Incident(
+			Guid.NewGuid(),
+			"Checkout 5xx spike",
+			"Checkout API returned HTTP 500 after deployment.",
+			IncidentSeverity.High,
+			"checkout-api",
+			"production",
+			tags: ["checkout", "5xx", "deploy"]);
+		var priorAnalysis = new IncidentAnalysisResult
+		{
+			IncidentId = priorIncident.Id,
+			IncidentSummary = "Checkout API 5xx spike after deploy.",
+			AnalysisText = "{}",
+			AnalysisProvider = "local-prompt",
+			SessionId = "session-1",
+			SessionTurnNumber = 1,
+			RecommendedActions =
+			[
+				new IncidentActionRecommendation
+				{
+					Description = "Roll back the checkout-api deployment.",
+					Priority = "High"
+				}
+			],
+			Confidence = "Medium"
+		};
+		await store.SaveAsync(priorIncident, priorAnalysis);
+
+		var currentIncident = new Incident(
+			Guid.NewGuid(),
+			"Checkout 500s after deploy",
+			"Customers see checkout HTTP 500 responses.",
+			IncidentSeverity.High,
+			"checkout-api",
+			"production",
+			tags: ["checkout", "5xx"]);
+
+		var matches = await store.FindSimilarAsync(currentIncident, 3);
+
+		Assert.Single(matches);
+		Assert.Equal(priorIncident.Id, matches[0].IncidentId);
+		Assert.Contains("Roll back", matches[0].ResolutionSummary);
+		Assert.Contains("checkout", matches[0].SharedSignals);
+	}
+
 	public void Dispose()
 	{
 		if (Directory.Exists(_rootPath))

@@ -17,6 +17,69 @@ public sealed class OpenAIIncidentAnalysisAgent : IIncidentAnalysisAgent
 	{
 		PropertyNameCaseInsensitive = true
 	};
+	private static readonly object AnalysisResponseSchema = new
+	{
+		type = "object",
+		properties = new
+		{
+			summary = new { type = "string" },
+			evidence = new
+			{
+				type = "array",
+				items = new
+				{
+					type = "object",
+					properties = new
+					{
+						summary = new { type = "string" },
+						source = new { type = "string" },
+						details = new { type = "string" }
+					},
+					required = new[] { "summary", "source", "details" },
+					additionalProperties = false
+				}
+			},
+			hypotheses = new
+			{
+				type = "array",
+				items = new
+				{
+					type = "object",
+					properties = new
+					{
+						description = new { type = "string" },
+						inferenceStrength = new { type = "string", @enum = new[] { "Strong", "Medium", "Weak" } },
+						confidence = new { type = "string", @enum = new[] { "High", "Medium", "Low" } },
+						supportingEvidence = new { type = "array", items = new { type = "string" } },
+						evidenceReferences = new { type = "array", items = new { type = "string" } }
+					},
+					required = new[] { "description", "inferenceStrength", "confidence", "supportingEvidence", "evidenceReferences" },
+					additionalProperties = false
+				}
+			},
+			recommendedActions = new
+			{
+				type = "array",
+				items = new
+				{
+					type = "object",
+					properties = new
+					{
+						description = new { type = "string" },
+						priority = new { type = "string", @enum = new[] { "Critical", "High", "Medium", "Low" } },
+						rationale = new { type = "string" },
+						supportingSignals = new { type = "array", items = new { type = "string" } }
+					},
+					required = new[] { "description", "priority", "rationale", "supportingSignals" },
+					additionalProperties = false
+				}
+			},
+			confidence = new { type = "string", @enum = new[] { "High", "Medium", "Low" } },
+			notes = new { type = "string" }
+		},
+		required = new[] { "summary", "evidence", "hypotheses", "recommendedActions", "confidence", "notes" },
+		additionalProperties = false
+	};
 
 	private readonly IncidentAnalysisAgentOptions _options;
 	private readonly ILogger<OpenAIIncidentAnalysisAgent> _logger;
@@ -49,7 +112,7 @@ public sealed class OpenAIIncidentAnalysisAgent : IIncidentAnalysisAgent
 
 		var endpoint = ResolveOption(_options.Endpoint, "IRA_AGENT_ENDPOINT");
 		var model = ResolveOption(_options.Model, "IRA_AGENT_MODEL");
-		var apiKey = ResolveOption(_options.ApiKey, "IRA_AGENT_API_KEY");
+		var apiKey = ResolveOption(_options.ApiKey, "IRA_AGENT_API_KEY", "OPENROUTER_API_KEY");
 
 		if (string.IsNullOrWhiteSpace(endpoint))
 		{
@@ -228,12 +291,33 @@ Use exactly this schema:
 									sample.Timestamp,
 									sample.Value
 								}).ToArray()
-							}
+							},
+							similarIncidents = context.SimilarIncidents.Select(incident => new
+							{
+								incident.IncidentId,
+								incident.IncidentSummary,
+								incident.ServiceName,
+								incident.Environment,
+								incident.ResolutionSummary,
+								incident.Score,
+								incident.SharedSignals,
+								incident.CreatedAtUtc
+							}).ToArray()
 						}
 					}, SerializerOptions)
 				}
 			},
-			response_format = new { type = "json_object" },
+			response_format = new
+			{
+				type = "json_schema",
+				json_schema = new
+				{
+					name = "incident_analysis",
+					strict = true,
+					schema = AnalysisResponseSchema
+				}
+			},
+			provider = new { require_parameters = true },
 			max_tokens = Math.Clamp(_options.MaxOutputTokens, 256, 4096),
 			temperature = _options.Temperature
 		};
@@ -258,15 +342,23 @@ Use exactly this schema:
 			: new Uri($"{trimmed}/chat/completions");
 	}
 
-	private static string? ResolveOption(string? configuredValue, string environmentVariableName)
+	private static string? ResolveOption(string? configuredValue, params string[] environmentVariableNames)
 	{
 		if (!string.IsNullOrWhiteSpace(configuredValue))
 		{
 			return configuredValue.Trim();
 		}
 
-		var environmentValue = Environment.GetEnvironmentVariable(environmentVariableName);
-		return string.IsNullOrWhiteSpace(environmentValue) ? null : environmentValue.Trim();
+		foreach (var environmentVariableName in environmentVariableNames)
+		{
+			var environmentValue = Environment.GetEnvironmentVariable(environmentVariableName);
+			if (!string.IsNullOrWhiteSpace(environmentValue))
+			{
+				return environmentValue.Trim();
+			}
+		}
+
+		return null;
 	}
 
 	private static string BuildRunbookQuery(Incident incident)

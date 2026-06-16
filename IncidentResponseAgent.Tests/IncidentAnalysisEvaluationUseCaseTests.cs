@@ -100,9 +100,25 @@ public sealed class IncidentAnalysisEvaluationUseCaseTests
 			return Task.FromResult(_records.FirstOrDefault(record => record.Incident.Id == incidentId));
 		}
 
+		public Task<IncidentActionOutcome> AddActionOutcomeAsync(Guid incidentId, string description, string status, CancellationToken cancellationToken = default)
+		{
+			var outcome = new IncidentActionOutcome
+			{
+				Description = description,
+				Status = status,
+				LoggedAtUtc = DateTimeOffset.UtcNow
+			};
+			return Task.FromResult(outcome);
+		}
+
 		public Task<IReadOnlyList<IncidentAnalysisRecord>> GetRecentAsync(int maxResults, CancellationToken cancellationToken = default)
 		{
 			return Task.FromResult<IReadOnlyList<IncidentAnalysisRecord>>(_records.Take(maxResults).ToArray());
+		}
+
+		public Task<IReadOnlyList<SimilarIncidentMatch>> FindSimilarAsync(Incident incident, int maxResults, CancellationToken cancellationToken = default)
+		{
+			return Task.FromResult<IReadOnlyList<SimilarIncidentMatch>>(Array.Empty<SimilarIncidentMatch>());
 		}
 	}
 

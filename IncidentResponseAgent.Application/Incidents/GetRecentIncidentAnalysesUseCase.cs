@@ -26,6 +26,7 @@ public sealed class GetRecentIncidentAnalysesUseCase : IGetRecentIncidentAnalyse
 			SessionTurnNumber = record.AnalysisResult.SessionTurnNumber,
 			Confidence = record.AnalysisResult.Confidence,
 			Notes = record.AnalysisResult.Notes,
+			ActionOutcomes = record.AnalysisResult.ActionOutcomes,
 			CreatedAtUtc = record.CreatedAtUtc
 		}).ToArray();
 	}

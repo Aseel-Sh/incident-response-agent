@@ -28,6 +28,8 @@ public sealed record IncidentAnalysisResult
 
 	public IReadOnlyList<IncidentActionRecommendation> RecommendedActions { get; init; } = Array.Empty<IncidentActionRecommendation>();
 
+	public IReadOnlyList<IncidentActionOutcome> ActionOutcomes { get; init; } = Array.Empty<IncidentActionOutcome>();
+
 	public string? Confidence { get; init; }
 
 	public string? Notes { get; init; }
