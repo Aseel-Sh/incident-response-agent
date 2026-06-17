@@ -161,18 +161,7 @@ public sealed class PromptBasedIncidentAnalysisAgent : IIncidentAnalysisAgent
 					EvidenceReferences = ["agent.local", "rag.runbooks", "tool.logs", "tool.metrics", "history.incidents"]
 				}
 			],
-			RecommendedActions =
-			[
-				new IncidentActionRecommendation
-				{
-					Description = "Confirm blast radius, review recent changes, and follow the most relevant runbook.",
-					Priority = "High",
-					Rationale = primarySimilar is null
-						? "The local fallback can summarize gathered signals but cannot perform model reasoning."
-						: $"A similar previous incident exists: {primarySimilar.IncidentSummary}.",
-					SupportingSignals = ["rag.runbooks", "tool.logs", "tool.metrics", "history.incidents"]
-				}
-			],
+			RecommendedActions = BuildLocalRecommendations(runbooks, logResult, metricsResult, similarIncidents),
 			Confidence = "Low",
 			Notes = "Local prompt-based fallback produced this analysis."
 		};
@@ -186,6 +175,119 @@ public sealed class PromptBasedIncidentAnalysisAgent : IIncidentAnalysisAgent
 			confidence = structured.Confidence,
 			notes = structured.Notes
 		}, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+	}
+
+	private static IReadOnlyList<IncidentActionRecommendation> BuildLocalRecommendations(
+		IReadOnlyCollection<RunbookDocument> runbooks,
+		LogSearchResult logResult,
+		MetricsQueryResult metricsResult,
+		IReadOnlyList<SimilarIncidentMatch> similarIncidents)
+	{
+		var actions = new List<IncidentActionRecommendation>();
+
+		foreach (var runbook in runbooks.Take(2))
+		{
+			foreach (var step in ExtractRunbookSteps(runbook).Take(2))
+			{
+				actions.Add(new IncidentActionRecommendation
+				{
+					Description = step,
+					Priority = "High",
+					Rationale = $"Retrieved from matching runbook '{runbook.Title}'.",
+					SupportingSignals = [$"rag.runbook.{runbook.Id}"]
+				});
+			}
+		}
+
+		var latestLog = logResult.Entries.OrderByDescending(entry => entry.Timestamp).FirstOrDefault();
+		if (latestLog is not null)
+		{
+			actions.Add(new IncidentActionRecommendation
+			{
+				Description = $"Validate whether the latest {latestLog.Source} log signal is still active: {latestLog.Message}.",
+				Priority = "High",
+				Rationale = "The local fallback found a concrete matching log signal.",
+				SupportingSignals = ["tool.logs"]
+			});
+		}
+
+		var latestMetric = metricsResult.Samples.OrderByDescending(sample => sample.Timestamp).FirstOrDefault();
+		if (latestMetric is not null)
+		{
+			actions.Add(new IncidentActionRecommendation
+			{
+				Description = $"Re-check {metricsResult.MetricName} after each mitigation; latest sample is {latestMetric.Value:0.##}.",
+				Priority = "High",
+				Rationale = "Mitigation should be verified against the metric that triggered or supports the incident.",
+				SupportingSignals = ["tool.metrics"]
+			});
+		}
+
+		var similar = similarIncidents.FirstOrDefault();
+		if (similar is not null)
+		{
+			actions.Add(new IncidentActionRecommendation
+			{
+				Description = BuildSimilarIncidentAction(similar),
+				Priority = "High",
+				Rationale = $"Automatically matched a previous incident with score {similar.Score:0.00}.",
+				SupportingSignals = [$"history.incident.{similar.IncidentId}"]
+			});
+		}
+
+		if (actions.Count == 0)
+		{
+			actions.Add(new IncidentActionRecommendation
+			{
+				Description = "Gather at least one current log or metric signal before choosing mitigation.",
+				Priority = "High",
+				Rationale = "No concrete operational signals were available to the local fallback.",
+				SupportingSignals = ["incident.description"]
+			});
+		}
+
+		return actions.Take(6).ToArray();
+	}
+
+	private static string BuildSimilarIncidentAction(SimilarIncidentMatch similar)
+	{
+		var priorAction = string.IsNullOrWhiteSpace(similar.ResolutionSummary)
+			? "reuse the previously successful mitigation pattern"
+			: similar.ResolutionSummary;
+
+		if (priorAction.StartsWith("Worked:", StringComparison.OrdinalIgnoreCase))
+		{
+			return $"Apply the prior successful mitigation from '{similar.IncidentSummary}': {priorAction["Worked:".Length..].Trim()}";
+		}
+
+		return $"Use the prior response pattern from '{similar.IncidentSummary}': {priorAction}";
+	}
+
+	private static IEnumerable<string> ExtractRunbookSteps(RunbookDocument runbook)
+	{
+		var verbs = new[] { "Check", "Confirm", "Review", "Identify", "Compare", "Roll back", "Restart", "Scale", "Disable", "Enable", "Escalate", "Inspect", "Query", "Validate", "Collect" };
+		return runbook.Content
+			.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+			.Select(line => line.Trim('-', '*', '#', ' ', '\t'))
+			.Select(line => StripNumberPrefix(line))
+			.Where(line => line.Length is >= 12 and <= 150)
+			.Where(line => !line.Contains("...", StringComparison.Ordinal) && !line.Contains('…'))
+			.Where(line => verbs.Any(verb => line.StartsWith(verb, StringComparison.OrdinalIgnoreCase)))
+			.Select(line => line.EndsWith('.') ? line : $"{line}.")
+			.Distinct(StringComparer.OrdinalIgnoreCase);
+	}
+
+	private static string StripNumberPrefix(string value)
+	{
+		var index = 0;
+		while (index < value.Length && char.IsDigit(value[index]))
+		{
+			index++;
+		}
+
+		return index < value.Length && value[index] == '.'
+			? value[(index + 1)..].Trim()
+			: value;
 	}
 
 	private static IReadOnlyList<string> BuildLogHighlights(LogSearchResult logResult)

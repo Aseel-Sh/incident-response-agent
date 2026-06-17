@@ -496,9 +496,9 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 		{
 			actions.Add(new IncidentActionRecommendation
 			{
-				Description = $"Compare against previous similar incident '{similar.IncidentSummary}' before choosing mitigation.",
+				Description = BuildSimilarIncidentAction(similar),
 				Priority = "High",
-				Rationale = $"History match score {similar.Score:0.00}; previous action was: {similar.ResolutionSummary}",
+				Rationale = $"Automatically matched previous incident '{similar.IncidentSummary}' with score {similar.Score:0.00}.",
 				SupportingSignals = [$"history.incident.{similar.IncidentId}"]
 			});
 		}
@@ -560,7 +560,7 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 		var merged = new List<IncidentActionRecommendation>();
 		if (agentActions is { Count: > 0 })
 		{
-			merged.AddRange(agentActions);
+			merged.AddRange(agentActions.Where(action => !IsLowValueFallbackAction(action.Description)));
 		}
 
 		merged.AddRange(deterministicActions);
@@ -587,13 +587,28 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 			.ToArray();
 	}
 
+	private static string BuildSimilarIncidentAction(SimilarIncidentMatch similar)
+	{
+		var priorAction = string.IsNullOrWhiteSpace(similar.ResolutionSummary)
+			? "reuse the previously successful mitigation pattern"
+			: similar.ResolutionSummary;
+
+		if (priorAction.StartsWith("Worked:", StringComparison.OrdinalIgnoreCase))
+		{
+			return $"Apply the prior successful mitigation from '{similar.IncidentSummary}': {priorAction["Worked:".Length..].Trim()}";
+		}
+
+		return $"Use the prior response pattern from '{similar.IncidentSummary}': {priorAction}";
+	}
+
 	private static IEnumerable<string> ExtractActionPhrases(RunbookDocument runbook)
 	{
 		var lines = runbook.Content
 			.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
 			.Select(line => line.Trim('-', '*', ' ', '\t'))
 			.Select(line => Regex.Replace(line, @"^\d+\.\s*", string.Empty))
-			.Where(line => line.Length is >= 12 and <= 180)
+			.Where(line => line.Length is >= 12 and <= 150)
+			.Where(line => !line.Contains("...", StringComparison.Ordinal) && !line.Contains('…'))
 			.Where(line => StartsWithActionVerb(line))
 			.Select(line => line.EndsWith('.') ? line : $"{line}.")
 			.Distinct(StringComparer.OrdinalIgnoreCase);
@@ -625,5 +640,11 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 	private static string NormalizeAction(string description)
 	{
 		return Regex.Replace(description.ToLowerInvariant(), "[^a-z0-9]+", " ").Trim();
+	}
+
+	private static bool IsLowValueFallbackAction(string description)
+	{
+		var normalized = NormalizeAction(description);
+		return normalized is "confirm blast radius review recent changes and follow the most relevant runbook";
 	}
 }

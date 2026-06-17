@@ -8,5 +8,7 @@ public sealed record IncidentAnalysisRecord
 
 	public required IncidentAnalysisResult AnalysisResult { get; init; }
 
+	public string Status { get; init; } = "new";
+
 	public required DateTimeOffset CreatedAtUtc { get; init; }
 }

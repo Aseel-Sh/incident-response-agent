@@ -62,7 +62,11 @@ app.UseHttpsRedirection();
 
 app.UseAuthorization();
 
-app.MapGet("/health", () => Results.Ok(new { status = "Healthy" }))
+app.MapGet("/health", () => Results.Ok(new
+    {
+        status = "Healthy",
+        version = typeof(Program).Assembly.GetName().Version?.ToString(3) ?? "1.0.0"
+    }))
     .WithName("Health");
 
 app.MapControllers();

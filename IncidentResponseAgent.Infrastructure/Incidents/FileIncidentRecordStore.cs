@@ -53,6 +53,7 @@ public sealed class FileIncidentRecordStore : IIncidentRecordStore
 			{
 				Incident = incident,
 				AnalysisResult = analysisResult,
+				Status = records.TryGetValue(incident.Id, out var existing) ? existing.Status : "new",
 				CreatedAtUtc = DateTimeOffset.UtcNow
 			};
 
@@ -94,6 +95,29 @@ public sealed class FileIncidentRecordStore : IIncidentRecordStore
 				.ToArray();
 
 			return records;
+		}
+		finally
+		{
+			_fileLock.Release();
+		}
+	}
+
+	public async Task<string> UpdateStatusAsync(Guid incidentId, string status, CancellationToken cancellationToken = default)
+	{
+		var normalizedStatus = NormalizeIncidentStatus(status);
+
+		await _fileLock.WaitAsync(cancellationToken);
+		try
+		{
+			var records = await ReadRecordsAsync(cancellationToken);
+			if (!records.TryGetValue(incidentId, out var record))
+			{
+				throw new KeyNotFoundException($"Incident record {incidentId} was not found.");
+			}
+
+			records[incidentId] = record with { Status = normalizedStatus };
+			await WriteRecordsAsync(records.Values, cancellationToken);
+			return normalizedStatus;
 		}
 		finally
 		{
@@ -293,5 +317,16 @@ public sealed class FileIncidentRecordStore : IIncidentRecordStore
 	{
 		var normalized = string.IsNullOrWhiteSpace(status) ? "worked" : status.Trim().ToLowerInvariant();
 		return normalized is "worked" or "partial" or "failed" ? normalized : "worked";
+	}
+
+	private static string NormalizeIncidentStatus(string status)
+	{
+		var normalized = string.IsNullOrWhiteSpace(status) ? "active" : status.Trim().ToLowerInvariant();
+		if (normalized is "ack" or "acknowledged")
+		{
+			return "active";
+		}
+
+		return normalized is "new" or "active" or "mitigated" or "resolved" ? normalized : "active";
 	}
 }

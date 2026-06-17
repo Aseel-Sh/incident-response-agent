@@ -160,10 +160,12 @@ public sealed class OpenAIIncidentAnalysisAgent : IIncidentAnalysisAgent
 		}
 
 		var completion = JsonSerializer.Deserialize<ChatCompletionResponse>(responseText, SerializerOptions);
-		var content = completion?.Choices.FirstOrDefault()?.Message.Content;
+		var content = completion?.Choices
+			.Select(choice => choice.Message.Content)
+			.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
 		if (string.IsNullOrWhiteSpace(content))
 		{
-			throw new InvalidOperationException("OpenAI-compatible provider returned an empty analysis response.");
+			throw new InvalidOperationException("The configured model returned an empty message.");
 		}
 
 		_logger.LogInformation(

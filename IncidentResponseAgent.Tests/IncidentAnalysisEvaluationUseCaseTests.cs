@@ -100,6 +100,11 @@ public sealed class IncidentAnalysisEvaluationUseCaseTests
 			return Task.FromResult(_records.FirstOrDefault(record => record.Incident.Id == incidentId));
 		}
 
+		public Task<string> UpdateStatusAsync(Guid incidentId, string status, CancellationToken cancellationToken = default)
+		{
+			return Task.FromResult(status);
+		}
+
 		public Task<IncidentActionOutcome> AddActionOutcomeAsync(Guid incidentId, string description, string status, CancellationToken cancellationToken = default)
 		{
 			var outcome = new IncidentActionOutcome

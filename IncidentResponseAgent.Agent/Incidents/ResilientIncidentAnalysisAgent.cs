@@ -81,6 +81,18 @@ public sealed class ResilientIncidentAnalysisAgent : IIncidentAnalysisAgent
 			? exception.GetType().Name
 			: exception.Message.Trim();
 
+		if (message.Contains("empty message", StringComparison.OrdinalIgnoreCase)
+		    || message.Contains("empty analysis response", StringComparison.OrdinalIgnoreCase))
+		{
+			return "Model returned empty output; local analysis used the gathered runbooks, logs, metrics, and incident history.";
+		}
+
+		if (message.Contains("429", StringComparison.OrdinalIgnoreCase)
+		    || message.Contains("Too Many Requests", StringComparison.OrdinalIgnoreCase))
+		{
+			return "Model provider is rate-limited; local analysis used the gathered runbooks, logs, metrics, and incident history.";
+		}
+
 		if (message.Length > 220)
 		{
 			message = string.Concat(message.AsSpan(0, 217), "...");

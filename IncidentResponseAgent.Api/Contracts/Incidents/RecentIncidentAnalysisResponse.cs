@@ -26,5 +26,7 @@ public sealed record RecentIncidentAnalysisResponse
 
 	public IReadOnlyList<ActionOutcomeResponse> ActionOutcomes { get; init; } = Array.Empty<ActionOutcomeResponse>();
 
+	public string Status { get; init; } = "active";
+
 	public required DateTimeOffset CreatedAtUtc { get; init; }
 }

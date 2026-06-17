@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>incidentOps</title>
-  <link rel="stylesheet" href="/styles.css?v=20260615-figma-truth-pass-4">
+  <link rel="stylesheet" href="/styles.css?v=20260617-toolbar-rag-2">
 </head>
 <body>
   <div class="app-shell">
@@ -25,9 +25,8 @@
         <button class="nav-tab" type="button" data-tab="config" data-icon="database">Config</button>
       </nav>
       <div class="sidebar-footer">
-        <span id="appVersion">v2.4.1</span>
-        <span>Last scan: 2m ago</span>
-        <button id="themeToggle" class="theme-toggle icon-only" type="button" data-icon="moon" aria-label="Toggle theme"></button>
+        <span id="appVersion">v...</span>
+        <span id="sidebarLastScan">Last scan: not run</span>
       </div>
     </aside>
 
@@ -46,24 +45,26 @@
 
       <section id="dashboardView" class="tab-view active">
         <div id="sourceModeBanner" class="mode-banner"></div>
-        <dl class="metric-strip">
-          <div><dt>New</dt><dd id="newCount">0</dd></div>
-          <div><dt>Investigating</dt><dd id="investigatingCount">0</dd></div>
-          <div><dt>Mitigated</dt><dd id="mitigatedCount">0</dd></div>
-          <div><dt>Resolved</dt><dd id="resolvedCount">0</dd></div>
+        <dl class="metric-strip dashboard-stats">
+          <div class="stat-new"><dt>New</dt><dd id="newCount">0</dd></div>
+          <div class="stat-active"><dt>Investigating</dt><dd id="investigatingCount">0</dd></div>
+          <div class="stat-mitigated"><dt>Mitigated</dt><dd id="mitigatedCount">0</dd></div>
+          <div class="stat-resolved"><dt>Resolved</dt><dd id="resolvedCount">0</dd></div>
         </dl>
         <section class="panel">
           <div class="toolbar backlog-toolbar">
-            <input id="incidentSearch" type="search" placeholder="Search by title or service...">
-            <button id="manualIncidentButton" class="secondary compact-button" type="button" data-icon="play">Create Incident</button>
+            <label class="search-field" aria-label="Search incidents">
+              <span data-icon="search"></span>
+              <input id="incidentSearch" type="search" placeholder="Search by title or service...">
+            </label>
             <div id="statusFilters" class="chip-row">
               <button class="filter-chip active" type="button" data-status="all">All</button>
               <button class="filter-chip" type="button" data-status="new">New</button>
-              <button class="filter-chip" type="button" data-status="ack">Ack</button>
               <button class="filter-chip" type="button" data-status="active">Active</button>
               <button class="filter-chip" type="button" data-status="mitigated">Mitigated</button>
               <button class="filter-chip" type="button" data-status="resolved">Resolved</button>
             </div>
+            <button id="manualIncidentButton" class="secondary compact-button" type="button" data-icon="play">Create Incident</button>
           </div>
           <div id="detectedOutput" class="incident-backlog"></div>
         </section>
@@ -81,16 +82,15 @@
               <button id="sampleButton" class="secondary compact-button" type="button" data-icon="wand">Sample</button>
             </div>
             <form id="incidentForm" class="form-grid">
-              <label class="wide">Title<input name="title" required maxlength="200" value="Checkout 5xx spike"></label>
+              <label class="wide">Title<input name="title" required maxlength="200" value="Orders worker queue backlog growth"></label>
               <label>Severity<select name="severity" required><option>Low</option><option>Medium</option><option selected>High</option><option>Critical</option></select></label>
-              <label>Service<input name="serviceName" value="checkout-api"></label>
-              <label>Environment<input name="environment" value="production"></label>
+              <label>Service<input name="serviceName" value="orders-worker"></label>
+              <label>Environment<input name="environment" value="prod"></label>
               <label>Session ID<input name="sessionId" placeholder="optional follow-up session"></label>
-              <label class="wide">Tags<input name="tags" value="checkout, 5xx, latency"></label>
-              <label class="wide">Description<textarea name="description" required maxlength="5000">Customers are seeing intermittent 500 responses during checkout. Error rate increased after the latest deployment.</textarea></label>
+              <label class="wide">Tags<input name="tags" value="queue, backlog, orders"></label>
+              <label class="wide">Description<textarea name="description" required maxlength="5000">Order fulfillment jobs are piling up faster than workers can process them. Customers are seeing delayed confirmations after checkout.</textarea></label>
               <div class="actions wide">
                 <button id="analyzeButton" type="submit" data-icon="play">Analyze</button>
-                <button id="recentButton" class="secondary" type="button" data-icon="history">Refresh history</button>
               </div>
             </form>
           </section>
@@ -109,11 +109,12 @@
         <div class="section-title history-filters">
           <div class="filter-icon" data-icon="search"></div>
           <select id="historyServiceFilter" aria-label="Service filter"><option value="all">All services</option></select>
+          <select id="historyStatusFilter" aria-label="Status filter"><option value="all">All statuses</option></select>
           <select id="historySeverityFilter" aria-label="Severity filter"><option value="all">All severities</option></select>
           <select id="historyConfidenceFilter" aria-label="Confidence filter"><option value="all">All confidence</option></select>
           <select id="historyProviderFilter" aria-label="Provider filter"><option value="all">All providers</option></select>
           <span id="historyResultCount" class="meta">0 results</span>
-          <button id="historyReloadButton" class="secondary compact-button hidden-control" type="button" data-icon="refresh">Reload</button>
+          <button id="historyReloadButton" class="icon-refresh-button" type="button" data-icon="refresh" aria-label="Refresh history"></button>
         </div>
         <section class="panel">
           <div class="history-layout">
@@ -182,7 +183,7 @@
 
       <section id="evaluationView" class="tab-view">
         <div class="page-heading">
-          <h2>Evaluation</h2>
+          <h2><span data-icon="check"></span>Evaluation</h2>
           <p>Run scenarios and compare output against rubric items</p>
         </div>
         <section class="panel">
@@ -232,6 +233,6 @@
       <div id="historyDetail" class="history-detail"><p class="eyebrow">Selected run</p><h3 id="historyModalTitle">No analysis selected</h3><p class="meta">Choose a saved run to inspect evidence, actions, and provider mode.</p></div>
     </section>
   </div>
-  <script src="/app.js?v=20260615-figma-truth-pass-4"></script>
+  <script src="/app.js?v=20260617-toolbar-rag-2"></script>
 </body>
 </html>

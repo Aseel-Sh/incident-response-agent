@@ -117,6 +117,25 @@ public sealed class IncidentsController : ControllerBase
         }
     }
 
+    [HttpPut("{incidentId:guid}/status")]
+    [ProducesResponseType(typeof(object), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<object>> UpdateStatusAsync(
+        Guid incidentId,
+        [FromBody] IncidentStatusRequest request,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var status = await _incidentRecordStore.UpdateStatusAsync(incidentId, request.Status, cancellationToken);
+            return Ok(new { status });
+        }
+        catch (KeyNotFoundException)
+        {
+            return NotFound();
+        }
+    }
+
     [HttpGet("recent")]
     [ProducesResponseType(typeof(IReadOnlyList<RecentIncidentAnalysisResponse>), StatusCodes.Status200OK)]
     public async Task<ActionResult<IReadOnlyList<RecentIncidentAnalysisResponse>>> GetRecentAsync(
@@ -139,6 +158,7 @@ public sealed class IncidentsController : ControllerBase
             Confidence = result.Confidence,
             Notes = result.Notes,
             ActionOutcomes = result.ActionOutcomes.Select(ToOutcomeResponse).ToArray(),
+            Status = result.Status,
             CreatedAtUtc = result.CreatedAtUtc
         }).ToArray());
     }

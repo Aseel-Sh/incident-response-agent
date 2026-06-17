@@ -6,6 +6,8 @@ const $ = (selector) => {
 
 const elements = {
   health: $("#healthStatus"),
+  appVersion: $("#appVersion"),
+  sidebarLastScan: $("#sidebarLastScan"),
   demoPill: $("#demoModePill"),
   sourceBanner: $("#sourceModeBanner"),
   incidentSearch: $("#incidentSearch"),
@@ -19,9 +21,9 @@ const elements = {
   analysisStatus: $("#analysisStatus"),
   analysisOutput: $("#analysisOutput"),
   sample: $("#sampleButton"),
-  recent: $("#recentButton"),
   historyReload: $("#historyReloadButton"),
   historyServiceFilter: $("#historyServiceFilter"),
+  historyStatusFilter: $("#historyStatusFilter"),
   historySeverityFilter: $("#historySeverityFilter"),
   historyConfidenceFilter: $("#historyConfidenceFilter"),
   historyProviderFilter: $("#historyProviderFilter"),
@@ -41,7 +43,6 @@ const elements = {
   ingestionFeedback: $("#ingestionFeedback"),
   config: $("#configOutput"),
   toast: $("#toastRegion"),
-  theme: $("#themeToggle"),
   pollingSlider: $("#pollingIntervalSlider"),
   pollingValue: $("#pollingIntervalValue"),
   manualRefresh: $("#manualRefreshButton")
@@ -82,27 +83,36 @@ let activeIncidentMeta = null;
 let lastScanState = null;
 let currentAnalysisAt = null;
 let currentIncidentId = null;
+let dashboardPage = 1;
+let historyPage = 1;
+const pageSize = 10;
 
 document.querySelectorAll(".nav-tab").forEach((button) => button.addEventListener("click", () => activateTab(button.dataset.tab)));
 document.querySelectorAll(".filter-chip").forEach((button) => {
   button.addEventListener("click", () => {
     document.querySelectorAll(".filter-chip").forEach((item) => item.classList.toggle("active", item === button));
     activeStatus = button.dataset.status;
+    dashboardPage = 1;
     renderDetected();
   });
 });
 
-elements.theme.addEventListener("click", () => {
-  document.documentElement.dataset.theme = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
-});
 elements.scan.addEventListener("click", toggleTheme);
-elements.incidentSearch.addEventListener("input", renderDetected);
+elements.incidentSearch.addEventListener("input", () => {
+  dashboardPage = 1;
+  renderDetected();
+});
 elements.manualIncident.addEventListener("click", showManualIncidentForm);
 elements.sample.addEventListener("click", loadSampleIncident);
-elements.recent.addEventListener("click", () => loadRecent());
-elements.historyReload.addEventListener("click", () => loadRecent());
-[elements.historyServiceFilter, elements.historySeverityFilter, elements.historyConfidenceFilter, elements.historyProviderFilter].forEach((select) => {
-  select.addEventListener("change", renderHistory);
+elements.historyReload.addEventListener("click", async () => {
+  await loadRecent();
+  showToast("History refreshed", "Saved incidents reloaded.", "success");
+});
+[elements.historyServiceFilter, elements.historyStatusFilter, elements.historySeverityFilter, elements.historyConfidenceFilter, elements.historyProviderFilter].forEach((select) => {
+  select.addEventListener("change", () => {
+    historyPage = 1;
+    renderHistory();
+  });
 });
 elements.incidentForm.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -145,6 +155,11 @@ elements.historyModalClose.addEventListener("click", closeHistoryModal);
 elements.historyModal.addEventListener("click", (event) => {
   if (event.target === elements.historyModal) closeHistoryModal();
 });
+elements.historyDetail.addEventListener("click", async (event) => {
+  const button = event.target.closest("[data-ticket-status]");
+  if (!button) return;
+  await updateIncidentStatus(button.dataset.incidentId, button.dataset.ticketStatus);
+});
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && !elements.historyModal.hidden) closeHistoryModal();
 });
@@ -153,8 +168,21 @@ function toggleTheme() {
   document.documentElement.dataset.theme = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
 }
 elements.detected.addEventListener("click", async (event) => {
+  const pageButton = event.target.closest("[data-dashboard-page]");
+  if (pageButton) {
+    dashboardPage = Number(pageButton.dataset.dashboardPage);
+    renderDetected();
+    return;
+  }
+
   const button = event.target.closest("button[data-action]");
   if (!button) return;
+  if (button.dataset.action === "open-ticket") {
+    const item = recentAnalyses.find((analysis) => analysis.incidentId === button.dataset.id);
+    if (item) renderHistoryDetail(item);
+    return;
+  }
+
   const item = detectedCandidates.find((candidate) => candidate.id === button.dataset.id);
   if (!item) return;
   fillIncidentForm(item);
@@ -163,6 +191,13 @@ elements.detected.addEventListener("click", async (event) => {
   if (button.dataset.action === "analyze") await analyzeCurrentIncident();
 });
 elements.recentOutput.addEventListener("click", (event) => {
+  const pageButton = event.target.closest("[data-history-page]");
+  if (pageButton) {
+    historyPage = Number(pageButton.dataset.historyPage);
+    renderHistory();
+    return;
+  }
+
   const button = event.target.closest("[data-history-id]");
   if (!button) return;
   const item = recentAnalyses.find((analysis) => analysis.incidentId === button.dataset.historyId);
@@ -252,9 +287,11 @@ async function checkHealth() {
     const result = await requestJson("/health");
     elements.health.textContent = result.status;
     elements.health.className = "status-pill status-connected";
+    elements.appVersion.textContent = result.version ? `v${result.version}` : "v1.0.0";
   } catch {
     elements.health.textContent = "API down";
     elements.health.className = "status-pill status-missing";
+    elements.appVersion.textContent = "version unavailable";
   }
 }
 
@@ -281,7 +318,12 @@ function renderSourceBanner() {
 
 async function loadDetected(userInitiated = false) {
   const startedAt = performance.now();
-  if (userInitiated) setFeedback(elements.scanFeedback, "Scanning", "Checking logs and metrics now.", "pending");
+  if (userInitiated) {
+    setFeedback(elements.scanFeedback, "Scanning", "Checking logs and metrics now.", "pending");
+    elements.manualRefresh.disabled = true;
+    elements.lastScan.innerHTML = renderLoadingState("Scanning sources...");
+    hydrateIcons(elements.lastScan);
+  }
   try {
     detectedCandidates = normalizeArray(await requestJson("/api/incidents/detected"));
     const connectedSources = sourceRows.filter((source) => ["connected", "configured"].includes(String(source.status).toLowerCase())).length;
@@ -304,38 +346,71 @@ async function loadDetected(userInitiated = false) {
       scannedAt: new Date()
     };
     elements.lastScan.innerHTML = renderMonitorSummary(detectedCandidates);
+    renderSidebarLastScan();
     if (userInitiated) setFeedback(elements.scanFeedback, "Scan failed", error.message || String(error), "missing");
+    hydrateIcons(elements.lastScan);
+    elements.manualRefresh.disabled = false;
     throw error;
   }
   elements.lastScan.innerHTML = renderMonitorSummary(detectedCandidates);
+  renderSidebarLastScan();
+  hydrateIcons(elements.lastScan);
   updateCounts();
   renderDetected();
   if (userInitiated) setFeedback(elements.scanFeedback, "Last scan result", `Scanned ${lastScanState.scannedSources} sources - found ${lastScanState.signalsFound} signals, ${lastScanState.errors} errors.`, lastScanState.errors ? "warning" : "connected");
+  elements.manualRefresh.disabled = false;
 }
 
 function renderDetected() {
   const query = elements.incidentSearch.value.trim().toLowerCase();
-  const rows = detectedCandidates
+  const rows = buildDashboardRows()
+    .filter((item) => activeStatus === "all" ? item.statusKey !== "resolved" : item.statusKey === activeStatus)
+    .filter((item) => !query || [item.title, item.serviceName, item.environment, item.source, item.provider, ...(item.signals || []), ...(item.tags || [])].join(" ").toLowerCase().includes(query));
+  const page = paginateRows(rows, dashboardPage);
+  dashboardPage = page.page;
+  elements.detected.innerHTML = page.items.map(renderBacklogRow).join("") || `<div class="empty-state">No incidents match the current filter.</div>`;
+  elements.detected.insertAdjacentHTML("beforeend", renderPagination("dashboard", page, "data-dashboard-page"));
+  hydrateIcons(elements.detected);
+}
+
+function buildDashboardRows() {
+  const tickets = historyRows.map((row) => ({
+    id: row.incidentId,
+    rowKind: "ticket",
+    incidentNumber: row.displayId,
+    title: row.summary,
+    severity: formatSeverityLabel(row.severity),
+    serviceName: row.service,
+    environment: row.environment,
+    detectedAtUtc: row.createdAtUtc,
+    statusKey: row.status,
+    statusLabel: formatStatusLabel(row.status),
+    confidence: row.confidence,
+    provider: row.provider,
+    tags: row.tags
+  }));
+  const ticketTitles = new Set(tickets.map((ticket) => normalizeAction(ticket.title)));
+  const signals = detectedCandidates
     .map(enrichCandidate)
-    .filter((item) => activeStatus === "all" || item.statusKey === activeStatus)
-    .filter((item) => !query || [item.title, item.serviceName, item.environment, item.source, ...(item.signals || [])].join(" ").toLowerCase().includes(query));
-  elements.detected.innerHTML = rows.map(renderBacklogRow).join("") || `<div class="empty-state">No incidents match the current filter.</div>`;
+    .filter((signal) => !ticketTitles.has(normalizeAction(signal.title)));
+  return [...tickets, ...signals];
 }
 
 function enrichCandidate(item, index) {
-  const statuses = ["investigating", "acknowledged", "mitigated", "new", "resolved"];
-  const statusKey = item.severity === "Critical" ? "investigating" : statuses[index % statuses.length];
   return {
     ...item,
+    rowKind: "signal",
     incidentNumber: `INC-${String(2487 - index).padStart(4, "0")}`,
-    statusKey,
-    statusLabel: statusKey === "acknowledged" ? "Acknowledged" : statusKey[0].toUpperCase() + statusKey.slice(1),
+    statusKey: "new",
+    statusLabel: "New",
     confidence: item.severity === "Critical" || item.severity === "Medium" ? "high" : item.severity === "High" ? "medium" : "low",
     provider: item.severity === "Low" ? "struct" : item.severity === "Medium" ? "local" : "model"
   };
 }
 
 function renderBacklogRow(item) {
+  const action = item.rowKind === "ticket" ? "open-ticket" : "analyze";
+  const confidence = normalizeConfidence(item.confidence).toLowerCase();
   return `
     <article class="backlog-row">
       <div>
@@ -346,27 +421,35 @@ function renderBacklogRow(item) {
           <span class="badge badge-info">${escapeHtml(item.provider)}</span>
         </div>
         <h3>${escapeHtml(formatIncidentTitle(item.title))}</h3>
-        <p><span>${escapeHtml(item.serviceName || "unknown")}</span><span>${escapeHtml(item.environment || "unknown")}</span><span>${escapeHtml(item.confidence)} conf.</span></p>
+        <p><span>${escapeHtml(item.serviceName || "unknown")}</span><span class="badge meta-badge">${escapeHtml(item.environment || "unknown")}</span><span class="conf-label confidence-${escapeHtml(confidence)}">${escapeHtml(confidence)} conf.</span></p>
       </div>
       <div class="row-side">
-        <span>${escapeHtml(formatAgo(item.detectedAtUtc))}</span>
-        <button class="icon-row-button" type="button" data-action="analyze" data-id="${escapeHtml(item.id)}">&rsaquo;</button>
+        <button class="icon-row-button" type="button" data-action="${escapeHtml(action)}" data-id="${escapeHtml(item.id)}">&rsaquo;</button>
+        <span class="time-ago"><span data-icon="clock"></span>${escapeHtml(formatAgo(item.detectedAtUtc))}</span>
       </div>
     </article>
   `;
 }
 
 function updateCounts() {
-  const enriched = detectedCandidates.map(enrichCandidate);
-  $("#newCount").textContent = enriched.filter((item) => item.statusKey === "new").length || 1;
-  $("#investigatingCount").textContent = enriched.filter((item) => item.statusKey === "investigating" || item.statusKey === "acknowledged").length || 1;
-  $("#mitigatedCount").textContent = enriched.filter((item) => item.statusKey === "mitigated").length || 1;
-  $("#resolvedCount").textContent = enriched.filter((item) => item.statusKey === "resolved").length || 1;
+  const rows = buildDashboardRows();
+  $("#newCount").textContent = rows.filter((item) => item.statusKey === "new").length;
+  $("#investigatingCount").textContent = rows.filter((item) => item.statusKey === "active").length;
+  $("#mitigatedCount").textContent = rows.filter((item) => item.statusKey === "mitigated").length;
+  $("#resolvedCount").textContent = rows.filter((item) => item.statusKey === "resolved").length;
 }
 
 function loadSampleIncident() {
   document.querySelector(".analysis-layout").classList.add("show-input");
-  fillIncidentForm({ title: "P95 latency spike on checkout-service", description: "Checkout latency increased after deployment with database connection backlog.", severity: "Critical", serviceName: "checkout-service", environment: "prod", detectedAtUtc: new Date().toISOString(), suggestedTags: ["latency", "checkout", "database"] });
+  fillIncidentForm({
+    title: "Orders worker queue backlog growth",
+    description: "Order fulfillment jobs are piling up faster than workers can process them. Customers are seeing delayed confirmations after checkout.",
+    severity: "High",
+    serviceName: "orders-worker",
+    environment: "prod",
+    detectedAtUtc: new Date().toISOString(),
+    suggestedTags: ["queue", "backlog", "orders"]
+  });
 }
 
 function fillIncidentForm(item) {
@@ -388,7 +471,7 @@ async function analyzeCurrentIncident() {
   }
   elements.analysisStatus.textContent = "Running retrieval, evidence gathering, and model/fallback analysis...";
   elements.analysisOutput.className = "empty-state";
-  elements.analysisOutput.innerHTML = `<div class="empty-state">Analyzing incident...</div>`;
+  elements.analysisOutput.innerHTML = renderLoadingState("Analyzing incident...");
   const form = new FormData(elements.incidentForm);
   const payload = {
     title: form.get("title"),
@@ -449,7 +532,7 @@ function renderAnalysis(result) {
     ${renderHypothesisBlock(result.rootCauseHypotheses.map((item) => item.description))}
     ${renderEvidenceBlock(result.retrievedEvidence)}
     ${renderRunbookSteps(runbookActions)}
-    ${renderRecommendedActions(result.recommendedActions.map((item) => item.description))}
+    ${renderRecommendedActions(result.recommendedActions)}
     ${renderSimilarBlock(similar)}
     ${renderActionOutcomeBlock(result.actionOutcomes)}
   `;
@@ -469,13 +552,20 @@ function renderHypothesisBlock(rows) {
 }
 
 function renderRecommendedActions(rows) {
-  return `<section class="analysis-card recommended-card"><h3><span data-icon="wand"></span>Recommended actions</h3><div class="action-lines">${(rows || []).slice(0, 5).map((row) => `<p><span data-icon="arrow"></span>${escapeHtml(row)}</p>`).join("") || "<p>No recommended actions returned.</p>"}</div></section>`;
+  return `<section class="analysis-card recommended-card"><h3><span data-icon="wand"></span>Recommended actions</h3><div class="action-lines">${(rows || []).slice(0, 7).map(renderActionLine).join("") || "<p>No recommended actions returned.</p>"}</div></section>`;
+}
+
+function renderActionLine(row) {
+  const action = typeof row === "string" ? { description: row } : row;
+  return `<div class="action-line"><span data-icon="arrow"></span><div><p>${escapeHtml(action.description)}</p>${action.rationale ? `<small>${escapeHtml(action.rationale)}</small>` : ""}</div></div>`;
 }
 
 function renderEvidenceBlock(evidence) {
-  const visible = (evidence || []).filter((item) => ["tool.logs", "tool.metrics"].includes(String(item.source || ""))).slice(0, 5);
-  const evidenceTime = formatReadableTime(currentAnalysisAt);
-  return `<section class="analysis-card evidence-card"><h3><span data-icon="activity"></span>Evidence (${visible.length})</h3>${visible.map((item) => `<div class="evidence-line"><div class="evidence-meta"><span class="badge evidence-${escapeHtml(evidenceKind(item.source))}">${escapeHtml(formatEvidenceSource(item.source))}</span><span></span>${evidenceTime ? `<time>${escapeHtml(evidenceTime)}</time>` : ""}</div><div class="code-row"><code>${escapeHtml(item.summary)}</code><button type="button" class="copy-code-button" data-copy-code aria-label="Copy evidence"><span data-icon="copy"></span></button></div></div>`).join("") || `<p class="meta">No evidence returned.</p>`}</section>`;
+  const visible = (evidence || []).slice(0, 7);
+  return `<section class="analysis-card evidence-card"><h3><span data-icon="activity"></span>Evidence (${visible.length})</h3>${visible.map((item) => {
+    const evidenceTime = formatEvidenceTime(item.details) || formatReadableTime(currentAnalysisAt);
+    return `<div class="evidence-line"><div class="evidence-meta"><span class="evidence-label evidence-${escapeHtml(evidenceKind(item.source))}">${escapeHtml(formatEvidenceSource(item.source))}</span>${evidenceTime ? `<time>${escapeHtml(evidenceTime)}</time>` : ""}</div><div class="code-row"><code>${escapeHtml(item.summary)}</code><button type="button" class="copy-code-button" data-copy-code aria-label="Copy evidence"><span data-icon="copy"></span></button></div></div>`;
+  }).join("") || `<p class="meta">No evidence returned.</p>`}</section>`;
 }
 
 function renderRunbookSteps(actions) {
@@ -484,12 +574,13 @@ function renderRunbookSteps(actions) {
 }
 
 function renderSimilarBlock(items) {
-  const visible = items.length ? items : defaultSimilarIncidents();
+  const visible = items || [];
+  if (!visible.length) return "";
   return `<section class="analysis-card similar-card"><h3><span data-icon="history"></span>Similar previous incidents (${visible.length})</h3>${visible.map((item, index) => {
     const id = `INC-${2401 - index}`;
     const percent = similarPercent(item.score, index);
     const scoreClass = scoreColor(percent);
-    return `<div class="similar-line" data-similar-id="${escapeHtml(id)}"><div class="similar-body"><small>${escapeHtml(id)} <span class="badge env-badge">${index === 0 ? "prod" : "staging"}</span> 2026-04-${String(2 + index).padStart(2, "0")}</small><strong>${escapeHtml(item.summary)}</strong><small>${escapeHtml(item.details || "Rolled back deploy, added runbook note")}</small></div><div class="similar-score score-${scoreClass}"><strong>${percent}%</strong><div class="similar-links"><button class="link-inline" type="button" data-history-link="${escapeHtml(id)}">History</button><span aria-hidden="true">&middot;</span><button class="link-inline" type="button" data-compare-incident="${escapeHtml(id)}">Compare</button></div></div></div>`;
+    return `<div class="similar-line" data-similar-id="${escapeHtml(id)}"><div class="similar-body"><small>${escapeHtml(id)} <span class="badge env-badge">${index === 0 ? "prod" : "staging"}</span> 2026-04-${String(2 + index).padStart(2, "0")}</small><strong>${escapeHtml(item.summary)}</strong><small>${escapeHtml(item.details || "Rolled back deploy, added runbook note")}</small></div><div class="similar-score score-${scoreClass}"><strong>${percent}%</strong><div class="similar-links"><button class="link-inline" type="button" data-history-link="${escapeHtml(id)}">History</button><span aria-hidden="true">&middot;</span><button class="link-inline" type="button" data-compare-incident="${escapeHtml(id)}">Compare</button></div></div><div class="score-bar score-${scoreClass}"><span style="width:${percent}%"></span></div></div>`;
   }).join("")}<div id="comparePanel" class="compare-panel" hidden></div></section>`;
 }
 
@@ -520,10 +611,13 @@ async function loadRecent() {
   historyRows = recentAnalyses.map(toHistoryRow);
   populateHistoryFilters(historyRows);
   renderHistory();
+  updateCounts();
+  renderDetected();
 }
 
 function populateHistoryFilters(rows) {
   setSelectOptions(elements.historyServiceFilter, "All services", uniqueValues(rows.map((row) => row.service)));
+  setSelectOptions(elements.historyStatusFilter, "All statuses", uniqueValues(rows.map((row) => row.status)));
   setSelectOptions(elements.historySeverityFilter, "All severities", uniqueValues(rows.map((row) => row.severity)));
   setSelectOptions(elements.historyConfidenceFilter, "All confidence", uniqueValues(rows.map((row) => row.confidence)));
   setSelectOptions(elements.historyProviderFilter, "All providers", uniqueValues(rows.map((row) => row.provider)));
@@ -531,36 +625,92 @@ function populateHistoryFilters(rows) {
 
 function renderHistory() {
   const rows = filterHistoryRows(historyRows);
+  const page = paginateRows(rows, historyPage);
+  historyPage = page.page;
   elements.historyTotal.textContent = recentAnalyses.length;
   elements.historyResultCount.textContent = `${rows.length} result${rows.length === 1 ? "" : "s"}`;
-  elements.recentOutput.innerHTML = renderHistoryTable(rows);
+  elements.recentOutput.innerHTML = renderHistoryTable(page.items, rows.length) + renderPagination("history", page, "data-history-page");
 }
 
 function filterHistoryRows(rows) {
   const service = elements.historyServiceFilter.value;
+  const status = elements.historyStatusFilter.value;
   const severity = elements.historySeverityFilter.value;
   const confidence = elements.historyConfidenceFilter.value;
   const provider = elements.historyProviderFilter.value;
   return rows.filter((row) =>
     (service === "all" || row.service === service) &&
+    (status === "all" || row.status === status) &&
     (severity === "all" || row.severity === severity) &&
     (confidence === "all" || row.confidence === confidence) &&
     (provider === "all" || row.provider === provider));
 }
 
-function renderHistoryTable(rows) {
+function renderHistoryTable(rows, totalRows = rows.length) {
   if (!historyRows.length) return `<div class="empty-state">No saved incidents yet. Use Create Incident or analyze a backlog row to populate history.</div>`;
-  if (!rows.length) return `<div class="empty-state">No incidents match the current filters.</div>`;
-  return `<div class="history-table-wrap"><table class="history-table"><thead><tr><th>ID</th><th>Title</th><th>Service</th><th>Severity</th><th>Status</th><th>Provider</th><th>Confidence</th></tr></thead><tbody>${rows.map((row) => `<tr data-history-id="${escapeHtml(row.incidentId)}" tabindex="0" aria-label="Open ${escapeHtml(row.summary)}"><td>${escapeHtml(row.displayId)}</td><td><button class="link-button" data-history-id="${escapeHtml(row.incidentId)}">${escapeHtml(trimTitle(row.summary))}</button><small>${row.tags.map((tag) => `<span>#${escapeHtml(tag)}</span>`).join(" ")}</small></td><td>${escapeHtml(row.service)}</td><td><span class="severity severity-${escapeHtml(row.severity)}">${escapeHtml(formatSeverityLabel(row.severity))}</span></td><td><span class="badge status-${escapeHtml(row.status)}">${escapeHtml(row.status)}</span></td><td><span class="badge ${row.provider === "model" ? "badge-info" : "badge-warning"}">${escapeHtml(row.provider)}</span></td><td class="confidence-${escapeHtml(row.confidence)}">${escapeHtml(row.confidence)}</td></tr>`).join("")}</tbody></table></div>`;
+  if (!totalRows) return `<div class="empty-state">No incidents match the current filters.</div>`;
+  return `<div class="history-table-wrap"><table class="history-table"><thead><tr><th>ID</th><th>Title</th><th>Service</th><th>Severity</th><th>Status</th><th>Provider</th><th>Confidence</th></tr></thead><tbody>${rows.map((row) => `<tr data-history-id="${escapeHtml(row.incidentId)}" tabindex="0" aria-label="Open ${escapeHtml(row.summary)}"><td>${escapeHtml(row.displayId)}</td><td><button class="link-button" data-history-id="${escapeHtml(row.incidentId)}">${escapeHtml(trimTitle(row.summary))}</button><small>${row.tags.map((tag) => `<span>#${escapeHtml(tag)}</span>`).join(" ")}</small></td><td>${escapeHtml(row.service)}</td><td><span class="severity severity-${escapeHtml(row.severity)}">${escapeHtml(formatSeverityLabel(row.severity))}</span></td><td>${renderStatusText(row.status)}</td><td><span class="badge ${row.provider === "model" ? "badge-info" : "badge-warning"}">${escapeHtml(row.provider)}</span></td><td class="confidence-${escapeHtml(row.confidence)}">${escapeHtml(row.confidence)}</td></tr>`).join("")}</tbody></table></div>`;
+}
+
+function renderStatusText(currentStatus) {
+  const normalized = normalizeIncidentStatus(currentStatus);
+  return `<span class="ticket-status-text status-text-${escapeHtml(normalized)}">${escapeHtml(formatStatusLabel(normalized))}</span>`;
+}
+
+function renderLoadingState(message) {
+  return `<div class="loading-state"><span class="loading-spinner" aria-hidden="true"></span><span>${escapeHtml(message)}</span></div>`;
+}
+
+function renderTicketActions(incidentId, currentStatus) {
+  const normalized = normalizeIncidentStatus(currentStatus);
+  const actionsByStatus = {
+    new: [["active", "Start work"], ["resolved", "Resolve"]],
+    active: [["mitigated", "Mark mitigated"], ["resolved", "Resolve"]],
+    mitigated: [["active", "Reopen"], ["resolved", "Resolve"]],
+    resolved: [["active", "Reopen"]]
+  };
+  const actions = actionsByStatus[normalized] || actionsByStatus.active;
+  return `<div class="ticket-actions">${actions.map(([status, label]) => `<button class="secondary compact-button ticket-action ticket-action-${escapeHtml(status)}" type="button" data-ticket-status="${status}" data-incident-id="${escapeHtml(incidentId)}">${escapeHtml(label)}</button>`).join("")}</div>`;
+}
+
+async function updateIncidentStatus(incidentId, status) {
+  if (!incidentId) return;
+  try {
+    const result = await requestJson(`/api/incidents/${encodeURIComponent(incidentId)}/status`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status })
+    });
+    const normalized = normalizeIncidentStatus(result?.status || status);
+    recentAnalyses = recentAnalyses.map((analysis) => analysis.incidentId === incidentId ? { ...analysis, status: normalized } : analysis);
+    historyRows = historyRows.map((row) => row.incidentId === incidentId ? { ...row, status: normalized } : row);
+    dashboardPage = 1;
+    historyPage = 1;
+    renderHistory();
+    updateCounts();
+    renderDetected();
+    const activeItem = recentAnalyses.find((analysis) => analysis.incidentId === incidentId);
+    if (activeItem && !elements.historyModal.hidden) renderHistoryDetail(activeItem);
+    showToast("Ticket updated", `Status set to ${formatStatusLabel(normalized)}.`, "success");
+  } catch (error) {
+    showToast("Status not saved", error.message || String(error), "error");
+  }
 }
 
 function renderHistoryDetail(item) {
   const parsed = parseJson(item.analysisText);
-  const actions = (parsed?.recommendedActions || []).map((x) => x.description);
+  const actions = parsed?.recommendedActions || [];
   const hypotheses = (parsed?.rootCauseHypotheses || parsed?.hypotheses || []).map((x) => x.description || x);
-  elements.historyDetail.innerHTML = `<p class="eyebrow">Selected run</p><h3 id="historyModalTitle">${escapeHtml(item.incidentSummary)}</h3><p class="meta">Session ${escapeHtml(shortenId(item.sessionId))} - Turn ${item.sessionTurnNumber} - ${escapeHtml(item.confidence || "unknown")} confidence</p><p>${escapeHtml(formatNotes(item.notes))}</p>${parsed ? `${renderRecommendedActions(actions)}${renderHypothesisBlock(hypotheses)}` : `<p class="meta">Stored analysis is plain text for this run.</p>`}${renderOutcomeHistory(item.actionOutcomes)}`;
+  const evidence = parsed?.evidence || parsed?.retrievedEvidence || [];
+  elements.historyDetail.innerHTML = `<p class="eyebrow">Incident ticket</p><div class="modal-title-row"><div><h3 id="historyModalTitle">${escapeHtml(item.incidentSummary)}</h3>${renderStatusText(item.status || "active")}</div>${renderTicketActions(item.incidentId, item.status || "active")}</div><p class="meta">Session ${escapeHtml(shortenId(item.sessionId))} - Turn ${item.sessionTurnNumber} - ${escapeHtml(item.confidence || "unknown")} confidence</p><p>${escapeHtml(formatNotes(item.notes))}</p>${parsed ? `${renderRecommendedActions(actions)}${renderHypothesisBlock(hypotheses)}${renderStoredEvidenceBlock(evidence)}` : `<p class="meta">Stored analysis is plain text for this run.</p>`}${renderOutcomeHistory(item.actionOutcomes)}`;
   elements.historyModal.hidden = false;
   hydrateIcons(elements.historyDetail);
+}
+
+function renderStoredEvidenceBlock(evidence) {
+  const rows = normalizeArray(evidence).slice(0, 8);
+  if (!rows.length) return "";
+  return `<section class="analysis-card evidence-card"><h3><span data-icon="activity"></span>Saved evidence (${rows.length})</h3>${rows.map((item) => `<div class="stored-evidence-line"><strong>${escapeHtml(formatEvidenceSource(item.source))}</strong><p>${escapeHtml(item.summary || item.description || item.details || "Evidence item")}</p>${item.details ? `<small>${escapeHtml(item.details)}</small>` : ""}</div>`).join("")}</section>`;
 }
 
 function closeHistoryModal() {
@@ -569,7 +719,7 @@ function closeHistoryModal() {
 
 function renderSourcesPage(items) {
   const warning = items.some((item) => item.isDemoMode) ? `<div class="warning-banner"><span data-icon="alert"></span>Sample data active - logs and metrics are bundled sample files. Connect real sources for production use.</div>` : "";
-  return `${warning}${items.map(renderSourceCard).join("")}<section class="setup-section"><h3>Real Source Setup</h3><p>Connect your own log, metric, and runbook sources</p><div class="setup-grid"><label>Log file path<input readonly value="/var/log/myapp/app.log or data/logs.json"></label><label>Metrics file path<input readonly value="/metrics/myservice.json"></label><label>Runbook folder<input readonly value="runbook/ or /docs/runbooks/"></label><label>Provider endpoint<input readonly value="https://prometheus.internal/api/v1/ (coming soon)"></label></div></section>`;
+  return `${warning}${items.map(renderSourceCard).join("")}<section class="setup-section"><div class="setup-heading"><div><h3><span data-icon="plug"></span>Real source setup</h3><p>Configured means a path is set. Connected means the app verified it.</p></div></div><div class="setup-steps"><span><strong>1</strong> Set file paths</span><span><strong>2</strong> Refresh monitor</span><span><strong>3</strong> Check RAG hits</span></div><div class="setup-grid"><label>Log file path<input readonly value="/var/log/myapp/app.log or data/logs.json"></label><label>Metrics file path<input readonly value="/metrics/myservice.json"></label><label>Runbook folder<input readonly value="runbook/ or /docs/runbooks/"></label><label>Provider endpoint<input readonly value="https://prometheus.internal/api/v1/ (coming soon)"></label></div></section>`;
 }
 
 function renderSourceCard(item) {
@@ -612,7 +762,7 @@ function renderRagMatch(item) {
   const score = Number(item.score) || 0;
   const color = score >= 0.75 ? "green" : score >= 0.5 ? "yellow" : "red";
   const label = item.sectionPath || (item.tags || [])[0] || "match";
-  return `<article class="result-item rag-match"><div><h3 title="${escapeHtml(item.source || item.runbookId)}">${escapeHtml(shortRunbookName(item.source || item.runbookId))} <span class="badge">${escapeHtml(label)}</span></h3><p>${escapeHtml(item.summary || item.title || "Runbook chunk")}</p></div><div class="match-score score-${color}"><strong>${score.toFixed(2)}</strong></div></article>`;
+  return `<article class="result-item rag-match"><div><h3 title="${escapeHtml(item.source || item.runbookId)}"><span class="runbook-name">${escapeHtml(shortRunbookName(item.source || item.runbookId))}</span><span class="badge">${escapeHtml(label)}</span></h3><p>${escapeHtml(item.summary || item.title || "Runbook chunk")}</p></div><div class="match-score score-${color}"><strong>${score.toFixed(2)}</strong><span class="mini-bar score-${color}"><i style="width:${Math.max(2, Math.min(100, score * 100))}%"></i></span></div></article>`;
 }
 
 async function loadEvaluation() {
@@ -686,14 +836,16 @@ function inferProviderMode(result) {
   const provider = String(result.analysisProvider || "");
   const reason = String(result.fallbackReason || "");
   if (provider.includes("deterministic-structured-fallback") || reason.includes("deterministic structured")) return { label: "Structured fallback", className: "status-warning", description: "Model JSON was invalid; deterministic fields are displayed." };
-  if (result.usedFallbackAnalysis) return { label: "Local fallback", className: "status-warning", description: "Local analyzer summarized gathered evidence." };
+  if (result.usedFallbackAnalysis) return { label: "Local analysis", className: "status-connected", description: "Local evidence-based analyzer summarized runbooks, logs, metrics, and similar incidents." };
   return { label: "Model-backed", className: "status-connected", description: "Structured output came from the configured model." };
 }
 
 function formatProviderMessage(result, mode) {
   const reason = String(result.fallbackReason || "");
-  if (reason.includes("API key is not configured")) return "Local fallback because no agent API key is configured. Set Agent:IncidentAnalysis:ApiKey, OPENROUTER_API_KEY, or IRA_AGENT_API_KEY for model-backed analysis.";
-  return reason || mode.description;
+  if (reason.includes("API key is not configured")) return "Running local analysis because no model API key is configured.";
+  if (reason.includes("empty analysis response") || reason.includes("empty output") || reason.includes("empty message")) return "The model returned an empty response, so local analysis used the gathered evidence instead.";
+  if (reason.includes("429") || reason.includes("Too Many Requests") || reason.includes("rate-limited")) return "The model provider is rate-limited, so local analysis used the gathered evidence instead.";
+  return result.usedFallbackAnalysis ? mode.description : reason || mode.description;
 }
 
 function confidenceRows(result, similar) {
@@ -707,13 +859,6 @@ function confidenceRows(result, similar) {
 
 function extractSimilar(evidence) {
   return (evidence || []).filter((item) => String(item.source || "").startsWith("history.incident.")).map((item) => ({ summary: String(item.summary || "").replace(/^Similar previous incident:\s*/i, ""), details: item.details || "", score: String(item.details || "").match(/Score\s+([0-9.]+)/i)?.[1] })).slice(0, 3);
-}
-
-function defaultSimilarIncidents() {
-  return [
-    { summary: "DB pool exhaustion on checkout-service", details: "Rolled back deploy, added index", score: 0.94 },
-    { summary: "Checkout latency spike post-migration", details: "Added connection timeout config", score: 0.81 }
-  ];
 }
 
 function extractRunbookActions(actions, evidence = []) {
@@ -759,12 +904,24 @@ function formatReadableTime(value) {
   if (!value) return "";
   return new Date(value).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" });
 }
+function formatEvidenceTime(details) {
+  const match = String(details || "").match(/\d{4}-\d{2}-\d{2}T[^\s]+/);
+  return match ? formatReadableTime(match[0]) : "";
+}
 function formatAgo(value) {
-  if (!value) return "2m ago";
-  const minutes = Math.max(1, Math.round((Date.now() - new Date(value).getTime()) / 60000));
+  if (!value) return "not run";
+  const timestamp = new Date(value).getTime();
+  if (!Number.isFinite(timestamp)) return "not run";
+  const minutes = Math.max(0, Math.round((Date.now() - timestamp) / 60000));
+  if (minutes < 1) return "just now";
   if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.round(minutes / 60);
-  return `${hours}h ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days}d ago`;
+  const months = Math.floor(days / 30);
+  if (months < 12) return `${months}mo ago`;
+  return `${Math.floor(days / 365)}y ago`;
 }
 function shortenId(value) { const text = String(value || ""); return text.length > 12 ? `${text.slice(0, 8)}...` : text || "none"; }
 function formatIncidentTitle(title) { return String(title || "").replace("request error rate threshold breached", "error rate threshold").replace("queue depth threshold breached", "queue depth threshold").replace("suspicious log pattern", "log signal"); }
@@ -772,7 +929,9 @@ function formatEvidenceSource(source) { return String(source || "evidence").repl
 function evidenceKind(source) { return String(source || "").includes("metrics") ? "metric" : String(source || "").includes("logs") ? "log" : "generic"; }
 function formatNotes(value) { return String(value || "No notes captured.").trim(); }
 function trimTitle(value) { const text = String(value || "Untitled incident"); return text.length > 31 ? `${text.slice(0, 31)}...` : text; }
+function normalizeAction(value) { return String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim(); }
 function inferService(value) { const text = String(value || "").toLowerCase(); if (text.includes("auth")) return "auth-service"; if (text.includes("notification")) return "notification-worker"; if (text.includes("cdn")) return "cdn-edge"; if (text.includes("user")) return "user-service"; return "checkout-service"; }
+function inferEnvironment(value) { const text = String(value || "").toLowerCase(); if (/\bstaging\b|\bstage\b/.test(text)) return "staging"; if (/\bdev\b|\bdevelopment\b/.test(text)) return "dev"; if (/\btest\b|\bqa\b/.test(text)) return "test"; return "prod"; }
 function shortRunbookName(value) { const text = String(value || "runbook/checkout-db.md").replaceAll("\\", "/"); const match = text.match(/KnowledgeBase\/(.+)$/i); return match ? `runbook/${match[1]}` : text.split("/").slice(-2).join("/"); }
 function parseJson(value) { try { return JSON.parse(value); } catch { return null; } }
 function similarPercent(score, index) { return Math.round((Number(score) || [0.94, 0.81, 0.71][index] || 0.64) * 100); }
@@ -780,6 +939,12 @@ function scoreColor(percent) { return percent >= 90 ? "green" : percent >= 75 ? 
 function formatHistoryId(value, index) { const text = String(value || ""); return text ? `INC-${text.replace(/-/g, "").slice(0, 4).toUpperCase()}` : `INC-${2847 - index}`; }
 function inferSeverity(summary, parsed) { const text = `${summary || ""} ${JSON.stringify(parsed || {})}`.toLowerCase(); if (text.includes("critical")) return "critical"; if (text.includes("high") || text.includes("5xx") || text.includes("latency")) return "high"; if (text.includes("low")) return "low"; return "medium"; }
 function formatSeverityLabel(value) { return ({ critical: "Critical", high: "High", medium: "Medium", low: "Low" })[String(value || "").toLowerCase()] || "Medium"; }
+function formatStatusLabel(value) { return ({ new: "New", active: "Active", mitigated: "Mitigated", resolved: "Resolved" })[String(value || "").toLowerCase()] || "Active"; }
+function normalizeIncidentStatus(value) {
+  const status = String(value || "active").toLowerCase();
+  if (status === "ack") return "active";
+  return ["new", "active", "mitigated", "resolved"].includes(status) ? status : "active";
+}
 function inferHistoryTags(value) {
   const text = String(value || "").toLowerCase();
   const tags = [];
@@ -801,14 +966,30 @@ function toHistoryRow(item, index) {
     notes: formatNotes(item.notes),
     tags: inferHistoryTags(sourceText),
     service: inferService(sourceText),
+    environment: inferEnvironment(sourceText),
     severity: inferSeverity(item.incidentSummary, parsed),
-    status: index === 0 ? "investigating" : "resolved",
+    status: normalizeIncidentStatus(item.status),
     provider: item.usedFallbackAnalysis ? "local" : "model",
     confidence: String(item.confidence || parsed.confidence || "medium").toLowerCase(),
-    actionOutcomes: item.actionOutcomes || []
+    actionOutcomes: item.actionOutcomes || [],
+    createdAtUtc: item.createdAtUtc
   };
 }
 function uniqueValues(values) { return [...new Set(values.filter(Boolean))].sort((a, b) => a.localeCompare(b)); }
+function paginateRows(rows, requestedPage) {
+  const pageCount = Math.max(1, Math.ceil(rows.length / pageSize));
+  const page = Math.min(Math.max(1, Number(requestedPage) || 1), pageCount);
+  const start = (page - 1) * pageSize;
+  return { items: rows.slice(start, start + pageSize), page, pageCount, total: rows.length, start };
+}
+function renderPagination(name, page, attr) {
+  if (page.total <= pageSize) return "";
+  const previous = Math.max(1, page.page - 1);
+  const next = Math.min(page.pageCount, page.page + 1);
+  const start = page.start + 1;
+  const end = Math.min(page.start + page.items.length, page.total);
+  return `<div class="pagination-bar"><span>${start}-${end} of ${page.total}</span><div><button class="secondary compact-button" type="button" ${attr}="${previous}"${page.page === 1 ? " disabled" : ""}>Previous</button><button class="secondary compact-button" type="button" ${attr}="${next}"${page.page === page.pageCount ? " disabled" : ""}>Next</button></div></div>`;
+}
 function setSelectOptions(select, label, values) {
   const previous = select.value;
   select.innerHTML = `<option value="all">${escapeHtml(label)}</option>${values.map((value) => `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`).join("")}`;
@@ -851,6 +1032,10 @@ function renderAnalysisMeta(header, meta) {
 function sourceValue(source) {
   if (!source) return "not reported";
   return `${source.location} (${source.status})`;
+}
+
+function renderSidebarLastScan() {
+  elements.sidebarLastScan.textContent = `Last scan: ${lastScanState?.scannedAt ? formatAgo(lastScanState.scannedAt.toISOString()) : "not run"}`;
 }
 
 async function initialize() {
