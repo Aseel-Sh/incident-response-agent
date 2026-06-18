@@ -33,7 +33,19 @@ public sealed class GetRecentIncidentAnalysesUseCase : IGetRecentIncidentAnalyse
 			Notes = record.AnalysisResult.Notes,
 			ActionOutcomes = record.AnalysisResult.ActionOutcomes,
 			Status = record.Status,
-			CreatedAtUtc = record.CreatedAtUtc
+			CreatedAtUtc = record.CreatedAtUtc,
+			Timeline = record.Timeline,
+			ProposedKnowledgeUpdate = record.ProposedKnowledgeUpdate,
+			Feedback = record.Feedback,
+			KnownFacts = record.AnalysisResult.KnownFacts,
+			Unknowns = record.AnalysisResult.Unknowns,
+			RunbookMatches = record.AnalysisResult.RunbookMatches,
+			Hypotheses = record.AnalysisResult.Hypotheses,
+			RecommendedActions = record.AnalysisResult.RecommendedActions,
+			Evidence = record.AnalysisResult.Evidence,
+			SimilarIncidents = record.AnalysisResult.SimilarIncidents,
+			Quality = record.AnalysisResult.Quality,
+			ProviderTransparency = record.AnalysisResult.ProviderTransparency
 		}).ToArray();
 	}
 }

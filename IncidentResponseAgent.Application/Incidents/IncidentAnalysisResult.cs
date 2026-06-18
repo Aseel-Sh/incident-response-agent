@@ -24,11 +24,23 @@ public sealed record IncidentAnalysisResult
 
 	public IReadOnlyList<IncidentAnalysisEvidenceItem> Evidence { get; init; } = Array.Empty<IncidentAnalysisEvidenceItem>();
 
+	public IReadOnlyList<GroundedIncidentClaim> KnownFacts { get; init; } = Array.Empty<GroundedIncidentClaim>();
+
+	public IReadOnlyList<string> Unknowns { get; init; } = Array.Empty<string>();
+
+	public IReadOnlyList<IncidentRunbookMatch> RunbookMatches { get; init; } = Array.Empty<IncidentRunbookMatch>();
+
 	public IReadOnlyList<IncidentHypothesis> Hypotheses { get; init; } = Array.Empty<IncidentHypothesis>();
 
 	public IReadOnlyList<IncidentActionRecommendation> RecommendedActions { get; init; } = Array.Empty<IncidentActionRecommendation>();
 
 	public IReadOnlyList<IncidentActionOutcome> ActionOutcomes { get; init; } = Array.Empty<IncidentActionOutcome>();
+
+	public IReadOnlyList<SimilarIncidentMatch> SimilarIncidents { get; init; } = Array.Empty<SimilarIncidentMatch>();
+
+	public AnalysisQualityScore Quality { get; init; } = new();
+
+	public AnalysisProviderTransparency ProviderTransparency { get; init; } = new();
 
 	public string? Confidence { get; init; }
 

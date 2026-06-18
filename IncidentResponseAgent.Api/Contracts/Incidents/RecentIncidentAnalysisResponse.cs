@@ -39,4 +39,19 @@ public sealed record RecentIncidentAnalysisResponse
 	public string Status { get; init; } = "active";
 
 	public required DateTimeOffset CreatedAtUtc { get; init; }
+
+	public IReadOnlyList<IncidentTimelineEventResponse> Timeline { get; init; } = Array.Empty<IncidentTimelineEventResponse>();
+
+	public ProposedKnowledgeUpdateResponse? ProposedKnowledgeUpdate { get; init; }
+
+	public IReadOnlyList<AnalysisFeedbackResponse> Feedback { get; init; } = Array.Empty<AnalysisFeedbackResponse>();
+	public IReadOnlyList<GroundedClaimResponse> KnownFacts { get; init; } = Array.Empty<GroundedClaimResponse>();
+	public IReadOnlyList<string> Unknowns { get; init; } = Array.Empty<string>();
+	public IReadOnlyList<RunbookMatchResponse> RunbookMatches { get; init; } = Array.Empty<RunbookMatchResponse>();
+	public IReadOnlyList<IncidentHypothesis> Hypotheses { get; init; } = Array.Empty<IncidentHypothesis>();
+	public IReadOnlyList<IncidentActionRecommendation> RecommendedActions { get; init; } = Array.Empty<IncidentActionRecommendation>();
+	public IReadOnlyList<IncidentAnalysisEvidenceItem> Evidence { get; init; } = Array.Empty<IncidentAnalysisEvidenceItem>();
+	public IReadOnlyList<SimilarIncidentResponse> SimilarIncidents { get; init; } = Array.Empty<SimilarIncidentResponse>();
+	public AnalysisQualityResponse Quality { get; init; } = new("Low", "Low", "Low", Array.Empty<string>());
+	public ProviderTransparencyResponse ProviderTransparency { get; init; } = new("unknown", null, "unknown", "unknown", "unknown", false, null, false, null);
 }

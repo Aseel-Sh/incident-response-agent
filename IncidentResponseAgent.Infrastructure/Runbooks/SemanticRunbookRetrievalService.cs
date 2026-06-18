@@ -61,7 +61,7 @@ public sealed class SemanticRunbookRetrievalService : IRunbookRetrievalService, 
 
 		var queryVector = await _embeddingProvider.GenerateEmbeddingAsync(BuildQueryText(request.Query, request.ServiceName, request.Environment), cancellationToken).ConfigureAwait(false);
 		var limit = Math.Clamp(request.MaxResults <= 0 ? _options.MaxResults : request.MaxResults, 1, 8);
-		var scored = await GetScoredMatchesAsync(
+		var retrieval = await GetScoredMatchesAsync(
 			request.Query,
 			request.ServiceName,
 			request.Environment,
@@ -71,7 +71,12 @@ public sealed class SemanticRunbookRetrievalService : IRunbookRetrievalService, 
 
 		return new RunbookRetrievalResult
 		{
-			Runbooks = scored.Select(match => match.ToDocument()).ToArray()
+			Runbooks = retrieval.Matches.Select(match => match.ToDocument()).ToArray(),
+			EmbeddingProvider = _embeddingProvider.ProviderName,
+			VectorStoreProvider = retrieval.VectorStoreProvider,
+			RagStatus = retrieval.Matches.Count > 0 ? "available" : "no matches",
+			IsDegraded = _embeddingProvider.IsDegraded || retrieval.IsDegraded,
+			DegradedReason = _embeddingProvider.DegradedReason ?? retrieval.DegradedReason
 		};
 	}
 
@@ -93,7 +98,7 @@ public sealed class SemanticRunbookRetrievalService : IRunbookRetrievalService, 
 			BuildQueryText(request.Query, request.ServiceName, request.Environment),
 			cancellationToken).ConfigureAwait(false);
 		var limit = Math.Clamp(request.MaxResults <= 0 ? _options.MaxResults : request.MaxResults, 1, 20);
-		var scored = await GetScoredMatchesAsync(
+		var retrieval = await GetScoredMatchesAsync(
 			request.Query,
 			request.ServiceName,
 			request.Environment,
@@ -105,16 +110,19 @@ public sealed class SemanticRunbookRetrievalService : IRunbookRetrievalService, 
 		{
 			EmbeddingProvider = _embeddingProvider.ProviderName,
 			EmbeddingModel = _embeddingProvider.ModelName,
-			VectorStoreProvider = _qdrantVectorStore?.ProviderName ?? "sqlite",
+			VectorStoreProvider = retrieval.VectorStoreProvider,
 			VectorStoreEndpoint = _qdrantVectorStore?.Endpoint,
 			VectorStoreCollection = _qdrantVectorStore?.CollectionName,
 			DatabasePath = ResolveDatabasePath(),
 			KnowledgeBasePath = ResolveKnowledgeBasePath(),
-			Matches = scored.Select(match => match.ToDiagnosticMatch()).ToArray()
+			RagStatus = retrieval.Matches.Count > 0 ? "available" : "no matches",
+			IsDegraded = _embeddingProvider.IsDegraded || retrieval.IsDegraded,
+			DegradedReason = _embeddingProvider.DegradedReason ?? retrieval.DegradedReason,
+			Matches = retrieval.Matches.Select(match => match.ToDiagnosticMatch()).ToArray()
 		};
 	}
 
-	private async Task<IReadOnlyList<ScoredRunbookChunk>> GetScoredMatchesAsync(
+	private async Task<ScoredRetrieval> GetScoredMatchesAsync(
 		string query,
 		string? serviceName,
 		string? environment,
@@ -139,7 +147,7 @@ public sealed class SemanticRunbookRetrievalService : IRunbookRetrievalService, 
 				.ThenBy(match => match.Chunk.Ordinal)
 				.ToArray();
 
-			return DiversifyBySection(matches).Take(limit).ToArray();
+			return new ScoredRetrieval(DiversifyBySection(matches).Take(limit).ToArray(), "qdrant", false, null);
 		}
 
 		var chunks = await LoadChunksAsync(cancellationToken).ConfigureAwait(false);
@@ -152,7 +160,12 @@ public sealed class SemanticRunbookRetrievalService : IRunbookRetrievalService, 
 			.ThenBy(match => match.Chunk.Ordinal)
 			.ToArray();
 
-		return DiversifyBySection(scored).Take(limit).ToArray();
+		var qdrantDegraded = _qdrantVectorStore is not null && _qdrantVectorStore.ProviderName.Contains("unavailable", StringComparison.OrdinalIgnoreCase);
+		return new ScoredRetrieval(
+			DiversifyBySection(scored).Take(limit).ToArray(),
+			qdrantDegraded ? "qdrant-unavailable/sqlite" : "sqlite",
+			qdrantDegraded,
+			qdrantDegraded ? "Qdrant is unavailable; SQLite vector search served this query." : null);
 	}
 
 	private async Task EnsureInitializedAsync(CancellationToken cancellationToken)
@@ -952,4 +965,6 @@ create index if not exists ix_runbook_documents_content_hash on runbook_document
 			return normalized.Length <= 240 ? normalized : normalized[..240].TrimEnd() + "...";
 		}
 	}
+
+	private sealed record ScoredRetrieval(IReadOnlyList<ScoredRunbookChunk> Matches, string VectorStoreProvider, bool IsDegraded, string? DegradedReason);
 }

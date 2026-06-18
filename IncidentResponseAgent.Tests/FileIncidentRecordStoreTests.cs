@@ -18,7 +18,7 @@ public sealed class FileIncidentRecordStoreTests : IDisposable
 			Guid.NewGuid(),
 			"Inventory API errors",
 			"Inventory API is returning errors.",
-			IncidentSeverity.High,
+			IncidentSeverity.Sev2,
 			"inventory-api",
 			"production");
 		var analysis = new IncidentAnalysisResult
@@ -49,7 +49,7 @@ public sealed class FileIncidentRecordStoreTests : IDisposable
 			Guid.NewGuid(),
 			"Checkout 5xx spike",
 			"Checkout API returned HTTP 500 after deployment.",
-			IncidentSeverity.High,
+			IncidentSeverity.Sev2,
 			"checkout-api",
 			"production",
 			tags: ["checkout", "5xx", "deploy"]);
@@ -72,12 +72,14 @@ public sealed class FileIncidentRecordStoreTests : IDisposable
 			Confidence = "Medium"
 		};
 		await store.SaveAsync(priorIncident, priorAnalysis);
+		await store.UpdateStatusAsync(priorIncident.Id, "resolved");
+		await store.ReviewKnowledgeUpdateAsync(priorIncident.Id, "approved", null, "Approved in test.");
 
 		var currentIncident = new Incident(
 			Guid.NewGuid(),
 			"Checkout 500s after deploy",
 			"Customers see checkout HTTP 500 responses.",
-			IncidentSeverity.High,
+			IncidentSeverity.Sev2,
 			"checkout-api",
 			"production",
 			tags: ["checkout", "5xx"]);
@@ -95,7 +97,7 @@ public sealed class FileIncidentRecordStoreTests : IDisposable
 	{
 		var recordsPath = Path.Combine(_rootPath, "incident-records.json");
 		var store = new FileIncidentRecordStore(Options.Create(new IncidentStorageOptions { IncidentRecordsPath = recordsPath }));
-		var incident = new Incident(Guid.NewGuid(), "Delete me", "Temporary incident.", IncidentSeverity.Low);
+		var incident = new Incident(Guid.NewGuid(), "Delete me", "Temporary incident.", IncidentSeverity.Sev4);
 		var analysis = new IncidentAnalysisResult
 		{
 			IncidentId = incident.Id,
@@ -112,6 +114,46 @@ public sealed class FileIncidentRecordStoreTests : IDisposable
 		Assert.True(await store.DeleteAsync(incident.Id));
 		Assert.Null(await store.GetByIncidentIdAsync(incident.Id));
 		Assert.False(await store.DeleteAsync(incident.Id));
+	}
+
+	[Fact]
+	public async Task CandidateDecisionPersistsWithoutCreatingReusableIncident()
+	{
+		var recordsPath = Path.Combine(_rootPath, "incident-records.json");
+		var store = new FileIncidentRecordStore(Options.Create(new IncidentStorageOptions { IncidentRecordsPath = recordsPath }));
+		var detectedAt = DateTimeOffset.UtcNow.AddMinutes(-1);
+		var candidate = new DetectedIncidentCandidate
+		{
+			Id = "candidate-false-positive", Title = "Transient warning", Description = "One warning was observed.", Severity = IncidentSeverity.Sev5,
+			ServiceName = "inventory-api", Environment = "production", DetectedAtUtc = detectedAt, Source = "logs", Signals = ["warning count=1"]
+		};
+
+		await store.SaveCandidatesAsync([candidate], new MonitoringScanRecord { StartedAtUtc = detectedAt, CompletedAtUtc = detectedAt.AddSeconds(1), CandidateCount = 1 });
+		await store.DecideCandidateAsync(candidate.Id, "false_positive");
+
+		var saved = Assert.Single(await store.GetCandidatesAsync());
+		Assert.Equal("false_positive", saved.Status);
+		Assert.Contains(saved.Timeline, item => item.Type == "false positive");
+		Assert.Empty(await store.GetRecentAsync(10));
+	}
+
+	[Fact]
+	public async Task AnalysisFeedbackPersistsWithIncident()
+	{
+		var recordsPath = Path.Combine(_rootPath, "incident-records.json");
+		var store = new FileIncidentRecordStore(Options.Create(new IncidentStorageOptions { IncidentRecordsPath = recordsPath }));
+		var incident = new Incident(Guid.NewGuid(), "Feedback test", "A grounded incident.", IncidentSeverity.Sev3);
+		await store.SaveAsync(incident, new IncidentAnalysisResult { IncidentId = incident.Id, IncidentSummary = incident.Title, AnalysisText = "{}", AnalysisProvider = "test", SessionId = "feedback-session", SessionTurnNumber = 1 });
+		var feedback = new IncidentAnalysisFeedback
+		{
+			AnalysisUsefulness = "partially useful", RecommendationCorrectness = "wrong", ReasonTags = ["missing evidence", "bad remediation"], SubmittedAtUtc = DateTimeOffset.UtcNow
+		};
+
+		await store.AddFeedbackAsync(incident.Id, feedback);
+
+		var saved = await store.GetByIncidentIdAsync(incident.Id);
+		Assert.Equal(feedback.Id, Assert.Single(saved!.Feedback).Id);
+		Assert.Contains(saved.Timeline, item => item.Type == "analysis feedback recorded");
 	}
 
 	public void Dispose()

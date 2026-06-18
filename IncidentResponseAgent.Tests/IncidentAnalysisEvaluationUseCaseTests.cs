@@ -11,6 +11,22 @@ namespace IncidentResponseAgent.Tests;
 public sealed class IncidentAnalysisEvaluationUseCaseTests
 {
 	[Fact]
+	public async Task RagFailureDoesNotForceModelFallback()
+	{
+		var incident = IncidentAnalysisEvaluationScenarioCatalog.BuiltInScenarios[0].Incident;
+		var useCase = new AnalyzeIncidentUseCase(
+			new GroundedModelAgent(), new InMemorySessionStore(), new InMemoryIncidentRecordStore(),
+			new ScenarioLogSearchProvider(), new ScenarioMetricsProvider(), new FailingRunbookRetrievalService(), NullLogger<AnalyzeIncidentUseCase>.Instance);
+
+		var result = await useCase.AnalyzeAsync(incident);
+
+		Assert.False(result.UsedFallbackAnalysis);
+		Assert.True(result.ProviderTransparency.IsDegraded);
+		Assert.Equal("degraded", result.ProviderTransparency.RagStatus);
+		Assert.Equal("model-test", result.ProviderTransparency.ModelProvider);
+	}
+
+	[Fact]
 	public async Task BuiltInEvaluationScenariosPassAgainstDeterministicAnalysis()
 	{
 		var evaluator = new RubricIncidentAnalysisEvaluator();
@@ -32,6 +48,11 @@ public sealed class IncidentAnalysisEvaluationUseCaseTests
 			Assert.True(
 				evaluation.Score >= 0.90m,
 				$"{scenario.Name} scored {evaluation.Score}. Failed checks: {string.Join(", ", evaluation.FailedChecks)}");
+			Assert.NotEmpty(result.KnownFacts);
+			Assert.NotEmpty(result.Unknowns);
+			Assert.All(result.RecommendedActions, action => Assert.NotEmpty(action.SupportingSignals));
+			Assert.Equal("High", result.Quality.EvidenceCoverage);
+			Assert.Equal("test-agent", result.ProviderTransparency.ModelProvider);
 		}
 	}
 
@@ -51,6 +72,21 @@ public sealed class IncidentAnalysisEvaluationUseCaseTests
 				UsedFallback = false
 			});
 		}
+	}
+
+	private sealed class GroundedModelAgent : IIncidentAnalysisAgent
+	{
+		public Task<IncidentAgentExecutionResult> AnalyzeAsync(Incident incident, IncidentAnalysisSessionContext? sessionContext = null, IncidentAnalysisAgentContext? agentContext = null, CancellationToken cancellationToken = default) =>
+			Task.FromResult(new IncidentAgentExecutionResult
+			{
+				Provider = "model-test", Model = "model-1", UsedFallback = false,
+				AnalysisText = """{"summary":"test","evidence":[],"hypotheses":[],"recommendedActions":[{"description":"Validate the submitted incident details before mitigation.","priority":"High","rationale":"Grounded in user input.","supportingSignals":["incident.description"]}],"confidence":"Low","notes":"RAG unavailable."}"""
+			});
+	}
+
+	private sealed class FailingRunbookRetrievalService : IRunbookRetrievalService
+	{
+		public Task<RunbookRetrievalResult> RetrieveAsync(RunbookRetrievalRequest request, CancellationToken cancellationToken = default) => throw new HttpRequestException("Embedding provider unavailable.");
 	}
 
 	private sealed class InMemorySessionStore : IIncidentAnalysisSessionStore
@@ -95,6 +131,20 @@ public sealed class IncidentAnalysisEvaluationUseCaseTests
 			return Task.CompletedTask;
 		}
 
+		public Task SaveCandidatesAsync(IReadOnlyList<DetectedIncidentCandidate> candidates, MonitoringScanRecord scan, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+		public Task<IReadOnlyList<DetectedIncidentCandidate>> GetCandidatesAsync(CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<DetectedIncidentCandidate>>(Array.Empty<DetectedIncidentCandidate>());
+
+		public Task<Incident> ConfirmCandidateAsync(string candidateId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+		public Task<DetectedIncidentCandidate> DecideCandidateAsync(string candidateId, string decision, Guid? mergeIntoIncidentId = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+		public Task<IncidentAnalysisRecord> AddTimelineEventAsync(Guid incidentId, IncidentTimelineEvent timelineEvent, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+		public Task<ProposedKnowledgeUpdate> ReviewKnowledgeUpdateAsync(Guid incidentId, string decision, string? content, string? notes, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+		public Task<MonitoringScanRecord?> GetLastScanAsync(CancellationToken cancellationToken = default) => Task.FromResult<MonitoringScanRecord?>(null);
+
 		public Task<IncidentAnalysisRecord?> GetByIncidentIdAsync(Guid incidentId, CancellationToken cancellationToken = default)
 		{
 			return Task.FromResult(_records.FirstOrDefault(record => record.Incident.Id == incidentId));
@@ -120,6 +170,8 @@ public sealed class IncidentAnalysisEvaluationUseCaseTests
 			};
 			return Task.FromResult(outcome);
 		}
+
+		public Task<IncidentAnalysisFeedback> AddFeedbackAsync(Guid incidentId, IncidentAnalysisFeedback feedback, CancellationToken cancellationToken = default) => Task.FromResult(feedback);
 
 		public Task<IReadOnlyList<IncidentAnalysisRecord>> GetRecentAsync(int maxResults, CancellationToken cancellationToken = default)
 		{

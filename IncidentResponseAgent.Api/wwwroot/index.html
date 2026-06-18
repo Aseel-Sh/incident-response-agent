@@ -46,7 +46,7 @@
       <section id="dashboardView" class="tab-view active">
         <div id="sourceModeBanner" class="mode-banner"></div>
         <dl class="metric-strip dashboard-stats">
-          <div class="stat-new"><dt>New</dt><dd id="newCount">0</dd></div>
+          <div class="stat-new"><dt>Candidates</dt><dd id="newCount">0</dd></div>
           <div class="stat-active"><dt>Investigating</dt><dd id="investigatingCount">0</dd></div>
           <div class="stat-mitigated"><dt>Mitigated</dt><dd id="mitigatedCount">0</dd></div>
           <div class="stat-resolved"><dt>Resolved</dt><dd id="resolvedCount">0</dd></div>
@@ -59,7 +59,7 @@
             </label>
             <div id="statusFilters" class="chip-row">
               <button class="filter-chip active" type="button" data-status="all">All</button>
-              <button class="filter-chip" type="button" data-status="new">New</button>
+              <button class="filter-chip" type="button" data-status="candidate">Candidates</button>
               <button class="filter-chip" type="button" data-status="active">Active</button>
               <button class="filter-chip" type="button" data-status="mitigated">Mitigated</button>
               <button class="filter-chip" type="button" data-status="resolved">Resolved</button>
@@ -83,14 +83,14 @@
             </div>
             <form id="incidentForm" class="form-grid">
               <label class="wide">Title<input name="title" required maxlength="200" placeholder="Describe the incident"></label>
-              <label>Severity<select name="severity" required><option value="" selected disabled>Select severity</option><option>Low</option><option>Medium</option><option>High</option><option>Critical</option></select></label>
+              <label>Severity<select name="severity" required><option value="" selected disabled>Select severity</option><option value="sev1">SEV-1 — Critical</option><option value="sev2">SEV-2 — Major</option><option value="sev3">SEV-3 — Partial</option><option value="sev4">SEV-4 — Minor</option><option value="sev5">SEV-5 — Informational</option></select></label>
               <label>Service<input name="serviceName" placeholder="e.g. checkout-service"></label>
               <label>Environment<input name="environment" placeholder="e.g. prod"></label>
               <label>Session ID<input name="sessionId" placeholder="optional follow-up session"></label>
               <label class="wide">Tags<input name="tags" placeholder="comma-separated tags"></label>
               <label class="wide">Description<textarea name="description" required maxlength="5000" placeholder="What is happening and who is affected?"></textarea></label>
               <div class="actions wide">
-                <button id="analyzeButton" type="submit" data-icon="play">Analyze</button>
+                <button id="analyzeButton" type="submit" data-icon="play">Create candidate &amp; confirm</button>
               </div>
             </form>
           </section>

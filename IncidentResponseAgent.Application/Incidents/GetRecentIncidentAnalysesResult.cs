@@ -39,4 +39,20 @@ public sealed record GetRecentIncidentAnalysesResult
 	public string Status { get; init; } = "active";
 
 	public required DateTimeOffset CreatedAtUtc { get; init; }
+
+	public IReadOnlyList<IncidentTimelineEvent> Timeline { get; init; } = Array.Empty<IncidentTimelineEvent>();
+
+	public ProposedKnowledgeUpdate? ProposedKnowledgeUpdate { get; init; }
+
+	public IReadOnlyList<IncidentAnalysisFeedback> Feedback { get; init; } = Array.Empty<IncidentAnalysisFeedback>();
+
+	public IReadOnlyList<GroundedIncidentClaim> KnownFacts { get; init; } = Array.Empty<GroundedIncidentClaim>();
+	public IReadOnlyList<string> Unknowns { get; init; } = Array.Empty<string>();
+	public IReadOnlyList<IncidentRunbookMatch> RunbookMatches { get; init; } = Array.Empty<IncidentRunbookMatch>();
+	public IReadOnlyList<IncidentHypothesis> Hypotheses { get; init; } = Array.Empty<IncidentHypothesis>();
+	public IReadOnlyList<IncidentActionRecommendation> RecommendedActions { get; init; } = Array.Empty<IncidentActionRecommendation>();
+	public IReadOnlyList<IncidentAnalysisEvidenceItem> Evidence { get; init; } = Array.Empty<IncidentAnalysisEvidenceItem>();
+	public IReadOnlyList<SimilarIncidentMatch> SimilarIncidents { get; init; } = Array.Empty<SimilarIncidentMatch>();
+	public AnalysisQualityScore Quality { get; init; } = new();
+	public AnalysisProviderTransparency ProviderTransparency { get; init; } = new();
 }

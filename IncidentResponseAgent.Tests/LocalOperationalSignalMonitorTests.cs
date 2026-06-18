@@ -26,7 +26,7 @@ public sealed class LocalOperationalSignalMonitorTests : IDisposable
 			candidate.ServiceName == "checkout-api" &&
 			candidate.Source.Contains("metrics", StringComparison.OrdinalIgnoreCase) &&
 			candidate.Source.Contains("logs", StringComparison.OrdinalIgnoreCase) &&
-			candidate.Severity == IncidentSeverity.Critical);
+			candidate.Severity == IncidentSeverity.Sev2);
 		Assert.Contains(candidates, candidate =>
 			candidate.ServiceName == "orders-worker" &&
 			candidate.Signals.Any(signal => signal.Contains("queue_depth", StringComparison.OrdinalIgnoreCase)));
@@ -71,7 +71,7 @@ public sealed class LocalOperationalSignalMonitorTests : IDisposable
 		Assert.Contains(candidates, candidate =>
 			candidate.ServiceName == "inventory-api" &&
 			candidate.Environment == "production" &&
-			candidate.Severity == IncidentSeverity.Critical &&
+			candidate.Severity == IncidentSeverity.Sev1 &&
 			candidate.Signals.Any(signal => signal.Contains("request_error_rate=44.1", StringComparison.OrdinalIgnoreCase)));
 	}
 

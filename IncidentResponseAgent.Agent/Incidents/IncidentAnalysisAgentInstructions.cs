@@ -121,7 +121,7 @@ Similar previous incidents:
 		}
 
 		return string.Join(Environment.NewLine, similarIncidents.Select(incident =>
-			$"- {incident.IncidentSummary} ({incident.ServiceName}/{incident.Environment}, score {incident.Score:0.00}): previous action: {incident.ResolutionSummary}"));
+			$"- {incident.IncidentSummary} ({incident.ServiceName}/{incident.Environment}, score {incident.Score:0.00}); successful actions: {string.Join(" | ", incident.SuccessfulActions)}; failed actions: {string.Join(" | ", incident.FailedActions)}"));
 	}
 
 	private static string BuildSessionSection(IncidentAnalysisSessionContext? sessionContext)

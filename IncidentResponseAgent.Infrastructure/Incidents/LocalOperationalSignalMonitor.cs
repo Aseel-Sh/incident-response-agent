@@ -33,7 +33,7 @@ public sealed class LocalOperationalSignalMonitor : IIncidentSignalMonitor
 		return candidates
 			.GroupBy(candidate => BuildMergeKey(candidate), StringComparer.OrdinalIgnoreCase)
 			.Select(group => Merge(group.ToArray()))
-			.OrderByDescending(candidate => candidate.Severity)
+			.OrderBy(candidate => candidate.Severity)
 			.ThenByDescending(candidate => candidate.DetectedAtUtc)
 			.Take(Math.Clamp(_options.MaxDetectedIncidents, 1, 25))
 			.ToArray();
@@ -57,7 +57,7 @@ public sealed class LocalOperationalSignalMonitor : IIncidentSignalMonitor
 				continue;
 			}
 
-			var severity = latest.Value >= check.CriticalThreshold ? IncidentSeverity.Critical : IncidentSeverity.High;
+			var severity = latest.Value >= check.CriticalThreshold ? IncidentSeverity.Sev1 : IncidentSeverity.Sev2;
 			var readableMetric = item.MetricName.Replace('_', ' ');
 			candidates.Add(new DetectedIncidentCandidate
 			{
@@ -87,12 +87,13 @@ public sealed class LocalOperationalSignalMonitor : IIncidentSignalMonitor
 
 		return result.Entries
 			.GroupBy(entry => entry.Source, StringComparer.OrdinalIgnoreCase)
+			.Where(group => group.Count() >= _options.LogPatternCountThreshold)
 			.Select(group =>
 			{
 				var entries = group.OrderByDescending(entry => entry.Timestamp).ToArray();
 				var latest = entries[0];
 				var hasError = entries.Any(entry => entry.Level.Equals("Error", StringComparison.OrdinalIgnoreCase));
-				var severity = hasError ? IncidentSeverity.High : IncidentSeverity.Medium;
+				var severity = hasError ? IncidentSeverity.Sev2 : IncidentSeverity.Sev3;
 				var environment = InferEnvironment(entries);
 				var signals = entries
 					.Take(3)
@@ -173,6 +174,16 @@ public sealed class LocalOperationalSignalMonitor : IIncidentSignalMonitor
 		if (series.MetricName.Equals("queue_depth", StringComparison.OrdinalIgnoreCase))
 		{
 			return new MetricCheck(_options.QueueDepthWarningThreshold, Math.Max(1500m, _options.QueueDepthWarningThreshold * 2));
+		}
+
+		if (series.MetricName.Contains("latency", StringComparison.OrdinalIgnoreCase))
+		{
+			return new MetricCheck(_options.LatencyWarningThresholdMs, _options.LatencyCriticalThresholdMs);
+		}
+
+		if (series.MetricName.Contains("health", StringComparison.OrdinalIgnoreCase) || series.MetricName.Contains("failure", StringComparison.OrdinalIgnoreCase))
+		{
+			return new MetricCheck(_options.HealthCheckFailureThreshold, _options.HealthCheckCriticalFailureThreshold);
 		}
 
 		return null;
