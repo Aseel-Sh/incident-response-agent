@@ -7,14 +7,14 @@ namespace IncidentResponseAgent.Agent.Incidents;
 
 public sealed class ResilientIncidentAnalysisAgent : IIncidentAnalysisAgent
 {
-	private readonly OpenAIIncidentAnalysisAgent _openAiAgent;
-	private readonly PromptBasedIncidentAnalysisAgent _fallbackAgent;
+	private readonly IModelIncidentAnalysisAgent _openAiAgent;
+	private readonly ILocalFallbackIncidentAnalysisAgent _fallbackAgent;
 	private readonly IncidentAnalysisAgentOptions _options;
 	private readonly ILogger<ResilientIncidentAnalysisAgent> _logger;
 
 	public ResilientIncidentAnalysisAgent(
-		OpenAIIncidentAnalysisAgent openAiAgent,
-		PromptBasedIncidentAnalysisAgent fallbackAgent,
+		IModelIncidentAnalysisAgent openAiAgent,
+		ILocalFallbackIncidentAnalysisAgent fallbackAgent,
 		IOptions<IncidentAnalysisAgentOptions> options,
 		ILogger<ResilientIncidentAnalysisAgent> logger)
 	{
@@ -30,8 +30,12 @@ public sealed class ResilientIncidentAnalysisAgent : IIncidentAnalysisAgent
 		IncidentAnalysisAgentContext? agentContext = null,
 		CancellationToken cancellationToken = default)
 	{
+		_logger.LogInformation(
+			"Model provider selected. IncidentId={IncidentId} Provider={Provider} Model={Model} EndpointConfigured={EndpointConfigured} ApiKeyConfigured={ApiKeyConfigured}.",
+			incident.Id, _options.Provider, _options.Model, !string.IsNullOrWhiteSpace(_options.Endpoint), HasConfiguredApiKey());
 		if (!HasConfiguredApiKey())
 		{
+			_logger.LogWarning("Fallback triggered. IncidentId={IncidentId} Reason={Reason}.", incident.Id, "Agent API key is not configured.");
 			var fallbackResult = await _fallbackAgent.AnalyzeAsync(incident, sessionContext, agentContext, cancellationToken).ConfigureAwait(false);
 			return fallbackResult with { FallbackReason = "Agent API key is not configured." };
 		}
@@ -47,12 +51,14 @@ public sealed class ResilientIncidentAnalysisAgent : IIncidentAnalysisAgent
 		catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
 		{
 			_logger.LogWarning("OpenAI-compatible incident analysis timed out after {TimeoutSeconds} seconds. Falling back to local analysis.", timeout.TotalSeconds);
+			_logger.LogWarning("Fallback triggered. IncidentId={IncidentId} Reason={Reason}.", incident.Id, $"Model timed out after {timeout.TotalSeconds:0} seconds.");
 			var fallbackResult = await _fallbackAgent.AnalyzeAsync(incident, sessionContext, agentContext, cancellationToken).ConfigureAwait(false);
 			return fallbackResult with { FallbackReason = $"OpenAI-compatible analysis timed out after {timeout.TotalSeconds:0} seconds." };
 		}
 		catch (Exception exception) when (IsProviderFailure(exception))
 		{
 			_logger.LogWarning(exception, "OpenAI-compatible incident analysis failed. Falling back to local analysis.");
+			_logger.LogWarning("Fallback triggered. IncidentId={IncidentId} Reason={Reason}.", incident.Id, BuildFailureReason(exception));
 			var fallbackResult = await _fallbackAgent.AnalyzeAsync(incident, sessionContext, agentContext, cancellationToken).ConfigureAwait(false);
 			return fallbackResult with { FallbackReason = $"OpenAI-compatible analysis failed: {BuildFailureReason(exception)}" };
 		}

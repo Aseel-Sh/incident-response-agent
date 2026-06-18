@@ -8,7 +8,7 @@ using System.Text.Json;
 
 namespace IncidentResponseAgent.Agent.Incidents;
 
-public sealed class PromptBasedIncidentAnalysisAgent : IIncidentAnalysisAgent
+public sealed class PromptBasedIncidentAnalysisAgent : ILocalFallbackIncidentAnalysisAgent
 {
 	private readonly IIncidentAnalysisAgentFactory _agentFactory;
 	private readonly IncidentAnalysisAgentInstructions _instructions;
@@ -45,6 +45,11 @@ public sealed class PromptBasedIncidentAnalysisAgent : IIncidentAnalysisAgent
 		var runbookResult = agentContext?.Runbooks ?? await _runbookRetrievalService.RetrieveAsync(BuildRunbookRetrievalRequest(incident), cancellationToken);
 		var logResult = agentContext?.Logs ?? await _logSearchProvider.SearchAsync(BuildLogSearchRequest(incident), cancellationToken);
 		var metricsResult = agentContext?.Metrics ?? await _metricsProvider.QueryAsync(BuildMetricsQueryRequest(incident), cancellationToken);
+		var similarIncidents = agentContext?.SimilarIncidents ?? Array.Empty<SimilarIncidentMatch>();
+		if (runbookResult.Runbooks.Count == 0 && logResult.Entries.Count == 0 && metricsResult.Samples.Count == 0 && similarIncidents.Count == 0)
+		{
+			throw new IncidentAnalysisUnavailableException("Model analysis failed and local fallback has insufficient operational evidence. At least one log, metric, runbook, or approved prior incident is required.");
+		}
 		var prompt = _instructions.BuildPrompt(
 			incident,
 			profile,
@@ -52,7 +57,7 @@ public sealed class PromptBasedIncidentAnalysisAgent : IIncidentAnalysisAgent
 			runbookResult.Runbooks,
 			BuildLogHighlights(logResult),
 			BuildMetricHighlights(metricsResult),
-			agentContext?.SimilarIncidents ?? Array.Empty<SimilarIncidentMatch>());
+			similarIncidents);
 		var response = BuildAnalysisText(
 			incident,
 			profile,
@@ -61,7 +66,7 @@ public sealed class PromptBasedIncidentAnalysisAgent : IIncidentAnalysisAgent
 			runbookResult.Runbooks,
 			logResult,
 			metricsResult,
-			agentContext?.SimilarIncidents ?? Array.Empty<SimilarIncidentMatch>());
+			similarIncidents);
 		_logger.LogInformation("Local prompt-based incident analysis completed for IncidentId={IncidentId}.", incident.Id);
 
 		return new IncidentAgentExecutionResult
@@ -169,6 +174,7 @@ public sealed class PromptBasedIncidentAnalysisAgent : IIncidentAnalysisAgent
 		return JsonSerializer.Serialize(new
 		{
 			summary = structured.IncidentSummary,
+			severity = OpenAIIncidentAnalysisAgent.FormatSeverity(incident.Severity),
 			evidence = structured.Evidence,
 			hypotheses = structured.Hypotheses,
 			recommendedActions = structured.RecommendedActions,

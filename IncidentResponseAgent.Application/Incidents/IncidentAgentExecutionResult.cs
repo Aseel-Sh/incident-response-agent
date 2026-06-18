@@ -11,4 +11,8 @@ public sealed record IncidentAgentExecutionResult
 	public bool UsedFallback { get; init; }
 
 	public string? FallbackReason { get; init; }
+
+	public bool UsedStructuredOutputRetry { get; init; }
+
+	public string? StructuredOutputRetryReason { get; init; }
 }

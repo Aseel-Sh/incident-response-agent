@@ -1,5 +1,6 @@
 using IncidentResponseAgent.Agent;
 using IncidentResponseAgent.Application;
+using IncidentResponseAgent.Application.Incidents;
 using IncidentResponseAgent.Infrastructure;
 using IncidentResponseAgent.Agent.Incidents;
 using IncidentResponseAgent.Infrastructure.Runbooks;
@@ -77,6 +78,10 @@ static (int StatusCode, string Title, string Detail) MapException(Exception? exc
 {
     return exception switch
     {
+        IncidentAnalysisUnavailableException unavailableException => (
+            StatusCodes.Status503ServiceUnavailable,
+            "Incident analysis unavailable",
+            unavailableException.Message),
         ArgumentException argumentException => (
             StatusCodes.Status400BadRequest,
             "Invalid request",

@@ -79,6 +79,7 @@ internal sealed class ResilientRunbookEmbeddingProvider : IRunbookEmbeddingProvi
 		catch (Exception exception)
 		{
 			_useFallbackOnly = true;
+			_logger.LogWarning(exception, "Embedding provider failed. Provider={ProviderName} FallbackProvider={FallbackProviderName}.", _primary.ProviderName, _fallback.ProviderName);
 			_logger.LogWarning(exception, "Primary embedding provider {ProviderName} failed. Falling back to {FallbackProviderName} for this process.", _primary.ProviderName, _fallback.ProviderName);
 		}
 

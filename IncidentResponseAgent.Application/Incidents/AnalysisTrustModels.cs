@@ -34,6 +34,8 @@ public sealed record AnalysisProviderTransparency
 	public string? FallbackReason { get; init; }
 	public bool IsDegraded { get; init; }
 	public string? DegradedReason { get; init; }
+	public bool UsedStructuredOutputRetry { get; init; }
+	public string? StructuredOutputRetryReason { get; init; }
 }
 
 public sealed record IncidentAnalysisFeedback

@@ -1,4 +1,5 @@
 using IncidentResponseAgent.Application.Evaluation;
+using IncidentResponseAgent.Agent.Incidents;
 using IncidentResponseAgent.Application.Incidents;
 using IncidentResponseAgent.Application.Runbooks;
 using IncidentResponseAgent.Application.Tools;
@@ -24,6 +25,30 @@ public sealed class IncidentAnalysisEvaluationUseCaseTests
 		Assert.True(result.ProviderTransparency.IsDegraded);
 		Assert.Equal("degraded", result.ProviderTransparency.RagStatus);
 		Assert.Equal("model-test", result.ProviderTransparency.ModelProvider);
+	}
+
+	[Theory]
+	[InlineData("embedding-unavailable", "huggingface-failed/local-hashing", "sqlite", "degraded", true)]
+	[InlineData("vector-store-unavailable", "local-hashing", "qdrant-unavailable/sqlite", "degraded", true)]
+	[InlineData("empty-runbook-matches", "local-hashing", "sqlite", "no matches", false)]
+	public async Task RagSubsystemStateDoesNotReplaceWorkingModel(string reason, string embeddingProvider, string vectorStore, string ragStatus, bool degraded)
+	{
+		var incident = IncidentAnalysisEvaluationScenarioCatalog.BuiltInScenarios[0].Incident;
+		var runbooks = new ConfigurableRunbookRetrievalService(new RunbookRetrievalResult
+		{
+			EmbeddingProvider = embeddingProvider, VectorStoreProvider = vectorStore, RagStatus = ragStatus, IsDegraded = degraded, DegradedReason = degraded ? reason : null
+		});
+		var useCase = new AnalyzeIncidentUseCase(
+			new GroundedModelAgent(), new InMemorySessionStore(), new InMemoryIncidentRecordStore(),
+			new ScenarioLogSearchProvider(), new ScenarioMetricsProvider(), runbooks, NullLogger<AnalyzeIncidentUseCase>.Instance);
+
+		var result = await useCase.AnalyzeAsync(incident);
+
+		Assert.False(result.UsedFallbackAnalysis);
+		Assert.Equal("model-test", result.ProviderTransparency.ModelProvider);
+		Assert.Equal(embeddingProvider, result.ProviderTransparency.EmbeddingProvider);
+		Assert.Equal(vectorStore, result.ProviderTransparency.VectorStore);
+		Assert.Equal(degraded, result.ProviderTransparency.IsDegraded);
 	}
 
 	[Fact]
@@ -80,13 +105,18 @@ public sealed class IncidentAnalysisEvaluationUseCaseTests
 			Task.FromResult(new IncidentAgentExecutionResult
 			{
 				Provider = "model-test", Model = "model-1", UsedFallback = false,
-				AnalysisText = """{"summary":"test","evidence":[],"hypotheses":[],"recommendedActions":[{"description":"Validate the submitted incident details before mitigation.","priority":"High","rationale":"Grounded in user input.","supportingSignals":["incident.description"]}],"confidence":"Low","notes":"RAG unavailable."}"""
+				AnalysisText = $$"""{"summary":"test","severity":"{{OpenAIIncidentAnalysisAgent.FormatSeverity(incident.Severity)}}","evidence":[],"hypotheses":[],"recommendedActions":[{"description":"Validate the submitted incident details before mitigation.","priority":"High","rationale":"Grounded in user input.","supportingSignals":["incident.description"]}],"confidence":"Low","notes":"RAG unavailable."}"""
 			});
 	}
 
 	private sealed class FailingRunbookRetrievalService : IRunbookRetrievalService
 	{
 		public Task<RunbookRetrievalResult> RetrieveAsync(RunbookRetrievalRequest request, CancellationToken cancellationToken = default) => throw new HttpRequestException("Embedding provider unavailable.");
+	}
+
+	private sealed class ConfigurableRunbookRetrievalService(RunbookRetrievalResult result) : IRunbookRetrievalService
+	{
+		public Task<RunbookRetrievalResult> RetrieveAsync(RunbookRetrievalRequest request, CancellationToken cancellationToken = default) => Task.FromResult(result);
 	}
 
 	private sealed class InMemorySessionStore : IIncidentAnalysisSessionStore

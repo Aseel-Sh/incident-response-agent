@@ -156,6 +156,27 @@ public sealed class FileIncidentRecordStoreTests : IDisposable
 		Assert.Contains(saved.Timeline, item => item.Type == "analysis feedback recorded");
 	}
 
+	[Fact]
+	public async Task FallbackProviderAndReasonPersistHonestly()
+	{
+		var recordsPath = Path.Combine(_rootPath, "incident-records.json");
+		var store = new FileIncidentRecordStore(Options.Create(new IncidentStorageOptions { IncidentRecordsPath = recordsPath }));
+		var incident = new Incident(Guid.NewGuid(), "Fallback persistence", "Model provider was unavailable.", IncidentSeverity.Sev4);
+		var analysis = new IncidentAnalysisResult
+		{
+			IncidentId = incident.Id, IncidentSummary = incident.Title, AnalysisText = "{}", AnalysisProvider = "local-prompt", AnalysisModel = "local",
+			UsedFallbackAnalysis = true, FallbackReason = "OpenAI-compatible provider returned 503 Service Unavailable.", SessionId = "fallback-session", SessionTurnNumber = 1,
+			ProviderTransparency = new AnalysisProviderTransparency { ModelProvider = "local-prompt", Model = "local", UsedModelFallback = true, FallbackReason = "OpenAI-compatible provider returned 503 Service Unavailable." }
+		};
+
+		await store.SaveAsync(incident, analysis);
+		var saved = await store.GetByIncidentIdAsync(incident.Id);
+
+		Assert.True(saved!.AnalysisResult.UsedFallbackAnalysis);
+		Assert.Equal("local-prompt", saved.AnalysisResult.ProviderTransparency.ModelProvider);
+		Assert.Contains("503", saved.AnalysisResult.ProviderTransparency.FallbackReason);
+	}
+
 	public void Dispose()
 	{
 		if (Directory.Exists(_rootPath))

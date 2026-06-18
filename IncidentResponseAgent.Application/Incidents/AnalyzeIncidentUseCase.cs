@@ -40,7 +40,7 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 		ArgumentNullException.ThrowIfNull(incident);
 
 		_logger.LogInformation(
-			"Starting incident analysis for IncidentId={IncidentId} Severity={Severity} Service={ServiceName} Environment={Environment}.",
+			"Analysis request started. IncidentId={IncidentId} Severity={Severity} Service={ServiceName} Environment={Environment}.",
 			incident.Id,
 			incident.Severity,
 			incident.ServiceName,
@@ -129,7 +129,8 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 				VectorStore = runbookResult.VectorStoreProvider, RagStatus = runbookResult.RagStatus,
 				UsedModelFallback = agentResult.UsedFallback || usedDeterministicStructuredFallback,
 				FallbackReason = agentResult.FallbackReason ?? (usedDeterministicStructuredFallback ? "Model returned invalid structured output." : null),
-				IsDegraded = runbookResult.IsDegraded, DegradedReason = runbookResult.DegradedReason
+				IsDegraded = runbookResult.IsDegraded, DegradedReason = runbookResult.DegradedReason,
+				UsedStructuredOutputRetry = agentResult.UsedStructuredOutputRetry, StructuredOutputRetryReason = agentResult.StructuredOutputRetryReason
 			},
 			Confidence = confidence,
 			Notes = BuildNotes(
@@ -139,6 +140,9 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 		};
 
 		await _incidentRecordStore.SaveAsync(incident, result, cancellationToken);
+		_logger.LogInformation(
+			"Final analysis provider selected for display. IncidentId={IncidentId} Provider={Provider} Model={Model} UsedFallback={UsedFallback} RagStatus={RagStatus} RagDegraded={RagDegraded}.",
+			incident.Id, result.ProviderTransparency.ModelProvider, result.ProviderTransparency.Model, result.ProviderTransparency.UsedModelFallback, result.ProviderTransparency.RagStatus, result.ProviderTransparency.IsDegraded);
 		_logger.LogInformation(
 			"Completed incident analysis for IncidentId={IncidentId} SessionId={SessionId} Turn={TurnNumber} Confidence={Confidence}.",
 			incident.Id,
@@ -151,9 +155,19 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 
 	private async Task<RunbookRetrievalResult> RetrieveRunbooksSafelyAsync(Incident incident, CancellationToken cancellationToken)
 	{
+		_logger.LogInformation("RAG retrieval started. IncidentId={IncidentId}.", incident.Id);
 		try
 		{
-			return await _runbookRetrievalService.RetrieveAsync(BuildRunbookRetrievalRequest(incident), cancellationToken);
+			var result = await _runbookRetrievalService.RetrieveAsync(BuildRunbookRetrievalRequest(incident), cancellationToken);
+			if (result.IsDegraded)
+			{
+				_logger.LogWarning("RAG degraded. IncidentId={IncidentId} EmbeddingProvider={EmbeddingProvider} VectorStore={VectorStore} Reason={Reason}.", incident.Id, result.EmbeddingProvider, result.VectorStoreProvider, result.DegradedReason);
+			}
+			else
+			{
+				_logger.LogInformation("RAG retrieval completed. IncidentId={IncidentId} Status={Status} RunbookCount={RunbookCount} EmbeddingProvider={EmbeddingProvider} VectorStore={VectorStore}.", incident.Id, result.RagStatus, result.Runbooks.Count, result.EmbeddingProvider, result.VectorStoreProvider);
+			}
+			return result;
 		}
 		catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
 		catch (Exception exception)

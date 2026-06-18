@@ -1,4 +1,5 @@
 using System.Net.Http.Headers;
+using System.Net;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -12,8 +13,9 @@ using Microsoft.Extensions.Options;
 
 namespace IncidentResponseAgent.Agent.Incidents;
 
-public sealed class OpenAIIncidentAnalysisAgent : IIncidentAnalysisAgent
+public sealed class OpenAIIncidentAnalysisAgent : IModelIncidentAnalysisAgent
 {
+	private static readonly HttpClient SharedHttpClient = new();
 	private static readonly JsonSerializerOptions SerializerOptions = new(JsonSerializerDefaults.Web)
 	{
 		PropertyNameCaseInsensitive = true,
@@ -25,6 +27,7 @@ public sealed class OpenAIIncidentAnalysisAgent : IIncidentAnalysisAgent
 		properties = new
 		{
 			summary = new { type = "string" },
+			severity = new { type = "string", @enum = new[] { "SEV-1", "SEV-2", "SEV-3", "SEV-4", "SEV-5" } },
 			evidence = new
 			{
 				type = "array",
@@ -79,7 +82,7 @@ public sealed class OpenAIIncidentAnalysisAgent : IIncidentAnalysisAgent
 			confidence = new { type = "string", @enum = new[] { "High", "Medium", "Low" } },
 			notes = new { type = "string" }
 		},
-		required = new[] { "summary", "evidence", "hypotheses", "recommendedActions", "confidence", "notes" },
+		required = new[] { "summary", "severity", "evidence", "hypotheses", "recommendedActions", "confidence", "notes" },
 		additionalProperties = false
 	};
 
@@ -88,16 +91,18 @@ public sealed class OpenAIIncidentAnalysisAgent : IIncidentAnalysisAgent
 	private readonly ILogSearchProvider _logSearchProvider;
 	private readonly IMetricsProvider _metricsProvider;
 	private readonly IRunbookRetrievalService _runbookRetrievalService;
-	private readonly HttpClient _httpClient = new();
+	private readonly HttpClient _httpClient;
 
 	public OpenAIIncidentAnalysisAgent(
 		IOptions<IncidentAnalysisAgentOptions> options,
 		ILogSearchProvider logSearchProvider,
 		IMetricsProvider metricsProvider,
 		IRunbookRetrievalService runbookRetrievalService,
-		ILogger<OpenAIIncidentAnalysisAgent> logger)
+		ILogger<OpenAIIncidentAnalysisAgent> logger,
+		HttpClient? httpClient = null)
 	{
 		_options = options.Value ?? new IncidentAnalysisAgentOptions();
+		_httpClient = httpClient ?? SharedHttpClient;
 		_logSearchProvider = logSearchProvider;
 		_metricsProvider = metricsProvider;
 		_runbookRetrievalService = runbookRetrievalService;
@@ -133,45 +138,74 @@ public sealed class OpenAIIncidentAnalysisAgent : IIncidentAnalysisAgent
 
 		var context = agentContext ?? await BuildAgentContextAsync(incident, cancellationToken).ConfigureAwait(false);
 		_logger.LogInformation(
-			"Running direct OpenAI-compatible incident analysis for IncidentId={IncidentId} Model={Model} Runbooks={RunbookCount} Logs={LogCount} MetricSamples={MetricSampleCount}.",
+			"Model provider selected. IncidentId={IncidentId} Provider={Provider} Model={Model} BaseUrl={BaseUrl} ApiFormat={ApiFormat}.",
 			incident.Id,
+			"openai-compatible",
 			model,
+			endpoint,
+			"chat/completions");
+		_logger.LogInformation(
+			"Analysis request started. IncidentId={IncidentId} Runbooks={RunbookCount} Logs={LogCount} MetricSamples={MetricSampleCount}.",
+			incident.Id,
 			context.Runbooks.Runbooks.Count,
 			context.Logs.Entries.Count,
 			context.Metrics.Samples.Count);
 
-		var (content, routedModel) = await SendCompletionAsync(
-			endpoint,
-			apiKey,
-			BuildChatCompletionRequest(incident, sessionContext, context, model, useStrictSchema: true),
-			cancellationToken).ConfigureAwait(false);
-
-		if (string.IsNullOrWhiteSpace(content))
+		string? content = null;
+		string? routedModel = null;
+		string retryReason;
+		try
 		{
-			_logger.LogWarning("Configured model returned empty structured output for IncidentId={IncidentId}; retrying once with plain JSON mode.", incident.Id);
+			(content, routedModel) = await SendCompletionAsync(
+				endpoint,
+				apiKey,
+				BuildChatCompletionRequest(incident, sessionContext, context, model, useStrictSchema: true),
+				"strict-json-schema",
+				cancellationToken).ConfigureAwait(false);
+			retryReason = ValidateStructuredResponse(content, out var validationFailure, FormatSeverity(incident.Severity)) ? string.Empty : validationFailure;
+		}
+		catch (HttpRequestException exception) when (exception.StatusCode is HttpStatusCode.BadRequest or HttpStatusCode.UnprocessableEntity)
+		{
+			retryReason = $"Strict JSON schema request was rejected with HTTP {(int)exception.StatusCode.Value}.";
+		}
+
+		if (!string.IsNullOrWhiteSpace(retryReason))
+		{
+			_logger.LogWarning("Model response validation failed. IncidentId={IncidentId} Attempt={Attempt} Reason={Reason}.", incident.Id, "strict-json-schema", retryReason);
+			_logger.LogInformation("Structured output retry started. IncidentId={IncidentId} Mode={Mode} Reason={Reason}.", incident.Id, "prompt-only-json", retryReason);
 			(content, routedModel) = await SendCompletionAsync(
 				endpoint,
 				apiKey,
 				BuildChatCompletionRequest(incident, sessionContext, context, model, useStrictSchema: false),
+				"prompt-only-json",
 				cancellationToken).ConfigureAwait(false);
-		}
 
-		if (string.IsNullOrWhiteSpace(content))
+			if (!ValidateStructuredResponse(content, out var retryFailure, FormatSeverity(incident.Severity)))
+			{
+				_logger.LogWarning("Structured output retry failed. IncidentId={IncidentId} Reason={Reason}.", incident.Id, retryFailure);
+				throw new InvalidOperationException($"Model structured response validation failed after retry: {retryFailure}");
+			}
+
+			_logger.LogInformation("Structured output retry passed. IncidentId={IncidentId}.", incident.Id);
+		}
+		else
 		{
-			throw new InvalidOperationException("The configured model returned an empty message after a plain-JSON retry.");
+			_logger.LogInformation("Model response validation passed. IncidentId={IncidentId} Attempt={Attempt}.", incident.Id, "strict-json-schema");
 		}
 
 		_logger.LogInformation(
 			"Direct OpenAI-compatible incident analysis completed for IncidentId={IncidentId}. RoutedModel={RoutedModel} ResponseLength={ResponseLength}.",
 			incident.Id,
 			routedModel ?? model,
-			content.Length);
+			content!.Length);
 		return new IncidentAgentExecutionResult
 		{
 			AnalysisText = content,
 			Provider = "openai-compatible",
 			Model = routedModel ?? model,
-			UsedFallback = false
+			UsedFallback = false,
+			UsedStructuredOutputRetry = !string.IsNullOrWhiteSpace(retryReason),
+			StructuredOutputRetryReason = string.IsNullOrWhiteSpace(retryReason) ? null : retryReason
 		};
 	}
 
@@ -179,6 +213,7 @@ public sealed class OpenAIIncidentAnalysisAgent : IIncidentAnalysisAgent
 		string endpoint,
 		string apiKey,
 		object request,
+		string attempt,
 		CancellationToken cancellationToken)
 	{
 		var requestJson = JsonSerializer.Serialize(request, SerializerOptions);
@@ -190,13 +225,20 @@ public sealed class OpenAIIncidentAnalysisAgent : IIncidentAnalysisAgent
 		httpRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
 		httpRequest.Headers.TryAddWithoutValidation("HTTP-Referer", "http://localhost:5155");
 		httpRequest.Headers.TryAddWithoutValidation("X-OpenRouter-Title", "Incident Response Agent Local");
+		_logger.LogInformation(
+			"Model request sent. Provider={Provider} Uri={Uri} Attempt={Attempt} RequestBytes={RequestBytes}.",
+			"openai-compatible", httpRequest.RequestUri, attempt, Encoding.UTF8.GetByteCount(requestJson));
 
 		using var response = await _httpClient.SendAsync(httpRequest, cancellationToken).ConfigureAwait(false);
 		var responseText = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+		_logger.LogInformation(
+			"Model response received. Provider={Provider} Attempt={Attempt} StatusCode={StatusCode} ResponseBytes={ResponseBytes}.",
+			"openai-compatible", attempt, (int)response.StatusCode, Encoding.UTF8.GetByteCount(responseText));
 		if (!response.IsSuccessStatusCode)
 		{
+			var safeBody = responseText.Length <= 800 ? responseText : responseText[..800] + "...";
 			throw new HttpRequestException(
-				$"OpenAI-compatible provider returned {(int)response.StatusCode} {response.ReasonPhrase}: {responseText}",
+				$"OpenAI-compatible provider returned {(int)response.StatusCode} {response.ReasonPhrase}: {safeBody}",
 				null,
 				response.StatusCode);
 		}
@@ -207,6 +249,75 @@ public sealed class OpenAIIncidentAnalysisAgent : IIncidentAnalysisAgent
 			.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
 		return (content, completion?.Model);
 	}
+
+	public static bool ValidateStructuredResponse(string? content, out string failureReason, string? expectedSeverity = null)
+	{
+		if (string.IsNullOrWhiteSpace(content))
+		{
+			failureReason = "Model returned empty content.";
+			return false;
+		}
+
+		try
+		{
+			using var document = JsonDocument.Parse(content);
+			var root = document.RootElement;
+			if (root.ValueKind != JsonValueKind.Object) return Fail("Response root is not a JSON object.", out failureReason);
+			var rootProperties = new[] { "summary", "severity", "evidence", "hypotheses", "recommendedActions", "confidence", "notes" };
+			foreach (var property in rootProperties)
+			{
+				if (!root.TryGetProperty(property, out _)) return Fail($"Required property '{property}' is missing.", out failureReason);
+			}
+			if (!HasOnlyProperties(root, rootProperties)) return Fail("Response contains unsupported top-level properties.", out failureReason);
+
+			var severity = root.GetProperty("severity").GetString();
+			if (severity is not ("SEV-1" or "SEV-2" or "SEV-3" or "SEV-4" or "SEV-5")) return Fail($"Severity '{severity}' is invalid.", out failureReason);
+			if (expectedSeverity is not null && !string.Equals(severity, expectedSeverity, StringComparison.Ordinal)) return Fail($"Model severity '{severity}' does not match incident severity '{expectedSeverity}'.", out failureReason);
+			var confidence = root.GetProperty("confidence").GetString();
+			if (confidence is not ("High" or "Medium" or "Low")) return Fail($"Confidence '{confidence}' is invalid.", out failureReason);
+			if (root.GetProperty("summary").ValueKind != JsonValueKind.String || root.GetProperty("notes").ValueKind != JsonValueKind.String) return Fail("Summary and notes must be strings.", out failureReason);
+			if (root.GetProperty("evidence").ValueKind != JsonValueKind.Array || root.GetProperty("hypotheses").ValueKind != JsonValueKind.Array || root.GetProperty("recommendedActions").ValueKind != JsonValueKind.Array) return Fail("Evidence, hypotheses, and recommendedActions must be arrays.", out failureReason);
+			foreach (var item in root.GetProperty("evidence").EnumerateArray())
+			{
+				if (!HasExactProperties(item, "summary", "source", "details")) return Fail("An evidence item is schema-invalid.", out failureReason);
+			}
+			foreach (var item in root.GetProperty("hypotheses").EnumerateArray())
+			{
+				if (!HasExactProperties(item, "description", "inferenceStrength", "confidence", "supportingEvidence", "evidenceReferences")) return Fail("A hypothesis item is schema-invalid.", out failureReason);
+				if (item.GetProperty("inferenceStrength").GetString() is not ("Strong" or "Medium" or "Weak")) return Fail("A hypothesis has invalid inferenceStrength.", out failureReason);
+				if (item.GetProperty("confidence").GetString() is not ("High" or "Medium" or "Low")) return Fail("A hypothesis has invalid confidence.", out failureReason);
+			}
+			foreach (var item in root.GetProperty("recommendedActions").EnumerateArray())
+			{
+				if (!HasExactProperties(item, "description", "priority", "rationale", "supportingSignals")) return Fail("A recommended action is schema-invalid.", out failureReason);
+				if (item.GetProperty("priority").GetString() is not ("Critical" or "High" or "Medium" or "Low")) return Fail("A recommended action has invalid priority.", out failureReason);
+			}
+			failureReason = string.Empty;
+			return true;
+		}
+		catch (JsonException exception)
+		{
+			failureReason = $"Response is invalid JSON: {exception.Message}";
+			return false;
+		}
+		catch (InvalidOperationException exception)
+		{
+			failureReason = $"Response has an invalid value type: {exception.Message}";
+			return false;
+		}
+	}
+
+	private static bool Fail(string reason, out string failureReason)
+	{
+		failureReason = reason;
+		return false;
+	}
+
+	private static bool HasExactProperties(JsonElement item, params string[] properties) =>
+		item.ValueKind == JsonValueKind.Object && properties.All(property => item.TryGetProperty(property, out _)) && HasOnlyProperties(item, properties);
+
+	private static bool HasOnlyProperties(JsonElement item, IReadOnlyCollection<string> properties) =>
+		item.EnumerateObject().All(property => properties.Contains(property.Name, StringComparer.Ordinal));
 
 	private async Task<IncidentAnalysisAgentContext> BuildAgentContextAsync(Incident incident, CancellationToken cancellationToken)
 	{
@@ -268,6 +379,7 @@ Return valid compact JSON only. Do not wrap JSON in Markdown.
 Use exactly this schema:
 {
   "summary": "short incident summary",
+  "severity": "SEV-1 | SEV-2 | SEV-3 | SEV-4 | SEV-5",
   "evidence": [{"summary":"what the evidence says","source":"incident.description | rag.runbook.<id> | tool.logs | tool.metrics","details":"specific supporting detail"}],
   "hypotheses": [{"description":"likely root cause hypothesis","inferenceStrength":"Strong | Medium | Weak","confidence":"High | Medium | Low","supportingEvidence":["short evidence note"],"evidenceReferences":["source reference"]}],
   "recommendedActions": [{"description":"specific next action","priority":"Critical | High | Medium | Low","rationale":"why this action matters","supportingSignals":["source reference"]}],
@@ -286,7 +398,7 @@ Use exactly this schema:
 							incident.Id,
 							incident.Title,
 							incident.Description,
-							Severity = incident.Severity.ToString(),
+							Severity = FormatSeverity(incident.Severity),
 							incident.ServiceName,
 							incident.Environment,
 							incident.Timestamp,
@@ -408,6 +520,16 @@ Use exactly this schema:
 		parts.AddRange(incident.Tags);
 		return string.Join(' ', parts.Where(part => !string.IsNullOrWhiteSpace(part)));
 	}
+
+	public static string FormatSeverity(IncidentSeverity severity) => severity switch
+	{
+		IncidentSeverity.Sev1 => "SEV-1",
+		IncidentSeverity.Sev2 => "SEV-2",
+		IncidentSeverity.Sev3 => "SEV-3",
+		IncidentSeverity.Sev4 => "SEV-4",
+		IncidentSeverity.Sev5 => "SEV-5",
+		_ => throw new ArgumentOutOfRangeException(nameof(severity), severity, "Unsupported incident severity.")
+	};
 
 	private sealed record ChatCompletionResponse
 	{
