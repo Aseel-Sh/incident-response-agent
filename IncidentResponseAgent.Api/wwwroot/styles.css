@@ -1165,7 +1165,7 @@ label {
 
 .history-filters {
   display: grid;
-  grid-template-columns: 22px repeat(5, minmax(112px, 1fr)) auto auto;
+  grid-template-columns: 22px repeat(5, minmax(108px, 1fr)) auto auto;
   align-items: center;
   padding: 0 0 12px;
 }
@@ -1269,10 +1269,10 @@ label {
 }
 
 .history-table th:nth-child(1),
-.history-table td:nth-child(1) { width: 96px; }
+.history-table td:nth-child(1) { width: 150px; }
 
 .history-table th:nth-child(2),
-.history-table td:nth-child(2) { width: 30%; }
+.history-table td:nth-child(2) { width: 36%; }
 
 .history-table th:nth-child(3),
 .history-table td:nth-child(3) { width: 17%; }
@@ -1327,6 +1327,44 @@ label {
 .history-table small span {
   margin-right: 4px;
   font-weight: 400;
+}
+
+.history-id {
+  display: block;
+}
+
+.history-description {
+  overflow: hidden;
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread-marker {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 6px;
+  padding: 3px 5px;
+  border-radius: 4px;
+  color: hsl(var(--thread-hue) 75% 35%);
+  background: hsl(var(--thread-hue) 80% 94%);
+  font-size: 9px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.thread-marker svg {
+  width: 11px;
+  height: 11px;
+}
+
+:root[data-theme="dark"] .thread-marker {
+  color: hsl(var(--thread-hue) 80% 78%);
+  background: hsl(var(--thread-hue) 45% 18%);
 }
 
 .confidence-high { color: var(--green); font-weight: 600; }
@@ -1640,23 +1678,101 @@ label {
   min-height: 18px;
   padding: 0;
   accent-color: var(--blue);
-  background: transparent;
+  background: linear-gradient(to right, var(--blue) 0 var(--slider-progress, 6.9%), var(--line-strong) var(--slider-progress, 6.9%) 100%);
+  border-radius: 999px;
 }
 
 .slider-ticks {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  position: relative;
+  height: 14px;
   color: var(--muted);
   font-size: 10px;
 }
 
-.slider-ticks span:nth-child(2),
-.slider-ticks span:nth-child(3) {
-  text-align: center;
+.slider-ticks span {
+  position: absolute;
+  left: var(--tick-position);
+  transform: translateX(-50%);
+  white-space: nowrap;
+}
+
+.slider-ticks span:first-child {
+  transform: none;
 }
 
 .slider-ticks span:last-child {
-  text-align: right;
+  transform: translateX(-100%);
+}
+
+.session-link-row {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) auto auto auto;
+  align-items: center;
+  gap: 12px;
+  margin: 12px 0;
+  padding: 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--muted);
+}
+
+.session-identity {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.session-identity > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: var(--ink);
+}
+
+.session-identity code {
+  display: block;
+  padding: 7px 9px;
+  border-radius: 4px;
+  background: var(--soft);
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.session-count {
+  display: grid;
+  gap: 2px;
+  min-width: 92px;
+}
+
+.session-count strong {
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.session-count span {
+  font-size: 10px;
+}
+
+#incidentForm input[name="sessionId"] {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+#incidentForm input[name="sessionId"]:not(:placeholder-shown) {
+  border-color: var(--blue);
+  background: var(--blue-soft);
+  color: var(--ink);
+}
+
+@media (max-width: 720px) {
+  .session-link-row {
+    grid-template-columns: 1fr auto;
+  }
 }
 
 .live-dot {
@@ -1890,6 +2006,47 @@ label {
 .ticket-action:hover {
   filter: brightness(0.96);
   transform: translateY(-1px);
+}
+
+.delete-incident-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #fff;
+  background: #b91c1c;
+  border-color: #b91c1c;
+}
+
+.delete-incident-button:hover {
+  background: #991b1b;
+  border-color: #991b1b;
+}
+
+.incident-detail-description {
+  margin: 12px 0;
+  color: var(--ink);
+  line-height: 1.55;
+}
+
+.danger-zone {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.danger-zone strong {
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.danger-zone p {
+  margin: 3px 0 0;
+  color: var(--muted);
+  font-size: 11px;
 }
 
 :root[data-theme="dark"] .ticket-action-mitigated {

@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>incidentOps</title>
-  <link rel="stylesheet" href="/styles.css?v=20260617-toolbar-rag-2">
+  <link rel="stylesheet" href="/styles.css?v=20260618-session-filter-6">
 </head>
 <body>
   <div class="app-shell">
@@ -82,13 +82,13 @@
               <button id="sampleButton" class="secondary compact-button" type="button" data-icon="wand">Sample</button>
             </div>
             <form id="incidentForm" class="form-grid">
-              <label class="wide">Title<input name="title" required maxlength="200" value="Orders worker queue backlog growth"></label>
-              <label>Severity<select name="severity" required><option>Low</option><option>Medium</option><option selected>High</option><option>Critical</option></select></label>
-              <label>Service<input name="serviceName" value="orders-worker"></label>
-              <label>Environment<input name="environment" value="prod"></label>
+              <label class="wide">Title<input name="title" required maxlength="200" placeholder="Describe the incident"></label>
+              <label>Severity<select name="severity" required><option value="" selected disabled>Select severity</option><option>Low</option><option>Medium</option><option>High</option><option>Critical</option></select></label>
+              <label>Service<input name="serviceName" placeholder="e.g. checkout-service"></label>
+              <label>Environment<input name="environment" placeholder="e.g. prod"></label>
               <label>Session ID<input name="sessionId" placeholder="optional follow-up session"></label>
-              <label class="wide">Tags<input name="tags" value="queue, backlog, orders"></label>
-              <label class="wide">Description<textarea name="description" required maxlength="5000">Order fulfillment jobs are piling up faster than workers can process them. Customers are seeing delayed confirmations after checkout.</textarea></label>
+              <label class="wide">Tags<input name="tags" placeholder="comma-separated tags"></label>
+              <label class="wide">Description<textarea name="description" required maxlength="5000" placeholder="What is happening and who is affected?"></textarea></label>
               <div class="actions wide">
                 <button id="analyzeButton" type="submit" data-icon="play">Analyze</button>
               </div>
@@ -110,9 +110,9 @@
           <div class="filter-icon" data-icon="search"></div>
           <select id="historyServiceFilter" aria-label="Service filter"><option value="all">All services</option></select>
           <select id="historyStatusFilter" aria-label="Status filter"><option value="all">All statuses</option></select>
+          <select id="historySessionFilter" aria-label="Session filter"><option value="all">All sessions</option></select>
           <select id="historySeverityFilter" aria-label="Severity filter"><option value="all">All severities</option></select>
           <select id="historyConfidenceFilter" aria-label="Confidence filter"><option value="all">All confidence</option></select>
-          <select id="historyProviderFilter" aria-label="Provider filter"><option value="all">All providers</option></select>
           <span id="historyResultCount" class="meta">0 results</span>
           <button id="historyReloadButton" class="icon-refresh-button" type="button" data-icon="refresh" aria-label="Refresh history"></button>
         </div>
@@ -205,7 +205,7 @@
               <span class="meta">Polling interval: <strong id="pollingIntervalValue">30s</strong></span>
             </div>
             <input id="pollingIntervalSlider" class="polling-slider" type="range" min="10" max="300" step="10" value="30" aria-label="Polling interval">
-            <div class="slider-ticks"><span>10s</span><span>60s</span><span>120s</span><span>300s</span></div>
+            <div class="slider-ticks" aria-hidden="true"><span style="--tick-position:0%">10s</span><span style="--tick-position:17.24%">60s</span><span style="--tick-position:37.93%">120s</span><span style="--tick-position:100%">300s</span></div>
             <div class="monitor-actions">
               <button id="pauseScanButton" class="warning-button compact-button" type="button" data-icon="pause">Pause Scanning</button>
               <button id="manualRefreshButton" class="compact-button" type="button" data-icon="refresh">Manual Refresh</button>
@@ -233,6 +233,6 @@
       <div id="historyDetail" class="history-detail"><p class="eyebrow">Selected run</p><h3 id="historyModalTitle">No analysis selected</h3><p class="meta">Choose a saved run to inspect evidence, actions, and provider mode.</p></div>
     </section>
   </div>
-  <script src="/app.js?v=20260617-toolbar-rag-2"></script>
+  <script src="/app.js?v=20260618-session-filter-6"></script>
 </body>
 </html>

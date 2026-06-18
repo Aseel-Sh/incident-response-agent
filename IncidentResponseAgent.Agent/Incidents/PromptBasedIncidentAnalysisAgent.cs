@@ -187,7 +187,7 @@ public sealed class PromptBasedIncidentAnalysisAgent : IIncidentAnalysisAgent
 
 		foreach (var runbook in runbooks.Take(2))
 		{
-			foreach (var step in ExtractRunbookSteps(runbook).Take(2))
+			foreach (var step in ExtractRunbookSteps(runbook).Where(IsConcreteAction).Take(2))
 			{
 				actions.Add(new IncidentActionRecommendation
 				{
@@ -224,7 +224,7 @@ public sealed class PromptBasedIncidentAnalysisAgent : IIncidentAnalysisAgent
 		}
 
 		var similar = similarIncidents.FirstOrDefault();
-		if (similar is not null)
+		if (similar is not null && HasReusableResolution(similar.ResolutionSummary))
 		{
 			actions.Add(new IncidentActionRecommendation
 			{
@@ -261,6 +261,22 @@ public sealed class PromptBasedIncidentAnalysisAgent : IIncidentAnalysisAgent
 		}
 
 		return $"Use the prior response pattern from '{similar.IncidentSummary}': {priorAction}";
+	}
+
+	private static bool HasReusableResolution(string? resolutionSummary)
+	{
+		if (string.IsNullOrWhiteSpace(resolutionSummary)) return false;
+		var normalized = resolutionSummary.ToLowerInvariant();
+		return normalized.Length >= 18
+			&& !normalized.Contains("confirm blast radius", StringComparison.Ordinal)
+			&& !normalized.Contains("follow the most relevant runbook", StringComparison.Ordinal);
+	}
+
+	private static bool IsConcreteAction(string action)
+	{
+		var normalized = action.Trim().TrimEnd('.').ToLowerInvariant();
+		return normalized is not "confirm system is stable"
+			&& !normalized.StartsWith("compare against previous similar incident", StringComparison.Ordinal);
 	}
 
 	private static IEnumerable<string> ExtractRunbookSteps(RunbookDocument runbook)

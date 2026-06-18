@@ -463,6 +463,8 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 		IReadOnlyList<SimilarIncidentMatch> similarIncidents)
 	{
 		var actions = new List<IncidentActionRecommendation>();
+		var isQueueIncident = metricsResult.MetricName.Contains("queue", StringComparison.OrdinalIgnoreCase)
+			|| incident.Tags.Any(tag => tag.Contains("queue", StringComparison.OrdinalIgnoreCase) || tag.Contains("backlog", StringComparison.OrdinalIgnoreCase));
 
 		if (incident.Severity is IncidentSeverity.Critical)
 		{
@@ -475,14 +477,21 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 			});
 		}
 
-		if (incident.Severity is IncidentSeverity.High)
+		if (isQueueIncident)
 		{
 			actions.Add(new IncidentActionRecommendation
 			{
-				Description = "Prioritize investigation of the most affected service path first.",
+				Description = "Check worker pod readiness, restart count, and resource saturation; then compare message arrival rate with consumer throughput.",
 				Priority = "High",
-				Rationale = "High severity incidents still need quick triage of the highest-impact surface.",
-				SupportingSignals = ["incident.severity", "tool.runbooks"]
+				Rationale = "The queue is growing faster than consumers are draining it, so this separates unhealthy workers from insufficient capacity.",
+				SupportingSignals = ["tool.logs", "tool.metrics", "rag.runbooks"]
+			});
+			actions.Add(new IncidentActionRecommendation
+			{
+				Description = "If workers are healthy but saturated, scale the worker deployment incrementally and watch queue depth until it decreases for two consecutive polling windows.",
+				Priority = "High",
+				Rationale = "Scaling is appropriate only when consumers are healthy and capacity, rather than a downstream failure, is the constraint.",
+				SupportingSignals = ["tool.metrics", "rag.runbooks"]
 			});
 		}
 
@@ -492,7 +501,7 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 		}
 
 		var similar = similarIncidents.FirstOrDefault();
-		if (similar is not null)
+		if (similar is not null && HasReusableResolution(similar.ResolutionSummary))
 		{
 			actions.Add(new IncidentActionRecommendation
 			{
@@ -531,22 +540,14 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 			});
 		}
 
-		actions.Add(new IncidentActionRecommendation
-		{
-			Description = "Confirm current blast radius and affected users before broad mitigation.",
-			Priority = "High",
-			Rationale = "Impact scope determines whether to roll back, scale, disable traffic, or escalate.",
-			SupportingSignals = logResult.Entries.Count > 0 ? ["incident.description", "tool.logs"] : ["incident.description"]
-		});
-
-		if (metricsResult.Samples.Count == 0)
+		if (actions.Count == 0)
 		{
 			actions.Add(new IncidentActionRecommendation
 			{
-				Description = "Add or verify metrics for this service path before relying on automated diagnosis.",
-				Priority = "Medium",
-				Rationale = "A full incident response agent needs measurable signals for confidence.",
-				SupportingSignals = ["tool.metrics"]
+				Description = "Collect a current error log and the primary service health metric before choosing a mitigation.",
+				Priority = "High",
+				Rationale = "No concrete operational evidence or actionable runbook step was available.",
+				SupportingSignals = ["incident.description"]
 			});
 		}
 
@@ -576,6 +577,7 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 	{
 		return runbooks
 			.SelectMany(runbook => ExtractActionPhrases(runbook)
+				.Where(action => !IsLowValueFallbackAction(action))
 				.Select(action => new IncidentActionRecommendation
 				{
 					Description = action,
@@ -585,6 +587,15 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 				}))
 			.Take(4)
 			.ToArray();
+	}
+
+	private static bool HasReusableResolution(string? resolutionSummary)
+	{
+		if (string.IsNullOrWhiteSpace(resolutionSummary)) return false;
+		var normalized = NormalizeAction(resolutionSummary);
+		return normalized.Length >= 18
+			&& !normalized.Contains("confirm blast radius review recent changes", StringComparison.Ordinal)
+			&& !normalized.Contains("follow the most relevant runbook", StringComparison.Ordinal);
 	}
 
 	private static string BuildSimilarIncidentAction(SimilarIncidentMatch similar)
@@ -645,6 +656,10 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 	private static bool IsLowValueFallbackAction(string description)
 	{
 		var normalized = NormalizeAction(description);
-		return normalized is "confirm blast radius review recent changes and follow the most relevant runbook";
+		return normalized is "confirm blast radius review recent changes and follow the most relevant runbook"
+			or "confirm system is stable"
+			or "prioritize investigation of the most affected service path first"
+			|| normalized.StartsWith("compare against previous similar incident", StringComparison.Ordinal)
+			|| normalized.StartsWith("use the prior response pattern", StringComparison.Ordinal);
 	}
 }

@@ -90,6 +90,30 @@ public sealed class FileIncidentRecordStoreTests : IDisposable
 		Assert.Contains("checkout", matches[0].SharedSignals);
 	}
 
+	[Fact]
+	public async Task DeleteAsyncRemovesSavedIncident()
+	{
+		var recordsPath = Path.Combine(_rootPath, "incident-records.json");
+		var store = new FileIncidentRecordStore(Options.Create(new IncidentStorageOptions { IncidentRecordsPath = recordsPath }));
+		var incident = new Incident(Guid.NewGuid(), "Delete me", "Temporary incident.", IncidentSeverity.Low);
+		var analysis = new IncidentAnalysisResult
+		{
+			IncidentId = incident.Id,
+			IncidentSummary = "Temporary incident.",
+			AnalysisText = "{}",
+			AnalysisProvider = "local-prompt",
+			SessionId = "session-delete",
+			SessionTurnNumber = 1,
+			Confidence = "Low"
+		};
+
+		await store.SaveAsync(incident, analysis);
+
+		Assert.True(await store.DeleteAsync(incident.Id));
+		Assert.Null(await store.GetByIncidentIdAsync(incident.Id));
+		Assert.False(await store.DeleteAsync(incident.Id));
+	}
+
 	public void Dispose()
 	{
 		if (Directory.Exists(_rootPath))

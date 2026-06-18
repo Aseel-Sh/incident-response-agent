@@ -136,6 +136,18 @@ public sealed class IncidentsController : ControllerBase
         }
     }
 
+    [HttpDelete("{incidentId:guid}")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> DeleteAsync(
+        Guid incidentId,
+        CancellationToken cancellationToken)
+    {
+        return await _incidentRecordStore.DeleteAsync(incidentId, cancellationToken)
+            ? NoContent()
+            : NotFound();
+    }
+
     [HttpGet("recent")]
     [ProducesResponseType(typeof(IReadOnlyList<RecentIncidentAnalysisResponse>), StatusCodes.Status200OK)]
     public async Task<ActionResult<IReadOnlyList<RecentIncidentAnalysisResponse>>> GetRecentAsync(
@@ -148,6 +160,11 @@ public sealed class IncidentsController : ControllerBase
         {
             IncidentId = result.IncidentId,
             IncidentSummary = result.IncidentSummary,
+            IncidentDescription = result.IncidentDescription,
+            ServiceName = result.ServiceName,
+            Environment = result.Environment,
+            Severity = result.Severity,
+            Tags = result.Tags,
             AnalysisText = result.AnalysisText,
             AnalysisProvider = result.AnalysisProvider,
             AnalysisModel = result.AnalysisModel,

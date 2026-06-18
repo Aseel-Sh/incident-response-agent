@@ -10,6 +10,8 @@ public interface IIncidentRecordStore
 
 	Task<string> UpdateStatusAsync(Guid incidentId, string status, CancellationToken cancellationToken = default);
 
+	Task<bool> DeleteAsync(Guid incidentId, CancellationToken cancellationToken = default);
+
 	Task<IncidentActionOutcome> AddActionOutcomeAsync(Guid incidentId, string description, string status, CancellationToken cancellationToken = default);
 
 	Task<IReadOnlyList<IncidentAnalysisRecord>> GetRecentAsync(int maxResults, CancellationToken cancellationToken = default);

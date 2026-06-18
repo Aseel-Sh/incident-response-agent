@@ -105,6 +105,11 @@ public sealed class IncidentAnalysisEvaluationUseCaseTests
 			return Task.FromResult(status);
 		}
 
+		public Task<bool> DeleteAsync(Guid incidentId, CancellationToken cancellationToken = default)
+		{
+			return Task.FromResult(_records.RemoveAll(record => record.Incident.Id == incidentId) > 0);
+		}
+
 		public Task<IncidentActionOutcome> AddActionOutcomeAsync(Guid incidentId, string description, string status, CancellationToken cancellationToken = default)
 		{
 			var outcome = new IncidentActionOutcome

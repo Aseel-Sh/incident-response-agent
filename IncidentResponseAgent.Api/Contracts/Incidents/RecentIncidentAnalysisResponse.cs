@@ -6,6 +6,16 @@ public sealed record RecentIncidentAnalysisResponse
 
 	public required string IncidentSummary { get; init; }
 
+	public required string IncidentDescription { get; init; }
+
+	public string? ServiceName { get; init; }
+
+	public string? Environment { get; init; }
+
+	public required string Severity { get; init; }
+
+	public IReadOnlyList<string> Tags { get; init; } = Array.Empty<string>();
+
 	public required string AnalysisText { get; init; }
 
 	public string AnalysisProvider { get; init; } = string.Empty;

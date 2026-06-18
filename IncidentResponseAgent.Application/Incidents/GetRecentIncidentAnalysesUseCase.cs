@@ -17,6 +17,11 @@ public sealed class GetRecentIncidentAnalysesUseCase : IGetRecentIncidentAnalyse
 		{
 			IncidentId = record.Incident.Id,
 			IncidentSummary = record.AnalysisResult.IncidentSummary,
+			IncidentDescription = record.Incident.Description,
+			ServiceName = record.Incident.ServiceName,
+			Environment = record.Incident.Environment,
+			Severity = record.Incident.Severity.ToString(),
+			Tags = record.Incident.Tags.ToArray(),
 			AnalysisText = record.AnalysisResult.AnalysisText,
 			AnalysisProvider = record.AnalysisResult.AnalysisProvider,
 			AnalysisModel = record.AnalysisResult.AnalysisModel,

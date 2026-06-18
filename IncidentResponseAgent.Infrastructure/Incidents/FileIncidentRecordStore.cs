@@ -125,6 +125,26 @@ public sealed class FileIncidentRecordStore : IIncidentRecordStore
 		}
 	}
 
+	public async Task<bool> DeleteAsync(Guid incidentId, CancellationToken cancellationToken = default)
+	{
+		await _fileLock.WaitAsync(cancellationToken);
+		try
+		{
+			var records = await ReadRecordsAsync(cancellationToken);
+			if (!records.Remove(incidentId))
+			{
+				return false;
+			}
+
+			await WriteRecordsAsync(records.Values, cancellationToken);
+			return true;
+		}
+		finally
+		{
+			_fileLock.Release();
+		}
+	}
+
 	public async Task<IncidentActionOutcome> AddActionOutcomeAsync(
 		Guid incidentId,
 		string description,

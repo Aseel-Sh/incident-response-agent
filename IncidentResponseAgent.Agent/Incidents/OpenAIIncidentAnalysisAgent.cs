@@ -1,6 +1,7 @@
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using IncidentResponseAgent.Application.Incidents;
 using IncidentResponseAgent.Application.Runbooks;
 using IncidentResponseAgent.Application.Tools;
@@ -15,7 +16,8 @@ public sealed class OpenAIIncidentAnalysisAgent : IIncidentAnalysisAgent
 {
 	private static readonly JsonSerializerOptions SerializerOptions = new(JsonSerializerDefaults.Web)
 	{
-		PropertyNameCaseInsensitive = true
+		PropertyNameCaseInsensitive = true,
+		DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
 	};
 	private static readonly object AnalysisResponseSchema = new
 	{
@@ -130,7 +132,55 @@ public sealed class OpenAIIncidentAnalysisAgent : IIncidentAnalysisAgent
 		}
 
 		var context = agentContext ?? await BuildAgentContextAsync(incident, cancellationToken).ConfigureAwait(false);
-		var request = BuildChatCompletionRequest(incident, sessionContext, context, model);
+		_logger.LogInformation(
+			"Running direct OpenAI-compatible incident analysis for IncidentId={IncidentId} Model={Model} Runbooks={RunbookCount} Logs={LogCount} MetricSamples={MetricSampleCount}.",
+			incident.Id,
+			model,
+			context.Runbooks.Runbooks.Count,
+			context.Logs.Entries.Count,
+			context.Metrics.Samples.Count);
+
+		var (content, routedModel) = await SendCompletionAsync(
+			endpoint,
+			apiKey,
+			BuildChatCompletionRequest(incident, sessionContext, context, model, useStrictSchema: true),
+			cancellationToken).ConfigureAwait(false);
+
+		if (string.IsNullOrWhiteSpace(content))
+		{
+			_logger.LogWarning("Configured model returned empty structured output for IncidentId={IncidentId}; retrying once with plain JSON mode.", incident.Id);
+			(content, routedModel) = await SendCompletionAsync(
+				endpoint,
+				apiKey,
+				BuildChatCompletionRequest(incident, sessionContext, context, model, useStrictSchema: false),
+				cancellationToken).ConfigureAwait(false);
+		}
+
+		if (string.IsNullOrWhiteSpace(content))
+		{
+			throw new InvalidOperationException("The configured model returned an empty message after a plain-JSON retry.");
+		}
+
+		_logger.LogInformation(
+			"Direct OpenAI-compatible incident analysis completed for IncidentId={IncidentId}. RoutedModel={RoutedModel} ResponseLength={ResponseLength}.",
+			incident.Id,
+			routedModel ?? model,
+			content.Length);
+		return new IncidentAgentExecutionResult
+		{
+			AnalysisText = content,
+			Provider = "openai-compatible",
+			Model = routedModel ?? model,
+			UsedFallback = false
+		};
+	}
+
+	private async Task<(string? Content, string? RoutedModel)> SendCompletionAsync(
+		string endpoint,
+		string apiKey,
+		object request,
+		CancellationToken cancellationToken)
+	{
 		var requestJson = JsonSerializer.Serialize(request, SerializerOptions);
 		using var httpRequest = new HttpRequestMessage(HttpMethod.Post, BuildChatCompletionsUri(endpoint))
 		{
@@ -140,14 +190,6 @@ public sealed class OpenAIIncidentAnalysisAgent : IIncidentAnalysisAgent
 		httpRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
 		httpRequest.Headers.TryAddWithoutValidation("HTTP-Referer", "http://localhost:5155");
 		httpRequest.Headers.TryAddWithoutValidation("X-OpenRouter-Title", "Incident Response Agent Local");
-
-		_logger.LogInformation(
-			"Running direct OpenAI-compatible incident analysis for IncidentId={IncidentId} Model={Model} Runbooks={RunbookCount} Logs={LogCount} MetricSamples={MetricSampleCount}.",
-			incident.Id,
-			model,
-			context.Runbooks.Runbooks.Count,
-			context.Logs.Entries.Count,
-			context.Metrics.Samples.Count);
 
 		using var response = await _httpClient.SendAsync(httpRequest, cancellationToken).ConfigureAwait(false);
 		var responseText = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
@@ -163,23 +205,7 @@ public sealed class OpenAIIncidentAnalysisAgent : IIncidentAnalysisAgent
 		var content = completion?.Choices
 			.Select(choice => choice.Message.Content)
 			.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
-		if (string.IsNullOrWhiteSpace(content))
-		{
-			throw new InvalidOperationException("The configured model returned an empty message.");
-		}
-
-		_logger.LogInformation(
-			"Direct OpenAI-compatible incident analysis completed for IncidentId={IncidentId}. RoutedModel={RoutedModel} ResponseLength={ResponseLength}.",
-			incident.Id,
-			completion?.Model ?? model,
-			content.Length);
-		return new IncidentAgentExecutionResult
-		{
-			AnalysisText = content,
-			Provider = "openai-compatible",
-			Model = completion?.Model ?? model,
-			UsedFallback = false
-		};
+		return (content, completion?.Model);
 	}
 
 	private async Task<IncidentAnalysisAgentContext> BuildAgentContextAsync(Incident incident, CancellationToken cancellationToken)
@@ -223,7 +249,8 @@ public sealed class OpenAIIncidentAnalysisAgent : IIncidentAnalysisAgent
 		Incident incident,
 		IncidentAnalysisSessionContext? sessionContext,
 		IncidentAnalysisAgentContext context,
-		string model)
+		string model,
+		bool useStrictSchema)
 	{
 		return new
 		{
@@ -309,18 +336,20 @@ Use exactly this schema:
 					}, SerializerOptions)
 				}
 			},
-			response_format = new
-			{
-				type = "json_schema",
-				json_schema = new
+			response_format = useStrictSchema
+				? new
 				{
-					name = "incident_analysis",
-					strict = true,
-					schema = AnalysisResponseSchema
+					type = "json_schema",
+					json_schema = new
+					{
+						name = "incident_analysis",
+						strict = true,
+						schema = AnalysisResponseSchema
+					}
 				}
-			},
-			provider = new { require_parameters = true },
-			max_tokens = Math.Clamp(_options.MaxOutputTokens, 256, 4096),
+				: null,
+			provider = useStrictSchema ? new { require_parameters = true } : null,
+			max_tokens = Math.Clamp(useStrictSchema ? _options.MaxOutputTokens : _options.MaxOutputTokens * 2, 256, 4096),
 			temperature = _options.Temperature
 		};
 	}
