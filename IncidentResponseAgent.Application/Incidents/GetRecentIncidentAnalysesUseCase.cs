@@ -16,11 +16,12 @@ public sealed class GetRecentIncidentAnalysesUseCase : IGetRecentIncidentAnalyse
 		return records.Select(record => new GetRecentIncidentAnalysesResult
 		{
 			IncidentId = record.Incident.Id,
+			IncidentTitle = record.Incident.Title,
 			IncidentSummary = record.AnalysisResult.IncidentSummary,
 			IncidentDescription = record.Incident.Description,
 			ServiceName = record.Incident.ServiceName,
 			Environment = record.Incident.Environment,
-			Severity = record.Incident.Severity.ToString(),
+			Severity = record.Incident.Severity.ToString().ToLowerInvariant(),
 			Tags = record.Incident.Tags.ToArray(),
 			AnalysisText = record.AnalysisResult.AnalysisText,
 			AnalysisProvider = record.AnalysisResult.AnalysisProvider,

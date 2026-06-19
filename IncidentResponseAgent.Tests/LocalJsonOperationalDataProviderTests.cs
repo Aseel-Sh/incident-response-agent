@@ -59,6 +59,32 @@ public sealed class LocalJsonOperationalDataProviderTests : IDisposable
 	}
 
 	[Fact]
+	public async Task LogSearchDoesNotLeakAnotherApiServiceOnGenericApiOrSingleTopicToken()
+	{
+		var logsPath = Path.Combine(_rootPath, "isolated-logs.json");
+		Directory.CreateDirectory(_rootPath);
+		await File.WriteAllTextAsync(logsPath,
+			"""
+			[
+			  { "timestamp": "2026-06-19T12:00:00Z", "source": "database-api", "level": "Error", "message": "production database latency while waiting for pool checkout", "correlationId": "db-1" },
+			  { "timestamp": "2026-06-19T12:00:00Z", "source": "model-unavailable-api", "level": "Error", "message": "production database connection failure", "correlationId": "other-1" }
+			]
+			""");
+		var provider = CreateLogProvider(logsPath);
+
+		var result = await provider.SearchAsync(new LogSearchRequest
+		{
+			Query = "database latency",
+			ServiceName = "database-api",
+			Environment = "production",
+			MaxResults = 5
+		});
+
+		var entry = Assert.Single(result.Entries);
+		Assert.Equal("database-api", entry.Source);
+	}
+
+	[Fact]
 	public async Task MetricQueryReturnsEmptyWhenExplicitWindowHasNoSamples()
 	{
 		var metricsPath = Path.Combine(_rootPath, "metrics.json");

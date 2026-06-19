@@ -35,6 +35,9 @@ Desktop.ini
 TestResults/
 coverage/
 .tmp/
+node_modules/
+playwright-report/
+test-results/
 
 # Optional local environment files
 .env

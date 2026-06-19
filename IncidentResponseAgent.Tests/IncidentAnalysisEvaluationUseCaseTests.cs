@@ -105,7 +105,7 @@ public sealed class IncidentAnalysisEvaluationUseCaseTests
 			Task.FromResult(new IncidentAgentExecutionResult
 			{
 				Provider = "model-test", Model = "model-1", UsedFallback = false,
-				AnalysisText = $$"""{"summary":"test","severity":"{{OpenAIIncidentAnalysisAgent.FormatSeverity(incident.Severity)}}","evidence":[],"hypotheses":[],"recommendedActions":[{"description":"Validate the submitted incident details before mitigation.","priority":"High","rationale":"Grounded in user input.","supportingSignals":["incident.description"]}],"confidence":"Low","notes":"RAG unavailable."}"""
+				AnalysisText = $$"""{"summary":"test","severity":"{{MicrosoftAgentFrameworkIncidentAnalysisAgent.FormatSeverity(incident.Severity)}}","evidence":[],"hypotheses":[],"recommendedActions":[{"description":"Validate the submitted incident details before mitigation.","priority":"High","rationale":"Grounded in user input.","supportingSignals":["incident.description"]}],"confidence":"Low","notes":"RAG unavailable."}"""
 			});
 	}
 

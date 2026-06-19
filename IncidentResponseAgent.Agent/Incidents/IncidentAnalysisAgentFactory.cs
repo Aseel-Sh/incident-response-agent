@@ -7,15 +7,17 @@ public sealed class IncidentAnalysisAgentFactory : IIncidentAnalysisAgentFactory
 	private const string EndpointEnvironmentVariable = "IRA_AGENT_ENDPOINT";
 	private const string ApiKeyEnvironmentVariable = "IRA_AGENT_API_KEY";
 	private const string OpenRouterApiKeyEnvironmentVariable = "OPENROUTER_API_KEY";
+	private const string OpenRouterModelEnvironmentVariable = "OPENROUTER_MODEL";
+	private const string OpenRouterBaseUrlEnvironmentVariable = "OPENROUTER_BASE_URL";
 
 	public IncidentAnalysisAgentProfile Create()
 	{
 		var options = new IncidentAnalysisAgentOptions
 		{
-			Provider = GetValue(ProviderEnvironmentVariable, "unset"),
-			Model = GetValue(ModelEnvironmentVariable, "unset"),
-			Endpoint = GetValue(EndpointEnvironmentVariable),
-			ApiKey = GetValue(ApiKeyEnvironmentVariable, OpenRouterApiKeyEnvironmentVariable)
+			Provider = GetValueOrDefault(ProviderEnvironmentVariable, "OpenRouter"),
+			Model = GetValue([ModelEnvironmentVariable, OpenRouterModelEnvironmentVariable]) ?? "unset",
+			Endpoint = GetValue([EndpointEnvironmentVariable, OpenRouterBaseUrlEnvironmentVariable]),
+			ApiKey = GetValue([ApiKeyEnvironmentVariable, OpenRouterApiKeyEnvironmentVariable])
 		};
 
 		return new IncidentAnalysisAgentProfile
@@ -42,7 +44,7 @@ public sealed class IncidentAnalysisAgentFactory : IIncidentAnalysisAgentFactory
 		return null;
 	}
 
-	private static string GetValue(string key, string fallback)
+	private static string GetValueOrDefault(string key, string fallback)
 	{
 		return GetValue(key) ?? fallback;
 	}

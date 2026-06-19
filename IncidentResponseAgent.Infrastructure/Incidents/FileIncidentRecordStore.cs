@@ -16,9 +16,11 @@ public sealed class FileIncidentRecordStore : IIncidentRecordStore
 	private readonly SemaphoreSlim _fileLock = new(1, 1);
 	private readonly string _filePath;
 	private readonly string _workflowFilePath;
+	private readonly IApprovedKnowledgePublisher? _approvedKnowledgePublisher;
 
-	public FileIncidentRecordStore(IOptions<IncidentStorageOptions> options)
+	public FileIncidentRecordStore(IOptions<IncidentStorageOptions> options, IApprovedKnowledgePublisher? approvedKnowledgePublisher = null)
 	{
+		_approvedKnowledgePublisher = approvedKnowledgePublisher;
 		var configuredPath = options.Value?.IncidentRecordsPath;
 		if (!string.IsNullOrWhiteSpace(configuredPath))
 		{
@@ -58,7 +60,7 @@ public sealed class FileIncidentRecordStore : IIncidentRecordStore
 			{
 				Incident = incident,
 				AnalysisResult = analysisResult,
-				Status = isExisting ? existing!.Status : "active",
+				Status = isExisting ? existing!.Status : "new",
 				CreatedAtUtc = isExisting ? existing!.CreatedAtUtc : now,
 				UpdatedAtUtc = now,
 				CandidateId = existing?.CandidateId,
@@ -126,7 +128,7 @@ public sealed class FileIncidentRecordStore : IIncidentRecordStore
 			{
 				if (state.Candidates.Any(item => item.Id == candidate.Id)) continue;
 				var probe = ToIncident(candidate);
-				var active = records.Values.Where(record => record.Status is "active" or "mitigated").ToArray();
+				var active = records.Values.Where(record => record.Status is "new" or "active" or "mitigated").ToArray();
 				var duplicate = active.FirstOrDefault(record => SameScope(probe, record.Incident));
 				var similar = active.Select(record => ToSimilarMatch(probe, Tokenize(BuildIncidentText(probe)), record)).Where(match => match.Score >= 0.45).OrderByDescending(match => match.Score).Take(3).ToArray();
 				state.Candidates.Add(candidate with
@@ -177,8 +179,8 @@ public sealed class FileIncidentRecordStore : IIncidentRecordStore
 			var records = await ReadRecordsAsync(cancellationToken);
 			records[incident.Id] = new IncidentAnalysisRecord
 			{
-				Incident = incident, AnalysisResult = placeholder, Status = "active", CreatedAtUtc = now, UpdatedAtUtc = now, CandidateId = candidate.Id,
-				Timeline = candidate.Timeline.Concat([Event("incident created", "Incident created from candidate.", now), Event("incident confirmed", "Candidate confirmed by a human.", now, actor: "user"), Event("work started", "Incident response work started.", now, actor: "user"), Event("analysis started", "Evidence collection and analysis started.", now)]).ToArray()
+				Incident = incident, AnalysisResult = placeholder, Status = "new", CreatedAtUtc = now, UpdatedAtUtc = now, CandidateId = candidate.Id,
+				Timeline = candidate.Timeline.Concat([Event("incident created", "Incident created from candidate.", now), Event("incident confirmed", "Candidate confirmed by a human.", now, actor: "user"), Event("analysis started", "Evidence collection and analysis started.", now)]).ToArray()
 			};
 			state.Candidates[index] = candidate with { Status = "confirmed", Timeline = candidate.Timeline.Append(Event("incident confirmed", $"Confirmed as incident {incident.Id}.", now, actor: "user")).ToArray() };
 			await WriteRecordsAsync(records.Values, cancellationToken);
@@ -277,8 +279,16 @@ public sealed class FileIncidentRecordStore : IIncidentRecordStore
 			if (record.ProposedKnowledgeUpdate is null) throw new InvalidOperationException("No proposed knowledge update exists.");
 			var now = DateTimeOffset.UtcNow;
 			var updatedProposal = record.ProposedKnowledgeUpdate with { Status = normalized, Content = string.IsNullOrWhiteSpace(content) ? record.ProposedKnowledgeUpdate.Content : content.Trim(), ReviewNotes = notes?.Trim(), ReviewedAtUtc = now };
+			if (_approvedKnowledgePublisher is not null && normalized == "rejected")
+			{
+				await _approvedKnowledgePublisher.RemoveAsync(updatedProposal.Id, cancellationToken);
+			}
 			records[incidentId] = record with { ProposedKnowledgeUpdate = updatedProposal, UpdatedAtUtc = now, Timeline = record.Timeline.Append(Event($"runbook update {normalized}", $"Proposed knowledge update {normalized} by a human.", now, actor: "user")).ToArray() };
 			await WriteRecordsAsync(records.Values, cancellationToken);
+			if (_approvedKnowledgePublisher is not null && normalized == "approved")
+			{
+				await _approvedKnowledgePublisher.PublishAsync(updatedProposal.Id, updatedProposal.Title, updatedProposal.Content, cancellationToken);
+			}
 			return updatedProposal;
 		}
 		finally { _fileLock.Release(); }
@@ -290,9 +300,13 @@ public sealed class FileIncidentRecordStore : IIncidentRecordStore
 		try
 		{
 			var records = await ReadRecordsAsync(cancellationToken);
-			if (!records.Remove(incidentId))
+			if (!records.Remove(incidentId, out var deletedRecord))
 			{
 				return false;
+			}
+			if (_approvedKnowledgePublisher is not null && deletedRecord.ProposedKnowledgeUpdate is { } proposal)
+			{
+				await _approvedKnowledgePublisher.RemoveAsync(proposal.Id, cancellationToken);
 			}
 
 			await WriteRecordsAsync(records.Values, cancellationToken);
@@ -443,7 +457,7 @@ public sealed class FileIncidentRecordStore : IIncidentRecordStore
 			_ => IncidentSeverity.Sev5
 		};
 		var incident = new Incident(record.Incident.Id, record.Incident.Title, record.Incident.Description, severity, record.Incident.ServiceName, record.Incident.Environment, record.Incident.Timestamp, record.Incident.Tags);
-		return record with { Incident = incident, Status = record.Status == "new" ? "active" : record.Status, UpdatedAtUtc = record.CreatedAtUtc, Timeline = [Event("incident created", "Migrated legacy analyzed incident.", record.CreatedAtUtc)] };
+		return record with { Incident = incident, UpdatedAtUtc = record.CreatedAtUtc, Timeline = [Event("incident created", "Migrated legacy analyzed incident.", record.CreatedAtUtc)] };
 	}
 
 	private async Task WriteRecordsAsync(IEnumerable<IncidentAnalysisRecord> records, CancellationToken cancellationToken)
@@ -566,13 +580,33 @@ public sealed class FileIncidentRecordStore : IIncidentRecordStore
 
 	private static ProposedKnowledgeUpdate BuildKnowledgeUpdate(IncidentAnalysisRecord record, DateTimeOffset now)
 	{
-		var successful = record.AnalysisResult.ActionOutcomes.Where(item => item.Status is "worked" or "partial").ToArray();
 		var evidence = record.AnalysisResult.Evidence.Take(5).Select(item => $"- {item.Source}: {item.Summary}");
-		var actions = successful.Length == 0 ? ["- No validated action outcome was recorded; review before approval."] : successful.Select(item => $"- [{item.Status}] {item.Description} ({item.EvidenceReference})");
+		var actions = record.AnalysisResult.ActionOutcomes.Count == 0
+			? ["- No action outcome was recorded; review before approval."]
+			: record.AnalysisResult.ActionOutcomes.Select(item => $"- [{item.Status}] {item.Description} ({item.EvidenceReference})");
+		var futureSteps = record.AnalysisResult.RecommendedActions.Count == 0
+			? ["- No evidence-grounded future step was generated."]
+			: record.AnalysisResult.RecommendedActions.Take(5).Select(item => $"- {item.Description} (Evidence: {string.Join(", ", item.SupportingSignals)})");
+		var severity = record.Incident.Severity switch
+		{
+			IncidentSeverity.Sev1 => "SEV-1", IncidentSeverity.Sev2 => "SEV-2", IncidentSeverity.Sev3 => "SEV-3",
+			IncidentSeverity.Sev4 => "SEV-4", IncidentSeverity.Sev5 => "SEV-5", _ => "unknown"
+		};
 		return new ProposedKnowledgeUpdate
 		{
 			Title = $"Learning from {record.Incident.Title}", GeneratedAtUtc = now,
-			Content = string.Join(Environment.NewLine, new[] { $"# {record.Incident.Title}", "", "## Grounded evidence" }.Concat(evidence).Concat(["", "## Observed action outcomes"]).Concat(actions))
+			Content = string.Join(Environment.NewLine,
+				new[]
+				{
+					$"# {record.Incident.Title}", "", "## Incident context",
+					$"- What happened: {record.Incident.Description}", $"- Severity: {severity}",
+					$"- Service: {record.Incident.ServiceName ?? "unknown"}", $"- Environment: {record.Incident.Environment ?? "unknown"}",
+					"", "## Grounded evidence"
+				}.Concat(evidence)
+				.Concat(["", "## Actions tried"])
+				.Concat(actions)
+				.Concat(["", "## Recommended future steps"])
+				.Concat(futureSteps))
 		};
 	}
 
@@ -598,7 +632,7 @@ public sealed class FileIncidentRecordStore : IIncidentRecordStore
 			return "active";
 		}
 
-		return normalized is "active" or "mitigated" or "resolved" ? normalized : "active";
+		return normalized is "new" or "active" or "mitigated" or "resolved" ? normalized : "active";
 	}
 
 	private sealed class WorkflowState

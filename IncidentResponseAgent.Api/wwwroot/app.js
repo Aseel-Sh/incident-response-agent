@@ -22,6 +22,7 @@ const elements = {
   analysisOutput: $("#analysisOutput"),
   sample: $("#sampleButton"),
   historyReload: $("#historyReloadButton"),
+  historySearch: $("#historySearch"),
   historyServiceFilter: $("#historyServiceFilter"),
   historyStatusFilter: $("#historyStatusFilter"),
   historySessionFilter: $("#historySessionFilter"),
@@ -116,6 +117,10 @@ elements.historyReload.addEventListener("click", async () => {
     renderHistory();
   });
 });
+elements.historySearch.addEventListener("input", () => {
+  historyPage = 1;
+  renderHistory();
+});
 elements.incidentForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   await analyzeCurrentIncident();
@@ -135,9 +140,8 @@ elements.metricSignalForm.addEventListener("submit", async (event) => {
 document.querySelectorAll("[data-rescan]").forEach((button) => button.addEventListener("click", () => loadDetected(true)));
 $("#pauseScanButton").addEventListener("click", (event) => {
   polling = !polling;
-  event.currentTarget.innerHTML = `<span data-icon="${polling ? "pause" : "play"}"></span>${polling ? "Pause Scanning" : "Resume Scanning"}`;
-  event.currentTarget.dataset.hydrated = "";
-  hydrateIcons(event.currentTarget);
+  localStorage.setItem("incidentops.pollingEnabled", String(polling));
+  syncPollingButton();
   if (polling) {
     startPolling();
   } else {
@@ -191,8 +195,26 @@ elements.historyDetail.addEventListener("click", async (event) => {
   if (reviewButton) await reviewKnowledgeUpdate(reviewButton.dataset.incidentId, reviewButton.dataset.knowledgeReview);
 });
 document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape" && !elements.historyModal.hidden) closeHistoryModal();
+  if (elements.historyModal.hidden) return;
+  if (event.key === "Escape") {
+    closeHistoryModal();
+    return;
+  }
+  if (event.key !== "Tab") return;
+  const focusable = getModalFocusableElements();
+  if (!focusable.length) return;
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
 });
+
+let historyModalReturnFocus = null;
 
 function toggleTheme() {
   document.documentElement.dataset.theme = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
@@ -376,7 +398,6 @@ function renderSourceBanner() {
 }
 
 async function loadDetected(userInitiated = false) {
-  const startedAt = performance.now();
   if (userInitiated) {
     setFeedback(elements.scanFeedback, "Scanning", "Checking logs and metrics now.", "pending");
     elements.manualRefresh.disabled = true;
@@ -386,24 +407,23 @@ async function loadDetected(userInitiated = false) {
   try {
     const result = await requestJson("/api/incidents/scan", { method: "POST" });
     detectedCandidates = normalizeArray(result?.candidates);
-    const connectedSources = sourceRows.filter((source) => ["connected", "configured"].includes(String(source.status).toLowerCase())).length;
-    const missingSources = sourceRows.filter((source) => ["missing", "error"].includes(String(source.status).toLowerCase())).length;
+    const scan = result?.scan || {};
     lastScanState = {
-      scannedSources: sourceRows.length || connectedSources,
-      connectedSources,
-      errors: missingSources,
-      signalsFound: detectedCandidates.length,
-      durationSeconds: Math.max(0.1, (performance.now() - startedAt) / 1000),
-      scannedAt: new Date()
+      scannedSources: Number(scan.scannedSourceCount) || 0,
+      connectedSources: Math.max(0, (Number(scan.scannedSourceCount) || 0) - (Number(scan.errorCount) || 0)),
+      errors: Number(scan.errorCount) || 0,
+      signalsFound: Number(scan.candidateCount) || 0,
+      durationSeconds: Math.max(0, (Number(scan.durationMilliseconds) || 0) / 1000),
+      scannedAt: new Date(scan.completedAtUtc)
     };
     saveLastScanState();
   } catch (error) {
     lastScanState = {
-      scannedSources: sourceRows.length,
-      connectedSources: sourceRows.filter((source) => String(source.status).toLowerCase() === "connected").length,
+      scannedSources: 2,
+      connectedSources: 0,
       errors: 1,
       signalsFound: 0,
-      durationSeconds: Math.max(0.1, (performance.now() - startedAt) / 1000),
+      durationSeconds: 0,
       scannedAt: new Date()
     };
     saveLastScanState();
@@ -446,7 +466,11 @@ function restoreLastScanState() {
 function renderDetected() {
   const query = elements.incidentSearch.value.trim().toLowerCase();
   const rows = buildDashboardRows()
-    .filter((item) => activeStatus === "all" ? item.statusKey !== "resolved" : item.statusKey === activeStatus)
+    .filter((item) => activeStatus === "all"
+      ? item.statusKey !== "resolved"
+      : activeStatus === "active"
+        ? ["new", "active"].includes(item.statusKey)
+        : item.statusKey === activeStatus)
     .filter((item) => !query || [item.title, item.serviceName, item.environment, item.source, item.provider, ...(item.signals || []), ...(item.tags || [])].join(" ").toLowerCase().includes(query));
   const page = paginateRows(rows, dashboardPage);
   dashboardPage = page.page;
@@ -494,17 +518,19 @@ function enrichCandidate(item, index) {
 function renderBacklogRow(item) {
   const action = item.rowKind === "ticket" ? "open-ticket" : "confirm";
   const confidence = normalizeConfidence(item.confidence).toLowerCase();
+  const severityKey = String(item.severity || "sev3").toLowerCase().replace("-", "");
   return `
-    <article class="backlog-row">
+    <article class="backlog-row" data-row-id="${escapeHtml(item.id)}" data-row-kind="${escapeHtml(item.rowKind)}">
       <div>
         <div class="badge-row">
           <span class="badge muted">${escapeHtml(item.incidentNumber)}</span>
-          <span class="severity severity-${escapeHtml(item.severity.toLowerCase())}">${escapeHtml(item.severity)}</span>
+          <span class="severity severity-${escapeHtml(severityKey)}">${escapeHtml(formatSeverityLabel(item.severity))}</span>
           <span class="badge status-${escapeHtml(item.statusKey)}">${escapeHtml(item.statusLabel)}</span>
           <span class="badge badge-info">${escapeHtml(item.provider)}</span>
         </div>
         <h3>${escapeHtml(formatIncidentTitle(item.title))}</h3>
         <p><span>${escapeHtml(item.serviceName || "unknown")}</span><span class="badge meta-badge">${escapeHtml(item.environment || "unknown")}</span><span class="conf-label confidence-${escapeHtml(confidence)}">${escapeHtml(confidence)} conf.</span></p>
+        ${item.rowKind === "signal" ? `<p class="candidate-evidence"><strong>Evidence:</strong> ${escapeHtml((item.signals || []).slice(0, 2).join(" · ") || "No observable signal supplied")}</p>` : ""}
       </div>
       <div class="row-side">
         ${item.rowKind === "signal" && item.statusKey === "candidate" ? `<div class="candidate-actions"><button type="button" data-action="confirm" data-id="${escapeHtml(item.id)}">Confirm</button><button class="secondary" type="button" data-action="false_positive" data-id="${escapeHtml(item.id)}">False positive</button><button class="secondary" type="button" data-action="ignored" data-id="${escapeHtml(item.id)}">Ignore</button>${item.duplicateIncidentId ? `<button class="secondary" type="button" data-action="merged" data-id="${escapeHtml(item.id)}">Merge duplicate</button>` : ""}</div>` : `<button class="icon-row-button" type="button" data-action="${escapeHtml(action)}" data-id="${escapeHtml(item.id)}">&rsaquo;</button>`}
@@ -517,7 +543,7 @@ function renderBacklogRow(item) {
 function updateCounts() {
   const rows = buildDashboardRows();
   $("#newCount").textContent = rows.filter((item) => item.statusKey === "candidate").length;
-  $("#investigatingCount").textContent = rows.filter((item) => item.statusKey === "active").length;
+  $("#investigatingCount").textContent = rows.filter((item) => ["new", "active"].includes(item.statusKey)).length;
   $("#mitigatedCount").textContent = rows.filter((item) => item.statusKey === "mitigated").length;
   $("#resolvedCount").textContent = rows.filter((item) => item.statusKey === "resolved").length;
 }
@@ -700,7 +726,7 @@ function renderAnalysisQuality(quality = {}) {
 
 function renderProviderTransparency(provider = {}) {
   const ragClass = provider.isDegraded || provider.ragStatus !== "available" ? "status-warning" : "status-connected";
-  return `<section class="analysis-card provider-card"><h3><span data-icon="database"></span>Provider information</h3><dl class="provider-grid"><div><dt>Model provider</dt><dd>${escapeHtml(provider.modelProvider || "unknown")}</dd><small>${escapeHtml(provider.model || "model not reported")}</small></div><div><dt>Embedding provider</dt><dd>${escapeHtml(provider.embeddingProvider || "unknown")}</dd></div><div><dt>Vector store</dt><dd>${escapeHtml(provider.vectorStore || "unknown")}</dd></div><div><dt>RAG status</dt><dd><span class="status-pill ${ragClass}">${escapeHtml(provider.ragStatus || "unknown")}</span></dd></div><div><dt>Model fallback</dt><dd>${provider.usedModelFallback ? "Yes" : "No"}</dd></div><div><dt>Structured retry</dt><dd>${provider.usedStructuredOutputRetry ? "Succeeded" : "Not needed"}</dd></div><div><dt>Degraded mode</dt><dd>${provider.isDegraded ? "Yes" : "No"}</dd></div></dl>${provider.structuredOutputRetryReason ? `<p class="warning-banner">Structured-output retry: ${escapeHtml(provider.structuredOutputRetryReason)}</p>` : ""}${provider.degradedReason ? `<p class="warning-banner">${escapeHtml(provider.degradedReason)}</p>` : ""}${provider.fallbackReason ? `<p class="warning-banner">Fallback: ${escapeHtml(provider.fallbackReason)}</p>` : ""}</section>`;
+  return `<section class="analysis-card provider-card"><h3><span data-icon="database"></span>Provider information</h3><dl class="provider-grid"><div><dt>Model provider</dt><dd>${escapeHtml(provider.modelProvider || "unknown")}</dd><small>${escapeHtml(provider.model || "model not reported")}</small></div><div><dt>Embedding provider</dt><dd>${escapeHtml(provider.embeddingProvider || "unknown")}</dd></div><div><dt>Vector store</dt><dd>${escapeHtml(provider.vectorStore || "unknown")}</dd></div><div><dt>RAG status</dt><dd><span class="status-pill ${ragClass}">${escapeHtml(provider.ragStatus || "unknown")}</span></dd></div><div><dt>Model fallback</dt><dd>${provider.usedModelFallback ? "Yes" : "No"}</dd></div><div><dt>Structured retry</dt><dd>${provider.usedStructuredOutputRetry ? "Succeeded" : "Not needed"}</dd></div><div><dt>Degraded mode</dt><dd>${provider.isDegraded ? "Yes" : "No"}</dd></div></dl>${provider.structuredOutputRetryReason ? `<p class="warning-banner">Structured-output retry: ${escapeHtml(provider.structuredOutputRetryReason)}</p>` : ""}${provider.degradedReason ? `<p class="warning-banner">RAG degraded: ${escapeHtml(provider.degradedReason)}</p>` : ""}${provider.fallbackReason ? `<p class="warning-banner">Fallback: ${escapeHtml(provider.fallbackReason)}</p>` : ""}</section>`;
 }
 
 function renderEvidenceBlock(evidence) {
@@ -749,7 +775,7 @@ function renderOutcomeHistory(outcomes = []) {
 }
 
 function renderFeedbackCard() {
-  const reasons = ["shallow", "missing evidence", "hallucinated evidence", "wrong SEV", "wrong root cause", "bad remediation", "ignored runbook", "repeated failed action", "other"];
+  const reasons = ["shallow", "missing evidence", "hallucinated evidence", "wrong SEV", "wrong root cause", "bad remediation", "ignored runbook", "repeated failed past action", "other"];
   return `<section class="analysis-card feedback-card"><h3><span data-icon="check"></span>Analysis feedback</h3><div class="feedback-grid"><label>Analysis usefulness<select data-feedback-usefulness><option value="">Select</option><option>Useful</option><option>Partially Useful</option><option>Not Useful</option></select></label><label>Recommendation correctness<select data-feedback-correctness><option value="">Select</option><option>Correct</option><option>Partially Correct</option><option>Wrong</option></select></label></div><fieldset><legend>Reason tags</legend><div class="reason-tags">${reasons.map((reason) => `<label><input type="checkbox" value="${escapeHtml(reason)}" data-feedback-reason>${escapeHtml(reason)}</label>`).join("")}</div></fieldset><label>Recommendation being rated (optional)<input data-feedback-recommendation placeholder="Paste or summarize the recommendation"></label><label>Comments (optional)<textarea data-feedback-comments placeholder="What helped or what was wrong?"></textarea></label><button type="button" data-submit-feedback>Save feedback</button><p class="meta" data-feedback-status>Feedback is stored with this analysis.</p></section>`;
 }
 
@@ -841,12 +867,16 @@ function renderHistory() {
 }
 
 function filterHistoryRows(rows) {
+  const query = elements.historySearch.value.trim().toLowerCase();
   const service = elements.historyServiceFilter.value;
   const status = elements.historyStatusFilter.value;
   const session = elements.historySessionFilter.value;
   const severity = elements.historySeverityFilter.value;
   const confidence = elements.historyConfidenceFilter.value;
   return rows.filter((row) =>
+    (!query || [row.incidentId, row.summary, row.description, row.service, row.environment, row.severity, row.status, row.sessionId, ...(row.tags || [])]
+      .filter(Boolean)
+      .some((value) => String(value).toLowerCase().includes(query))) &&
     (service === "all" || row.service === service) &&
     (status === "all" || row.status === status) &&
     matchesSessionFilter(row, session) &&
@@ -948,13 +978,9 @@ async function updateIncidentStatus(incidentId, status) {
       body: JSON.stringify({ status })
     });
     const normalized = normalizeIncidentStatus(result?.status || status);
-    recentAnalyses = recentAnalyses.map((analysis) => analysis.incidentId === incidentId ? { ...analysis, status: normalized } : analysis);
-    historyRows = historyRows.map((row) => row.incidentId === incidentId ? { ...row, status: normalized } : row);
+    await loadRecent();
     dashboardPage = 1;
     historyPage = 1;
-    renderHistory();
-    updateCounts();
-    renderDetected();
     const activeItem = recentAnalyses.find((analysis) => analysis.incidentId === incidentId);
     if (activeItem && !elements.historyModal.hidden) renderHistoryDetail(activeItem);
     showToast("Ticket updated", `Status set to ${formatStatusLabel(normalized)}.`, "success");
@@ -964,13 +990,15 @@ async function updateIncidentStatus(incidentId, status) {
 }
 
 function renderHistoryDetail(item) {
+  if (elements.historyModal.hidden) historyModalReturnFocus = document.activeElement;
   const actions = item.recommendedActions || [];
   const hypotheses = item.hypotheses || [];
   const evidence = item.evidence || [];
   const linkedAnalyses = recentAnalyses.filter((analysis) => analysis.sessionId === item.sessionId).length;
-  elements.historyDetail.innerHTML = `<p class="eyebrow">${item.sessionTurnNumber > 1 ? `Follow-up analysis ${item.sessionTurnNumber - 1}` : "Original analysis"}</p><div class="modal-title-row"><div><h3 id="historyModalTitle">${escapeHtml(item.incidentSummary)}</h3>${renderStatusText(item.status || "active")}</div>${renderTicketActions(item.incidentId, item.status || "active")}</div><p class="incident-detail-description">${escapeHtml(item.incidentDescription || "No description provided.")}</p><div class="session-link-row"><div class="session-identity"><span><span class="live-dot"></span>Linked session</span><code title="${escapeHtml(item.sessionId)}">${escapeHtml(item.sessionId)}</code></div><div class="session-count"><strong>Turn ${item.sessionTurnNumber}</strong><span>${linkedAnalyses} linked ${linkedAnalyses === 1 ? "analysis" : "analyses"}</span></div><button class="icon-refresh-button" type="button" data-copy-session="${escapeHtml(item.sessionId)}" aria-label="Copy session ID"><span data-icon="copy"></span></button><button class="secondary compact-button" type="button" data-follow-up-session="${escapeHtml(item.sessionId)}">Continue session</button></div>${renderProviderTransparency(item.providerTransparency)}${renderRecommendedActions(actions, false)}${renderGroundedFacts(item.knownFacts)}${renderHypotheses(hypotheses)}${renderAnalysisBlock("Unknowns", item.unknowns, "info")}${renderStoredEvidenceBlock(evidence)}${renderRunbookMatches(item.runbookMatches)}${renderAnalysisQuality(item.quality)}${renderPriorActions(item.similarIncidents)}${renderOutcomeHistory(item.actionOutcomes)}${renderFeedbackHistory(item.feedback)}${renderTimeline(item.timeline)}${renderKnowledgeUpdate(item.incidentId, item.proposedKnowledgeUpdate)}<section class="danger-zone"><div><strong>Delete incident</strong><p>Remove this incident from history and future similarity matches.</p></div><button class="compact-button delete-incident-button" type="button" data-delete-incident="${escapeHtml(item.incidentId)}"><span data-icon="trash"></span>Delete incident</button></section>`;
+  elements.historyDetail.innerHTML = `<p class="eyebrow">${item.sessionTurnNumber > 1 ? `Follow-up analysis ${item.sessionTurnNumber - 1}` : "Original analysis"}</p><div class="modal-title-row"><div><h3 id="historyModalTitle">${escapeHtml(item.incidentTitle || item.incidentSummary)}</h3>${renderStatusText(item.status || "active")}</div>${renderTicketActions(item.incidentId, item.status || "active")}</div><p class="incident-detail-description">${escapeHtml(item.incidentDescription || "No description provided.")}</p>${item.incidentSummary && item.incidentSummary !== item.incidentTitle ? `<p class="analysis-summary"><strong>Analysis summary:</strong> ${escapeHtml(item.incidentSummary)}</p>` : ""}<div class="session-link-row"><div class="session-identity"><span><span class="live-dot"></span>Linked session</span><code title="${escapeHtml(item.sessionId)}">${escapeHtml(item.sessionId)}</code></div><div class="session-count"><strong>Turn ${item.sessionTurnNumber}</strong><span>${linkedAnalyses} linked ${linkedAnalyses === 1 ? "analysis" : "analyses"}</span></div><button class="icon-refresh-button" type="button" data-copy-session="${escapeHtml(item.sessionId)}" aria-label="Copy session ID"><span data-icon="copy"></span></button><button class="secondary compact-button" type="button" data-follow-up-session="${escapeHtml(item.sessionId)}">Continue session</button></div>${renderProviderTransparency(item.providerTransparency)}${renderRecommendedActions(actions, false)}${renderGroundedFacts(item.knownFacts)}${renderHypotheses(hypotheses)}${renderAnalysisBlock("Unknowns", item.unknowns, "info")}${renderStoredEvidenceBlock(evidence)}${renderRunbookMatches(item.runbookMatches)}${renderAnalysisQuality(item.quality)}${renderPriorActions(item.similarIncidents)}${renderOutcomeHistory(item.actionOutcomes)}${renderFeedbackHistory(item.feedback)}${renderTimeline(item.timeline)}${renderKnowledgeUpdate(item.incidentId, item.proposedKnowledgeUpdate)}<section class="danger-zone"><div><strong>Delete incident</strong><p>Remove this incident from history and future similarity matches.</p></div><button class="compact-button delete-incident-button" type="button" data-delete-incident="${escapeHtml(item.incidentId)}"><span data-icon="trash"></span>Delete incident</button></section>`;
   elements.historyModal.hidden = false;
   hydrateIcons(elements.historyDetail);
+  requestAnimationFrame(() => elements.historyModalClose.focus());
 }
 
 function renderFeedbackHistory(feedback = []) {
@@ -986,6 +1014,14 @@ function renderStoredEvidenceBlock(evidence) {
 
 function closeHistoryModal() {
   elements.historyModal.hidden = true;
+  const returnFocus = historyModalReturnFocus;
+  historyModalReturnFocus = null;
+  if (returnFocus?.isConnected) returnFocus.focus();
+}
+
+function getModalFocusableElements() {
+  return [...elements.historyModal.querySelectorAll('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])')]
+    .filter((element) => !element.hidden && element.getClientRects().length > 0);
 }
 
 function renderSourcesPage(items) {
@@ -1210,7 +1246,7 @@ function scoreColor(percent) { return percent >= 90 ? "green" : percent >= 75 ? 
 function formatHistoryId(value, index) { const text = String(value || ""); return text ? `INC-${text.replace(/-/g, "").slice(0, 4).toUpperCase()}` : `INC-${2847 - index}`; }
 function inferSeverity(summary, parsed) { const text = `${summary || ""} ${JSON.stringify(parsed || {})}`.toLowerCase(); if (text.includes("critical")) return "sev1"; if (text.includes("5xx") || text.includes("latency")) return "sev2"; return "sev3"; }
 function formatSeverityLabel(value) { const key = String(value || "").toLowerCase().replace("-", ""); return ({ sev1: "SEV-1", sev2: "SEV-2", sev3: "SEV-3", sev4: "SEV-4", sev5: "SEV-5" })[key] || "SEV-3"; }
-function formatStatusLabel(value) { return ({ candidate: "Candidate", false_positive: "False positive", ignored: "Ignored", merged: "Merged", active: "Active", mitigated: "Mitigated", resolved: "Resolved" })[String(value || "").toLowerCase()] || "Active"; }
+function formatStatusLabel(value) { return ({ candidate: "Candidate", false_positive: "False positive", ignored: "Ignored", merged: "Merged", new: "Confirmed", active: "Active", mitigated: "Mitigated", resolved: "Resolved" })[String(value || "").toLowerCase()] || "Active"; }
 function normalizeIncidentStatus(value) {
   const status = String(value || "active").toLowerCase();
   if (status === "ack") return "active";
@@ -1228,12 +1264,12 @@ function inferHistoryTags(value) {
 }
 function toHistoryRow(item, index) {
   const parsed = parseJson(item.analysisText) || {};
-  const sourceText = `${item.incidentSummary} ${item.notes} ${item.analysisText} ${(item.actionOutcomes || []).map((outcome) => `${outcome.status} ${outcome.description}`).join(" ")}`;
+  const sourceText = `${item.incidentTitle || ""} ${item.incidentSummary} ${item.notes} ${item.analysisText} ${(item.actionOutcomes || []).map((outcome) => `${outcome.status} ${outcome.description}`).join(" ")}`;
   return {
     item,
     incidentId: item.incidentId,
     displayId: formatHistoryId(item.incidentId, index),
-    summary: item.incidentSummary,
+    summary: item.incidentTitle || item.incidentSummary,
     description: item.incidentDescription || "",
     notes: formatNotes(item.notes),
     tags: item.tags?.length ? item.tags : inferHistoryTags(sourceText),
@@ -1321,22 +1357,54 @@ async function initialize() {
     elements.pollingSlider.value = String(savedInterval);
   }
   syncPollingControl();
+  const savedPolling = localStorage.getItem("incidentops.pollingEnabled");
+  polling = savedPolling === null ? true : savedPolling === "true";
+  syncPollingButton();
   restoreLastScanState();
   hydrateIcons();
   await checkHealth();
   await loadSources();
+  await loadPersistedMonitoringState();
   elements.lastScan.innerHTML = renderMonitorSummary(detectedCandidates);
   renderSidebarLastScan();
   hydrateIcons(elements.lastScan);
   void loadRecent();
-  void loadDetected(false);
+  if (polling) void loadDetected(false);
   void searchRag();
   void loadEvaluation();
   const initialTab = location.hash.replace("#", "");
   if (initialTab && document.querySelector(`#${CSS.escape(initialTab)}View`)) {
     activateTab(initialTab);
   }
-  startPolling();
+  if (polling) startPolling();
+}
+
+async function loadPersistedMonitoringState() {
+  try {
+    const result = await requestJson("/api/incidents/monitoring/last-scan");
+    const scan = result?.scan;
+    if (!scan?.completedAtUtc) return;
+    const persistedAt = new Date(scan.completedAtUtc);
+    if (!Number.isFinite(persistedAt.getTime()) || (lastScanState?.scannedAt && lastScanState.scannedAt >= persistedAt)) return;
+    lastScanState = {
+      scannedSources: Number(scan.scannedSourceCount) || Number(result.monitoredSourceCount) || 0,
+      connectedSources: Math.max(0, (Number(scan.scannedSourceCount) || 0) - (Number(scan.errorCount) || 0)),
+      errors: Number(scan.errorCount) || 0,
+      signalsFound: Number(scan.candidateCount) || 0,
+      durationSeconds: Math.max(0, (Number(scan.durationMilliseconds) || 0) / 1000),
+      scannedAt: persistedAt
+    };
+    saveLastScanState();
+  } catch {
+    // Keep the last verified local state when the persistence endpoint is unavailable.
+  }
+}
+
+function syncPollingButton() {
+  const button = $("#pauseScanButton");
+  button.innerHTML = `<span data-icon="${polling ? "pause" : "play"}"></span>${polling ? "Pause Scanning" : "Resume Scanning"}`;
+  button.dataset.hydrated = "";
+  hydrateIcons(button);
 }
 
 function syncPollingControl() {

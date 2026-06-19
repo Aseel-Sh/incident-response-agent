@@ -1,6 +1,6 @@
 # Incident Response Agent
 
-Incident Response Agent is a .NET 10 backend for AI-assisted incident investigation. It accepts an incident report, retrieves relevant operational runbooks through a local RAG pipeline, queries log and metric tools, uses an OpenAI-compatible agent when configured, and returns structured response guidance.
+Incident Response Agent is a .NET 10 backend for AI-assisted incident investigation. It accepts an incident report, retrieves relevant operational runbooks through a local RAG pipeline, queries log and metric tools, and runs a Microsoft Agent Framework agent through OpenRouter when configured.
 
 The project is built as a portfolio-quality modular monolith. It is useful without paid services because it includes local embeddings, sample operational data, SQLite persistence, and a local prompt-based agent fallback. When API keys are added, it can use OpenRouter-compatible chat models and Hugging Face-hosted embeddings.
 
@@ -20,8 +20,8 @@ It also includes a static frontend served by the API and optional Qdrant vector 
 - Scans operational logs and metrics for likely incident candidates.
 - Persists incident analysis records.
 - Persists multi-turn investigation session state in SQLite.
-- Uses an incident analysis agent when a model key is configured.
-- The agent receives deterministic runbook, log, and metric evidence gathered by the application, then returns strict JSON analysis.
+- Uses a real Microsoft Agent Framework `ChatClientAgent` when an OpenRouter key is configured.
+- Registers framework `AIFunction` tools for logs, metrics, runbooks, trusted prior incidents, prior action outcomes, similarity, and proposed knowledge drafts.
 - Falls back to a local prompt-based agent when no model key is configured.
 - Returns structured evidence, hypotheses, recommended actions, confidence, notes, and session context.
 - Exposes RAG diagnostics so retrieval quality can be inspected directly.
@@ -46,7 +46,7 @@ The solution follows clean architecture boundaries:
   SQLite storage, Markdown runbook indexing, embedding providers, local log/metric providers, session persistence, and incident record persistence.
 
 - `IncidentResponseAgent.Agent`
-  Incident analysis agent instructions, OpenAI-compatible agent execution, and local prompt fallback.
+  Microsoft Agent Framework agent construction, OpenRouter/OpenAI-compatible transport, framework tools, structured-output validation, and local prompt fallback.
 
 Dependency direction:
 
@@ -74,7 +74,7 @@ At runtime the RAG service:
 4. Generates an embedding for each chunk.
 5. Stores document metadata and fallback vectors in SQLite.
 6. Upserts vectors and payloads to Qdrant when Qdrant is available.
-7. Reindexes when Markdown content or embedding provider/model changes.
+7. Reindexes when Markdown content, approved incident knowledge, or the embedding provider/model changes.
 8. Retrieves chunks from Qdrant first, then falls back to SQLite vector search.
 9. Reranks with hybrid semantic and lexical scoring.
 10. Returns top matches to the agent and API response.
@@ -162,11 +162,21 @@ Or in `IncidentResponseAgent.Api/appsettings.Development.json`:
 
 Do not commit real keys.
 
-## Agent Model
+## Microsoft Agent Framework and OpenRouter
 
-The agent uses an OpenAI-compatible endpoint. OpenRouter is the easiest drop-in provider for this project.
+The model-backed path is `MicrosoftAgentFrameworkIncidentAnalysisAgent`. It creates a Microsoft Agent Framework `ChatClientAgent` with `OpenAI.Chat.ChatClient.AsAIAgent(...)`, a framework `AgentSession`, `ChatClientAgentRunOptions`, structured JSON response format, and seven registered `AIFunction` tools:
 
-The current model-backed path is an agent, but it deliberately avoids relying on free-model tool-calling loops. The application gathers runbooks, logs, and metrics first, then sends that evidence to `OpenAIIncidentAnalysisAgent`, which asks the model for strict JSON reasoning. This is more reliable with free OpenRouter models than letting the model drive every tool call itself.
+- search logs;
+- query metrics;
+- retrieve runbook sections;
+- retrieve human-approved prior incidents;
+- retrieve prior action outcomes;
+- check similar incidents;
+- draft a proposed runbook/postmortem update.
+
+Business logic stays behind application interfaces so it remains independently testable. The use case pre-gathers deterministic evidence for reliability, while the framework agent may call the same registered tools for additional context. Agent instructions explicitly prohibit invented logs, metrics, runbooks, prior incidents, outcomes, and evidence references.
+
+OpenRouter supplies the model through its OpenAI-compatible API. No key is stored in source, logs, runtime configuration responses, or tests.
 
 Get an OpenRouter key:
 
@@ -176,9 +186,11 @@ Get an OpenRouter key:
 Set it with environment variables:
 
 ```powershell
-$env:IRA_AGENT_API_KEY = "your-openrouter-key"
-$env:IRA_AGENT_ENDPOINT = "https://openrouter.ai/api/v1"
-$env:IRA_AGENT_MODEL = "nex-agi/nex-n2-pro:free"
+$env:OPENROUTER_API_KEY = "your-openrouter-key"
+$env:OPENROUTER_MODEL = "nex-agi/nex-n2-pro:free"
+$env:OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+$env:OPENROUTER_SITE_URL = "https://your-app.example" # optional
+$env:OPENROUTER_APP_NAME = "Incident Response Agent"  # optional
 ```
 
 Or in `IncidentResponseAgent.Api/appsettings.Development.json`:
@@ -187,7 +199,7 @@ Or in `IncidentResponseAgent.Api/appsettings.Development.json`:
 {
   "Agent": {
     "IncidentAnalysis": {
-      "Provider": "OpenAI-compatible provider",
+      "Provider": "OpenRouter",
       "Model": "nex-agi/nex-n2-pro:free",
       "Endpoint": "https://openrouter.ai/api/v1",
       "ApiKey": "your-openrouter-key"
@@ -196,7 +208,9 @@ Or in `IncidentResponseAgent.Api/appsettings.Development.json`:
 }
 ```
 
-If no key is configured, the app uses the local prompt-based fallback so development and tests still work.
+The older `IRA_AGENT_API_KEY`, `IRA_AGENT_MODEL`, and `IRA_AGENT_ENDPOINT` names remain compatible, but the `OPENROUTER_*` variables above are preferred and override default model/base-URL settings.
+
+If no key is configured, or the OpenRouter model call and its relaxed structured-output retry both fail, the app uses the local evidence-based fallback only when usable evidence exists. The UI and persisted record show the exact sanitized fallback reason. If embeddings or the vector store fail, analysis continues through OpenRouter with `RAG degraded`; RAG failure alone never selects the local model fallback.
 
 If the configured model provider is slow, unavailable, or rejects the request, the app falls back to the local analyzer instead of leaving the request stuck indefinitely. Free OpenRouter models can queue or time out, so the default model timeout is intentionally bounded:
 
@@ -210,7 +224,15 @@ If the configured model provider is slow, unavailable, or rejects the request, t
 }
 ```
 
-The API always gathers deterministic runbook, log, and metric evidence before asking the model. Treat the structured evidence list as the source of truth if a free model returns vague or inconsistent prose.
+Only approved proposed knowledge updates are written into the Markdown knowledge corpus and reindexed for later retrieval. Rejected proposals and deleted incidents remove their generated knowledge document.
+
+Verification commands:
+
+```powershell
+dotnet test IncidentResponseAgent.Tests/IncidentResponseAgent.Tests.csproj
+npm.cmd run test:e2e:ai
+npm.cmd run test:e2e:learning
+```
 
 During local testing, `nex-agi/nex-n2-pro:free` responded faster and followed strict JSON better than the previous Nemotron free model. Free model availability changes over time, so you can swap the model id without changing application code.
 

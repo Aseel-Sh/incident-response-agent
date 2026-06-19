@@ -2,13 +2,13 @@
 
 ## Request path
 
-`Create candidate & confirm` -> `POST /api/incidents/candidates/manual` -> `POST /api/incidents/candidates/{id}/confirm` -> `IncidentsController` -> `AnalyzeIncidentUseCase` -> isolated RAG/log/metric/prior-incident gathering -> `ResilientIncidentAnalysisAgent` -> `OpenAIIncidentAnalysisAgent` -> OpenAI-compatible chat completions -> structured validation -> persistence -> `IncidentAnalysisResponse` -> `renderAnalysis`.
+`Create candidate & confirm` -> `POST /api/incidents/candidates/manual` -> `POST /api/incidents/candidates/{id}/confirm` -> `IncidentsController` -> `AnalyzeIncidentUseCase` -> isolated RAG/log/metric/prior-incident gathering -> `ResilientIncidentAnalysisAgent` -> `MicrosoftAgentFrameworkIncidentAnalysisAgent` -> Microsoft Agent Framework `ChatClientAgent.RunAsync` -> OpenRouter chat completions -> structured validation -> persistence -> `IncidentAnalysisResponse` -> `renderAnalysis`.
 
 RAG exceptions are converted to a degraded empty `RunbookRetrievalResult` before model execution. Hugging Face is only an embedding provider. Qdrant/SQLite are only vector stores. Neither subsystem selects the local analysis fallback.
 
 ## Effective model configuration
 
-- Provider: OpenAI-compatible request routed through OpenRouter.
+- Provider: OpenRouter, invoked through Microsoft Agent Framework's OpenAI integration.
 - Model: `nex-agi/nex-n2-pro:free`.
 - Base URL: `https://openrouter.ai/api/v1`.
 - API: `POST /chat/completions` with `choices[].message.content` response parsing.
@@ -31,13 +31,13 @@ RAG exceptions are converted to a degraded empty `RunbookRetrievalResult` before
       "schema": "object schema including SEV-1 through SEV-5"
     }
   },
-  "provider": { "require_parameters": true },
-  "max_tokens": 1200,
+  "tools": ["SearchLogs", "QueryMetrics", "RetrieveRunbooks", "RetrievePriorIncidents", "RetrievePriorActionOutcomes", "CheckSimilarIncidents", "DraftProposedKnowledgeUpdate"],
+  "max_completion_tokens": 1200,
   "temperature": 0.1
 }
 ```
 
-Headers include `Authorization: Bearer [REDACTED]`, `HTTP-Referer`, and `X-OpenRouter-Title`. The retry retains the messages/model but omits `response_format` and `provider.require_parameters`, and permits up to twice the configured output tokens.
+Headers include `Authorization: Bearer [REDACTED]` and, when configured, `HTTP-Referer` and `X-OpenRouter-Title`. The retry retains the messages, model, and framework tools but omits `response_format` and permits up to twice the configured output tokens.
 
 ## Observed failures
 

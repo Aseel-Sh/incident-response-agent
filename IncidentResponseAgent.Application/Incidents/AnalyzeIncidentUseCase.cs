@@ -50,14 +50,23 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 		var logResultTask = _logSearchProvider.SearchAsync(BuildLogSearchRequest(incident), cancellationToken);
 		var metricsResultTask = _metricsProvider.QueryAsync(BuildMetricsQueryRequest(incident), cancellationToken);
 		var similarIncidentsTask = _incidentRecordStore.FindSimilarAsync(incident, 3, cancellationToken);
+		var linkedSessionRecordsTask = string.IsNullOrWhiteSpace(sessionId)
+			? Task.FromResult<IReadOnlyList<IncidentAnalysisRecord>>(Array.Empty<IncidentAnalysisRecord>())
+			: _incidentRecordStore.GetRecentAsync(100, cancellationToken);
 
-		await Task.WhenAll(sessionContextTask, runbookResultTask, logResultTask, metricsResultTask, similarIncidentsTask);
+		await Task.WhenAll(sessionContextTask, runbookResultTask, logResultTask, metricsResultTask, similarIncidentsTask, linkedSessionRecordsTask);
 
 		var sessionContext = await sessionContextTask;
 		var runbookResult = await runbookResultTask;
 		var logResult = await logResultTask;
 		var metricsResult = await metricsResultTask;
-		var similarIncidents = await similarIncidentsTask;
+		var linkedSessionMatches = BuildLinkedSessionMatches(await linkedSessionRecordsTask, sessionId, incident.Id);
+		var similarIncidents = linkedSessionMatches
+			.Concat(await similarIncidentsTask)
+			.GroupBy(item => item.IncidentId)
+			.Select(group => group.First())
+			.Take(3)
+			.ToArray();
 		var groundedEvidence = BuildEvidence(incident, runbookResult, logResult, metricsResult, similarIncidents);
 		var evidenceSources = groundedEvidence.Select(item => item.Source).Where(item => !string.IsNullOrWhiteSpace(item)).Select(item => item!).ToHashSet(StringComparer.OrdinalIgnoreCase);
 		_logger.LogInformation(
@@ -66,7 +75,7 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 			runbookResult.Runbooks.Count,
 			logResult.Entries.Count,
 			metricsResult.Samples.Count,
-			similarIncidents.Count);
+			similarIncidents.Length);
 		var agentContext = new IncidentAnalysisAgentContext
 		{
 			Runbooks = runbookResult,
@@ -151,6 +160,39 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 			result.Confidence);
 
 		return result;
+	}
+
+	private static IReadOnlyList<SimilarIncidentMatch> BuildLinkedSessionMatches(
+		IReadOnlyList<IncidentAnalysisRecord> records,
+		string? sessionId,
+		Guid currentIncidentId)
+	{
+		if (string.IsNullOrWhiteSpace(sessionId)) return Array.Empty<SimilarIncidentMatch>();
+
+		return records
+			.Where(record => record.Incident.Id != currentIncidentId)
+			.Where(record => string.Equals(record.AnalysisResult.SessionId, sessionId, StringComparison.Ordinal))
+			.Where(record => record.AnalysisResult.ActionOutcomes.Count > 0)
+			.OrderByDescending(record => record.UpdatedAtUtc)
+			.Select(record =>
+			{
+				var worked = record.AnalysisResult.ActionOutcomes.LastOrDefault(item => item.Status == "worked");
+				return new SimilarIncidentMatch
+				{
+					IncidentId = record.Incident.Id,
+					IncidentSummary = record.AnalysisResult.IncidentSummary,
+					ServiceName = record.Incident.ServiceName ?? "unknown service",
+					Environment = record.Incident.Environment ?? "unknown environment",
+					ResolutionSummary = worked is null ? "Linked session outcome context" : $"Worked: {worked.Description}",
+					Score = 1,
+					CreatedAtUtc = record.CreatedAtUtc,
+					SharedSignals = ["linked-session"],
+					SuccessfulActions = record.AnalysisResult.ActionOutcomes.Where(item => item.Status is "worked" or "partial").Select(item => item.Description).ToArray(),
+					FailedActions = record.AnalysisResult.ActionOutcomes.Where(item => item.Status == "failed").Select(item => item.Description).ToArray()
+				};
+			})
+			.Take(3)
+			.ToArray();
 	}
 
 	private async Task<RunbookRetrievalResult> RetrieveRunbooksSafelyAsync(Incident incident, CancellationToken cancellationToken)

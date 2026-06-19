@@ -11,7 +11,7 @@ using Microsoft.Extensions.Options;
 
 namespace IncidentResponseAgent.Tests;
 
-public sealed class OpenAIIncidentAnalysisAgentTests
+public sealed class MicrosoftAgentFrameworkIncidentAnalysisAgentTests
 {
 	[Fact]
 	public async Task SuccessfulModelAnalysisUsesStrictChatCompletionsRequest()
@@ -23,14 +23,15 @@ public sealed class OpenAIIncidentAnalysisAgentTests
 
 		Assert.False(result.UsedFallback);
 		Assert.False(result.UsedStructuredOutputRetry);
-		Assert.Equal("openai-compatible", result.Provider);
+		Assert.Equal("OpenRouter", result.Provider);
 		var request = Assert.Single(handler.Requests);
 		Assert.Equal("https://openrouter.ai/api/v1/chat/completions", request.Uri);
 		using var json = JsonDocument.Parse(request.Body);
 		Assert.Equal("test/model", json.RootElement.GetProperty("model").GetString());
 		Assert.Equal("json_schema", json.RootElement.GetProperty("response_format").GetProperty("type").GetString());
-		Assert.True(json.RootElement.GetProperty("provider").GetProperty("require_parameters").GetBoolean());
-		Assert.Equal(2, json.RootElement.GetProperty("messages").GetArrayLength());
+		Assert.True(json.RootElement.GetProperty("messages").GetArrayLength() >= 2);
+		Assert.True(json.RootElement.TryGetProperty("tools", out var tools));
+		Assert.Equal(7, tools.GetArrayLength());
 	}
 
 	[Fact]
@@ -88,18 +89,18 @@ public sealed class OpenAIIncidentAnalysisAgentTests
 	[InlineData("sev2")]
 	public void StructuredValidationRejectsInvalidSeverity(string severity)
 	{
-		Assert.False(OpenAIIncidentAnalysisAgent.ValidateStructuredResponse(ValidAnalysis(severity), out var reason));
+		Assert.False(MicrosoftAgentFrameworkIncidentAnalysisAgent.ValidateStructuredResponse(ValidAnalysis(severity), out var reason));
 		Assert.Contains("Severity", reason, StringComparison.OrdinalIgnoreCase);
 	}
 
 	[Fact]
 	public void LocalAndModelSeverityFormattingUsesNumericSevLabels()
 	{
-		Assert.Equal("SEV-1", OpenAIIncidentAnalysisAgent.FormatSeverity(IncidentSeverity.Sev1));
-		Assert.Equal("SEV-5", OpenAIIncidentAnalysisAgent.FormatSeverity(IncidentSeverity.Sev5));
+		Assert.Equal("SEV-1", MicrosoftAgentFrameworkIncidentAnalysisAgent.FormatSeverity(IncidentSeverity.Sev1));
+		Assert.Equal("SEV-5", MicrosoftAgentFrameworkIncidentAnalysisAgent.FormatSeverity(IncidentSeverity.Sev5));
 	}
 
-	private static OpenAIIncidentAnalysisAgent CreateAgent(QueueHttpHandler handler) => new(
+	private static MicrosoftAgentFrameworkIncidentAnalysisAgent CreateAgent(QueueHttpHandler handler) => new(
 		Options.Create(new IncidentAnalysisAgentOptions
 		{
 			Provider = "OpenRouter", Model = "test/model", Endpoint = "https://openrouter.ai/api/v1", ApiKey = "test-key", MaxOutputTokens = 512
@@ -107,7 +108,7 @@ public sealed class OpenAIIncidentAnalysisAgentTests
 		new ThrowingLogProvider(),
 		new ThrowingMetricsProvider(),
 		new ThrowingRunbookProvider(),
-		NullLogger<OpenAIIncidentAnalysisAgent>.Instance,
+		NullLogger<MicrosoftAgentFrameworkIncidentAnalysisAgent>.Instance,
 		new HttpClient(handler));
 
 	private static Incident CreateIncident() => new(Guid.NewGuid(), "Checkout errors", "Checkout requests are failing.", IncidentSeverity.Sev2, "checkout-api", "test");

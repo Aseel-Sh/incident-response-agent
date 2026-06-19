@@ -1,0 +1,23 @@
+[
+  {
+    "timestamp": "2026-06-19T12:00:00Z",
+    "source": "database-api",
+    "level": "Error",
+    "message": "production database connection timeout while waiting for the checkout query pool",
+    "correlationId": "golden-db-001"
+  },
+  {
+    "timestamp": "2026-06-19T12:00:00Z",
+    "source": "conflicting-api",
+    "level": "Error",
+    "message": "production database timeout reported by one request path",
+    "correlationId": "golden-conflict-001"
+  },
+  {
+    "timestamp": "2026-06-19T12:00:00Z",
+    "source": "model-unavailable-api",
+    "level": "Error",
+    "message": "production database connection timeout with elevated request failures",
+    "correlationId": "golden-fallback-001"
+  }
+]

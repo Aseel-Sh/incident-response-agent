@@ -10,5 +10,11 @@ public sealed record MonitoringScanRecord
 
 	public int CandidateCount { get; init; }
 
+	public int ScannedSourceCount { get; init; }
+
+	public int ErrorCount { get; init; }
+
+	public double DurationMilliseconds { get; init; }
+
 	public string Status { get; init; } = "completed";
 }

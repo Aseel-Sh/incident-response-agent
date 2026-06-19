@@ -19,6 +19,7 @@ public sealed class SemanticRunbookRetrievalService : IRunbookRetrievalService, 
 	private readonly QdrantRunbookVectorStore? _qdrantVectorStore;
 	private readonly SemaphoreSlim _indexLock = new(1, 1);
 	private bool _isInitialized;
+	private string? _sourceFingerprint;
 
 	public SemanticRunbookRetrievalService(
 		IOptions<RunbookRetrievalOptions> options,
@@ -170,7 +171,8 @@ public sealed class SemanticRunbookRetrievalService : IRunbookRetrievalService, 
 
 	private async Task EnsureInitializedAsync(CancellationToken cancellationToken)
 	{
-		if (_isInitialized)
+		var sourceFingerprint = ComputeSourceFingerprint();
+		if (_isInitialized && string.Equals(_sourceFingerprint, sourceFingerprint, StringComparison.Ordinal))
 		{
 			return;
 		}
@@ -178,7 +180,8 @@ public sealed class SemanticRunbookRetrievalService : IRunbookRetrievalService, 
 		await _indexLock.WaitAsync(cancellationToken).ConfigureAwait(false);
 		try
 		{
-			if (_isInitialized)
+			sourceFingerprint = ComputeSourceFingerprint();
+			if (_isInitialized && string.Equals(_sourceFingerprint, sourceFingerprint, StringComparison.Ordinal))
 			{
 				return;
 			}
@@ -194,6 +197,7 @@ public sealed class SemanticRunbookRetrievalService : IRunbookRetrievalService, 
 				ResolveDatabasePath(),
 				ResolveKnowledgeBasePath());
 			_isInitialized = true;
+			_sourceFingerprint = sourceFingerprint;
 		}
 		finally
 		{
@@ -608,6 +612,20 @@ create index if not exists ix_runbook_documents_content_hash on runbook_document
 		return candidates.FirstOrDefault(Directory.Exists) ?? candidates[0];
 	}
 
+	private string ComputeSourceFingerprint()
+	{
+		var directory = ResolveKnowledgeBasePath();
+		if (!Directory.Exists(directory)) return "missing";
+		var state = Directory.EnumerateFiles(directory, "*.md", SearchOption.TopDirectoryOnly)
+			.OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+			.Select(path =>
+			{
+				var info = new FileInfo(path);
+				return $"{info.FullName}|{info.Length}|{info.LastWriteTimeUtc.Ticks}";
+			});
+		return ComputeHash(string.Join('\n', state));
+	}
+
 	private static RunbookDocument ParseDocument(string filePath, string content)
 	{
 		var fileName = Path.GetFileNameWithoutExtension(filePath);
@@ -867,7 +885,10 @@ create index if not exists ix_runbook_documents_content_hash on runbook_document
 		HashSet<string> environmentTokens)
 	{
 		var haystack = RunbookTextAnalysis.Tokenize(chunk.SearchText);
-		return haystack.Overlaps(queryTokens) || haystack.Overlaps(serviceTokens) || haystack.Overlaps(environmentTokens);
+		// A single common token (for example "production", "metrics", or "api") is not
+		// enough to bypass the semantic relevance threshold. Require a meaningful lexical
+		// intersection so unrelated runbooks are not presented as evidence.
+		return CountMatches(haystack, queryTokens) >= 4 || CountMatches(haystack, serviceTokens) >= 3;
 	}
 
 	private static RunbookVectorPoint ToVectorPoint(RunbookChunkRecord chunk)

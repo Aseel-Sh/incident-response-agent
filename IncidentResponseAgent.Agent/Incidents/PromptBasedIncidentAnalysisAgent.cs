@@ -174,7 +174,7 @@ public sealed class PromptBasedIncidentAnalysisAgent : ILocalFallbackIncidentAna
 		return JsonSerializer.Serialize(new
 		{
 			summary = structured.IncidentSummary,
-			severity = OpenAIIncidentAnalysisAgent.FormatSeverity(incident.Severity),
+			severity = MicrosoftAgentFrameworkIncidentAnalysisAgent.FormatSeverity(incident.Severity),
 			evidence = structured.Evidence,
 			hypotheses = structured.Hypotheses,
 			recommendedActions = structured.RecommendedActions,

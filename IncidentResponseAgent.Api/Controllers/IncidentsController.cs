@@ -1,7 +1,9 @@
 using IncidentResponseAgent.Api.Contracts.Incidents;
 using IncidentResponseAgent.Application.Incidents;
 using IncidentResponseAgent.Domain.Incidents;
+using IncidentResponseAgent.Infrastructure.Tools;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Options;
 using ApplicationAnalysisActionRecommendation = IncidentResponseAgent.Application.Incidents.IncidentActionRecommendation;
 using ApplicationAnalysisEvidenceItem = IncidentResponseAgent.Application.Incidents.IncidentAnalysisEvidenceItem;
 using ApplicationAnalysisHypothesis = IncidentResponseAgent.Application.Incidents.IncidentHypothesis;
@@ -16,17 +18,20 @@ public sealed class IncidentsController : ControllerBase
     private readonly IGetRecentIncidentAnalysesUseCase _getRecentIncidentAnalysesUseCase;
     private readonly IIncidentSignalMonitor _incidentSignalMonitor;
     private readonly IIncidentRecordStore _incidentRecordStore;
+    private readonly OperationalDataOptions _operationalDataOptions;
 
     public IncidentsController(
         IAnalyzeIncidentUseCase analyzeIncidentUseCase,
         IGetRecentIncidentAnalysesUseCase getRecentIncidentAnalysesUseCase,
         IIncidentSignalMonitor incidentSignalMonitor,
-        IIncidentRecordStore incidentRecordStore)
+        IIncidentRecordStore incidentRecordStore,
+        IOptions<OperationalDataOptions>? operationalDataOptions = null)
     {
         _analyzeIncidentUseCase = analyzeIncidentUseCase;
         _getRecentIncidentAnalysesUseCase = getRecentIncidentAnalysesUseCase;
         _incidentSignalMonitor = incidentSignalMonitor;
         _incidentRecordStore = incidentRecordStore;
+        _operationalDataOptions = operationalDataOptions?.Value ?? new OperationalDataOptions();
     }
 
     [HttpPost("analyze")]
@@ -118,6 +123,7 @@ public sealed class IncidentsController : ControllerBase
         return Ok(results.Select(result => new RecentIncidentAnalysisResponse
         {
             IncidentId = result.IncidentId,
+            IncidentTitle = result.IncidentTitle,
             IncidentSummary = result.IncidentSummary,
             IncidentDescription = result.IncidentDescription,
             ServiceName = result.ServiceName,
@@ -164,10 +170,26 @@ public sealed class IncidentsController : ControllerBase
     {
         var started = DateTimeOffset.UtcNow;
         var results = await _incidentSignalMonitor.DetectAsync(cancellationToken);
-        var scan = new MonitoringScanRecord { StartedAtUtc = started, CompletedAtUtc = DateTimeOffset.UtcNow, CandidateCount = results.Count };
+        var completed = DateTimeOffset.UtcNow;
+        var scan = new MonitoringScanRecord
+        {
+            StartedAtUtc = started,
+            CompletedAtUtc = completed,
+            CandidateCount = results.Count,
+            ScannedSourceCount = 2,
+            ErrorCount = CountUnavailableDetectionSources(),
+            DurationMilliseconds = Math.Max(0, (completed - started).TotalMilliseconds)
+        };
         await _incidentRecordStore.SaveCandidatesAsync(results, scan, cancellationToken);
         var candidates = await _incidentRecordStore.GetCandidatesAsync(cancellationToken);
         return Ok(new { scan, candidates = candidates.Select(ToCandidateResponse).ToArray() });
+    }
+
+    [HttpGet("monitoring/last-scan")]
+    public async Task<ActionResult<object>> GetLastScanAsync(CancellationToken cancellationToken)
+    {
+        var scan = await _incidentRecordStore.GetLastScanAsync(cancellationToken);
+        return Ok(new { scan, monitoredSourceCount = 2 });
     }
 
     [HttpPost("candidates/manual")]
@@ -217,7 +239,7 @@ public sealed class IncidentsController : ControllerBase
         var usefulness = request.AnalysisUsefulness?.Trim().ToLowerInvariant() ?? string.Empty;
         var correctness = request.RecommendationCorrectness?.Trim().ToLowerInvariant() ?? string.Empty;
 		var reasonTags = request.ReasonTags ?? Array.Empty<string>();
-        var allowedReasons = new HashSet<string>(["shallow", "missing evidence", "hallucinated evidence", "wrong sev", "wrong root cause", "bad remediation", "ignored runbook", "repeated failed action", "other"], StringComparer.OrdinalIgnoreCase);
+        var allowedReasons = new HashSet<string>(["shallow", "missing evidence", "hallucinated evidence", "wrong sev", "wrong root cause", "bad remediation", "ignored runbook", "repeated failed past action", "repeated failed action", "other"], StringComparer.OrdinalIgnoreCase);
         if (usefulness is not ("useful" or "partially useful" or "not useful") || correctness is not ("correct" or "partially correct" or "wrong")) return BadRequest("Invalid feedback rating.");
         if (reasonTags.Any(tag => !allowedReasons.Contains(tag))) return BadRequest("One or more reason tags are invalid.");
         var feedback = new IncidentAnalysisFeedback
@@ -233,6 +255,21 @@ public sealed class IncidentsController : ControllerBase
     {
         return Enum.Parse<IncidentSeverity>(severity, ignoreCase: true);
     }
+
+    private int CountUnavailableDetectionSources()
+    {
+        var paths = new[]
+        {
+            ResolveOperationalPath(_operationalDataOptions.LogEntriesPath, Path.Combine("Tools", "SampleData", "logs.json")),
+            ResolveOperationalPath(_operationalDataOptions.MetricSamplesPath, Path.Combine("Tools", "SampleData", "metrics.json"))
+        };
+        return paths.Count(path => !System.IO.File.Exists(path));
+    }
+
+    private static string ResolveOperationalPath(string? configuredPath, string defaultRelativePath) =>
+        string.IsNullOrWhiteSpace(configuredPath)
+            ? Path.Combine(AppContext.BaseDirectory, defaultRelativePath)
+            : Path.GetFullPath(Environment.ExpandEnvironmentVariables(configuredPath));
 
     private static DetectedIncidentCandidate BuildManualCandidate(IncidentSubmissionRequest request, DateTimeOffset detectedAt) => new()
     {

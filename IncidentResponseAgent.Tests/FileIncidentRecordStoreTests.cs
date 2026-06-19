@@ -117,6 +117,25 @@ public sealed class FileIncidentRecordStoreTests : IDisposable
 	}
 
 	[Fact]
+	public async Task ApprovedKnowledgeIsPublishedAndRemovedWhenIncidentIsDeleted()
+	{
+		var publisher = new RecordingKnowledgePublisher();
+		var store = new FileIncidentRecordStore(
+			Options.Create(new IncidentStorageOptions { IncidentRecordsPath = Path.Combine(_rootPath, "published-records.json") }),
+			publisher);
+		var incident = new Incident(Guid.NewGuid(), "Redis saturation", "Redis latency saturated the catalog API.", IncidentSeverity.Sev2, "catalog-api", "production");
+		await store.SaveAsync(incident, new IncidentAnalysisResult { IncidentId = incident.Id, IncidentSummary = incident.Title, AnalysisText = "{}", AnalysisProvider = "test", SessionId = "publish-session" });
+		await store.UpdateStatusAsync(incident.Id, "resolved");
+
+		var approved = await store.ReviewKnowledgeUpdateAsync(incident.Id, "approved", "Approved mitigation knowledge.", null);
+		Assert.Equal(approved.Id, publisher.PublishedId);
+		Assert.Equal("Approved mitigation knowledge.", publisher.PublishedContent);
+
+		await store.DeleteAsync(incident.Id);
+		Assert.Equal(approved.Id, publisher.RemovedId);
+	}
+
+	[Fact]
 	public async Task CandidateDecisionPersistsWithoutCreatingReusableIncident()
 	{
 		var recordsPath = Path.Combine(_rootPath, "incident-records.json");
@@ -182,6 +201,24 @@ public sealed class FileIncidentRecordStoreTests : IDisposable
 		if (Directory.Exists(_rootPath))
 		{
 			Directory.Delete(_rootPath, recursive: true);
+		}
+	}
+
+	private sealed class RecordingKnowledgePublisher : IApprovedKnowledgePublisher
+	{
+		public Guid? PublishedId { get; private set; }
+		public Guid? RemovedId { get; private set; }
+		public string? PublishedContent { get; private set; }
+		public Task PublishAsync(Guid proposalId, string title, string content, CancellationToken cancellationToken = default)
+		{
+			PublishedId = proposalId;
+			PublishedContent = content;
+			return Task.CompletedTask;
+		}
+		public Task RemoveAsync(Guid proposalId, CancellationToken cancellationToken = default)
+		{
+			RemovedId = proposalId;
+			return Task.CompletedTask;
 		}
 	}
 }

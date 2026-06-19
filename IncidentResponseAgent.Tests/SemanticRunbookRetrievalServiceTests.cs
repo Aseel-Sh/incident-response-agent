@@ -146,6 +146,33 @@ Use this runbook when order processing queues grow faster than consumers can dra
 		Assert.DoesNotContain(secondResult.Runbooks, runbook => runbook.Title.Contains("Checkout 5xx", StringComparison.OrdinalIgnoreCase));
 	}
 
+	[Fact]
+	public async Task SameServiceReindexesApprovedKnowledgeAddedAndRemovedAfterStartup()
+	{
+		var knowledgeBasePath = Path.Combine(_rootPath, "dynamic-knowledge-base");
+		Directory.CreateDirectory(knowledgeBasePath);
+		var options = Options.Create(new RunbookRetrievalOptions
+		{
+			DatabasePath = Path.Combine(_rootPath, "dynamic-rag.sqlite"),
+			KnowledgeBasePath = knowledgeBasePath,
+			MinimumRelevanceScore = 0.05
+		});
+		var service = new SemanticRunbookRetrievalService(options, new EmptyHttpClientFactory(), NullLoggerFactory.Instance, NullLogger<SemanticRunbookRetrievalService>.Instance);
+		var publisher = new MarkdownApprovedKnowledgePublisher(options);
+		var proposalId = Guid.NewGuid();
+
+		var empty = await service.RetrieveAsync(new RunbookRetrievalRequest { Query = "catalog redis cache stampede", ServiceName = "catalog-api" });
+		Assert.Empty(empty.Runbooks);
+
+		await publisher.PublishAsync(proposalId, "Catalog cache recovery", "## Evidence\n\nCatalog Redis cache stampede saturated catalog-api.\n\n## Mitigation\n\nThrottle cache refresh and warm keys gradually.");
+		var indexed = await service.RetrieveAsync(new RunbookRetrievalRequest { Query = "catalog redis cache stampede", ServiceName = "catalog-api" });
+		Assert.Contains(indexed.Runbooks, runbook => runbook.Title.Contains("Catalog cache recovery", StringComparison.OrdinalIgnoreCase));
+
+		await publisher.RemoveAsync(proposalId);
+		var removed = await service.RetrieveAsync(new RunbookRetrievalRequest { Query = "catalog redis cache stampede", ServiceName = "catalog-api" });
+		Assert.DoesNotContain(removed.Runbooks, runbook => runbook.Title.Contains("Catalog cache recovery", StringComparison.OrdinalIgnoreCase));
+	}
+
 	public void Dispose()
 	{
 		if (Directory.Exists(_rootPath))

@@ -50,17 +50,17 @@ public sealed class ResilientIncidentAnalysisAgent : IIncidentAnalysisAgent
 		}
 		catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
 		{
-			_logger.LogWarning("OpenAI-compatible incident analysis timed out after {TimeoutSeconds} seconds. Falling back to local analysis.", timeout.TotalSeconds);
+			_logger.LogWarning("OpenRouter Microsoft Agent Framework analysis timed out after {TimeoutSeconds} seconds. Falling back to local analysis.", timeout.TotalSeconds);
 			_logger.LogWarning("Fallback triggered. IncidentId={IncidentId} Reason={Reason}.", incident.Id, $"Model timed out after {timeout.TotalSeconds:0} seconds.");
 			var fallbackResult = await _fallbackAgent.AnalyzeAsync(incident, sessionContext, agentContext, cancellationToken).ConfigureAwait(false);
-			return fallbackResult with { FallbackReason = $"OpenAI-compatible analysis timed out after {timeout.TotalSeconds:0} seconds." };
+			return fallbackResult with { FallbackReason = $"OpenRouter model analysis timed out after {timeout.TotalSeconds:0} seconds." };
 		}
 		catch (Exception exception) when (IsProviderFailure(exception))
 		{
-			_logger.LogWarning(exception, "OpenAI-compatible incident analysis failed. Falling back to local analysis.");
+			_logger.LogWarning(exception, "OpenRouter Microsoft Agent Framework analysis failed. Falling back to local analysis.");
 			_logger.LogWarning("Fallback triggered. IncidentId={IncidentId} Reason={Reason}.", incident.Id, BuildFailureReason(exception));
 			var fallbackResult = await _fallbackAgent.AnalyzeAsync(incident, sessionContext, agentContext, cancellationToken).ConfigureAwait(false);
-			return fallbackResult with { FallbackReason = $"OpenAI-compatible analysis failed: {BuildFailureReason(exception)}" };
+			return fallbackResult with { FallbackReason = $"OpenRouter model analysis failed: {BuildFailureReason(exception)}" };
 		}
 	}
 
