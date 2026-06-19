@@ -51,6 +51,10 @@ internal sealed class ResilientRunbookEmbeddingProvider : IRunbookEmbeddingProvi
 
 	public int Dimensions => _useFallbackOnly || _primary is null ? _fallback.Dimensions : _primary.Dimensions;
 
+	public bool IsDegraded => _useFallbackOnly;
+
+	public string? DegradedReason => _useFallbackOnly ? $"Primary embedding provider {_primary?.ProviderName} failed; {_fallback.ProviderName} is serving embeddings." : null;
+
 	public async Task<float[]> GenerateEmbeddingAsync(string text, CancellationToken cancellationToken = default)
 	{
 		if (_primary is null || _useFallbackOnly)
@@ -75,6 +79,7 @@ internal sealed class ResilientRunbookEmbeddingProvider : IRunbookEmbeddingProvi
 		catch (Exception exception)
 		{
 			_useFallbackOnly = true;
+			_logger.LogWarning(exception, "Embedding provider failed. Provider={ProviderName} FallbackProvider={FallbackProviderName}.", _primary.ProviderName, _fallback.ProviderName);
 			_logger.LogWarning(exception, "Primary embedding provider {ProviderName} failed. Falling back to {FallbackProviderName} for this process.", _primary.ProviderName, _fallback.ProviderName);
 		}
 

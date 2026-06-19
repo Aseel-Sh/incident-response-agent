@@ -3,8 +3,9 @@ namespace IncidentResponseAgent.Domain.Incidents;
 public enum IncidentSeverity
 {
     Unknown = 0,
-    Low = 1,
-    Medium = 2,
-    High = 3,
-    Critical = 4
+    Sev1 = 1,
+    Sev2 = 2,
+    Sev3 = 3,
+    Sev4 = 4,
+    Sev5 = 5
 }

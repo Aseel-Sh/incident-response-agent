@@ -27,7 +27,7 @@ public sealed class IncidentSubmissionRequestTests
 		{
 			Title = "Checkout failures",
 			Description = "Checkout requests are failing.",
-			Severity = "High",
+			Severity = "sev2",
 			Tags = Enumerable.Range(1, 11).Select(index => $"tag-{index}").ToArray()
 		};
 

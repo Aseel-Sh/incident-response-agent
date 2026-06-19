@@ -4,6 +4,8 @@ public sealed record AgentStructuredAnalysis
 {
 	public string? Summary { get; init; }
 
+	public string? Severity { get; init; }
+
 	public IReadOnlyList<IncidentAnalysisEvidenceItem> Evidence { get; init; } = Array.Empty<IncidentAnalysisEvidenceItem>();
 
 	public IReadOnlyList<IncidentHypothesis> Hypotheses { get; init; } = Array.Empty<IncidentHypothesis>();

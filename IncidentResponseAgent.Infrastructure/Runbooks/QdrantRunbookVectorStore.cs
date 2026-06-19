@@ -87,6 +87,7 @@ internal sealed class QdrantRunbookVectorStore
 			if (!response.IsSuccessStatusCode)
 			{
 				_available = false;
+				_logger.LogWarning("Vector store failed. Provider={Provider} Operation={Operation} StatusCode={StatusCode}.", "qdrant", "collection-setup", response.StatusCode);
 				_logger.LogWarning("Qdrant collection setup failed with status {StatusCode}. Falling back to SQLite vector search.", response.StatusCode);
 				return false;
 			}
@@ -100,6 +101,7 @@ internal sealed class QdrantRunbookVectorStore
 		catch (Exception exception)
 		{
 			_available = false;
+			_logger.LogWarning(exception, "Vector store failed. Provider={Provider} Operation={Operation}.", "qdrant", "collection-setup");
 			_logger.LogWarning(exception, "Qdrant collection setup failed. Falling back to SQLite vector search.");
 			return false;
 		}
@@ -144,6 +146,7 @@ internal sealed class QdrantRunbookVectorStore
 			if (!response.IsSuccessStatusCode)
 			{
 				_available = false;
+				_logger.LogWarning("Vector store failed. Provider={Provider} Operation={Operation} StatusCode={StatusCode}.", "qdrant", "search", response.StatusCode);
 				_logger.LogWarning("Qdrant upsert failed with status {StatusCode}. SQLite vector search remains available.", response.StatusCode);
 				return false;
 			}
@@ -158,6 +161,7 @@ internal sealed class QdrantRunbookVectorStore
 		catch (Exception exception)
 		{
 			_available = false;
+			_logger.LogWarning(exception, "Vector store failed. Provider={Provider} Operation={Operation}.", "qdrant", "search");
 			_logger.LogWarning(exception, "Qdrant upsert failed. SQLite vector search remains available.");
 			return false;
 		}

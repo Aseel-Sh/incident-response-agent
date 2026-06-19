@@ -6,10 +6,11 @@ public sealed record IncidentSubmissionRequest : IValidatableObject
 {
     private static readonly HashSet<string> AllowedSeverities = new(StringComparer.OrdinalIgnoreCase)
     {
-        "Low",
-        "Medium",
-        "High",
-        "Critical"
+        "sev1",
+        "sev2",
+        "sev3",
+        "sev4",
+        "sev5"
     };
 
     [Required]
@@ -42,7 +43,7 @@ public sealed record IncidentSubmissionRequest : IValidatableObject
         if (!AllowedSeverities.Contains(Severity))
         {
             yield return new ValidationResult(
-                "Severity must be one of: Low, Medium, High, Critical.",
+                "Severity must be one of: sev1, sev2, sev3, sev4, sev5.",
                 [nameof(Severity)]);
         }
 

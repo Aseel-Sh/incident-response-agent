@@ -33,6 +33,7 @@ Return valid JSON only. Do not wrap it in Markdown.
 Use this exact shape:
 {
   "summary": "short incident summary",
+  "severity": "SEV-1 | SEV-2 | SEV-3 | SEV-4 | SEV-5",
   "evidence": [
     {
       "summary": "what the evidence says",
@@ -74,7 +75,7 @@ Session context:
 
 Title: {{incident.Title}}
 Description: {{incident.Description}}
-Severity: {{incident.Severity}}
+Severity: {{FormatSeverity(incident.Severity)}}
 Service: {{incident.ServiceName ?? "unknown"}}
 Environment: {{incident.Environment ?? "unknown"}}
 Tags: {{string.Join(", ", incident.Tags)}}
@@ -113,6 +114,16 @@ Similar previous incidents:
 		return string.Join(Environment.NewLine, items.Select(item => $"- {item}"));
 	}
 
+	private static string FormatSeverity(IncidentSeverity severity) => severity switch
+	{
+		IncidentSeverity.Sev1 => "SEV-1",
+		IncidentSeverity.Sev2 => "SEV-2",
+		IncidentSeverity.Sev3 => "SEV-3",
+		IncidentSeverity.Sev4 => "SEV-4",
+		IncidentSeverity.Sev5 => "SEV-5",
+		_ => "SEV-5"
+	};
+
 	private static string BuildSimilarIncidentSection(IReadOnlyList<SimilarIncidentMatch> similarIncidents)
 	{
 		if (similarIncidents.Count == 0)
@@ -121,7 +132,7 @@ Similar previous incidents:
 		}
 
 		return string.Join(Environment.NewLine, similarIncidents.Select(incident =>
-			$"- {incident.IncidentSummary} ({incident.ServiceName}/{incident.Environment}, score {incident.Score:0.00}): previous action: {incident.ResolutionSummary}"));
+			$"- {incident.IncidentSummary} ({incident.ServiceName}/{incident.Environment}, score {incident.Score:0.00}); successful actions: {string.Join(" | ", incident.SuccessfulActions)}; failed actions: {string.Join(" | ", incident.FailedActions)}"));
 	}
 
 	private static string BuildSessionSection(IncidentAnalysisSessionContext? sessionContext)

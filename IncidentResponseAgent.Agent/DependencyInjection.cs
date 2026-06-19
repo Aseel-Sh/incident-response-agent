@@ -11,8 +11,8 @@ public static class DependencyInjection
 	{
 		services.AddTransient<IncidentAnalysisAgentTools>();
 		services.AddTransient<IIncidentAnalysisAgentFactory, IncidentAnalysisAgentFactory>();
-		services.AddTransient<OpenAIIncidentAnalysisAgent>();
-		services.AddTransient<PromptBasedIncidentAnalysisAgent>();
+		services.AddTransient<IModelIncidentAnalysisAgent, MicrosoftAgentFrameworkIncidentAnalysisAgent>();
+		services.AddTransient<ILocalFallbackIncidentAnalysisAgent, PromptBasedIncidentAnalysisAgent>();
 		services.AddTransient<IIncidentAnalysisAgent, ResilientIncidentAnalysisAgent>();
 
 		return services;

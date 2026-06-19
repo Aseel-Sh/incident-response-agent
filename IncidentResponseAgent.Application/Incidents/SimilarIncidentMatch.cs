@@ -17,4 +17,8 @@ public sealed record SimilarIncidentMatch
 	public required DateTimeOffset CreatedAtUtc { get; init; }
 
 	public IReadOnlyList<string> SharedSignals { get; init; } = Array.Empty<string>();
+
+	public IReadOnlyList<string> SuccessfulActions { get; init; } = Array.Empty<string>();
+
+	public IReadOnlyList<string> FailedActions { get; init; } = Array.Empty<string>();
 }

@@ -13,7 +13,7 @@ public sealed class RubricIncidentAnalysisEvaluatorTests
 			Guid.NewGuid(),
 			"Checkout 5xx spike",
 			"Customers see intermittent 500 responses.",
-			IncidentSeverity.High,
+			IncidentSeverity.Sev2,
 			serviceName: "checkout-api",
 			environment: "production");
 		var scenario = new IncidentAnalysisEvaluationScenario
@@ -52,7 +52,7 @@ public sealed class RubricIncidentAnalysisEvaluatorTests
 			Guid.NewGuid(),
 			"Orders queue backlog growing",
 			"Queue depth is increasing.",
-			IncidentSeverity.Medium,
+			IncidentSeverity.Sev3,
 			serviceName: "orders-worker",
 			environment: "production");
 		var scenario = new IncidentAnalysisEvaluationScenario

@@ -17,6 +17,7 @@ public static class DependencyInjection
 		services.AddSingleton<IMetricsProvider>(provider => provider.GetRequiredService<LocalJsonMetricsProvider>());
 		services.AddSingleton<IMetricSeriesCatalog>(provider => provider.GetRequiredService<LocalJsonMetricsProvider>());
 		services.AddSingleton<IRunbookRetrievalService, SemanticRunbookRetrievalService>();
+		services.AddSingleton<IApprovedKnowledgePublisher, MarkdownApprovedKnowledgePublisher>();
 		services.AddSingleton<IRunbookRetrievalDiagnosticsService>(serviceProvider =>
 			(IRunbookRetrievalDiagnosticsService)serviceProvider.GetRequiredService<IRunbookRetrievalService>());
 		services.AddSingleton<IIncidentSignalMonitor, LocalOperationalSignalMonitor>();

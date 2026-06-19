@@ -16,5 +16,11 @@ public sealed record RunbookRetrievalDiagnosticsResult
 
 	public required string KnowledgeBasePath { get; init; }
 
+	public string RagStatus { get; init; } = "available";
+
+	public bool IsDegraded { get; init; }
+
+	public string? DegradedReason { get; init; }
+
 	public IReadOnlyList<RunbookRetrievalMatch> Matches { get; init; } = Array.Empty<RunbookRetrievalMatch>();
 }

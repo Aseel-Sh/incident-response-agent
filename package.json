@@ -1,0 +1,19 @@
+{
+  "name": "incident-response-agent-e2e",
+  "private": true,
+  "scripts": {
+    "e2e:prepare": "node e2e/scripts/prepare.mjs && dotnet publish IncidentResponseAgent.Api/IncidentResponseAgent.Api.csproj -o .tmp/e2e-app --no-restore",
+    "e2e:serve": "node e2e/scripts/serve.mjs",
+    "test:e2e": "npm.cmd run e2e:prepare && playwright test",
+    "test:e2e:monitoring": "npm.cmd run e2e:prepare && playwright test --grep @monitoring",
+    "test:e2e:ai": "npm.cmd run e2e:prepare && playwright test -c playwright.ai.config.ts",
+    "test:e2e:learning": "npm.cmd run e2e:prepare && playwright test -c playwright.learning.config.ts",
+    "test:e2e:headed": "npm.cmd run e2e:prepare && playwright test --headed",
+    "test:e2e:ui": "npm.cmd run e2e:prepare && playwright test --ui",
+    "test:e2e:report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "4.10.2",
+    "@playwright/test": "1.58.2"
+  }
+}

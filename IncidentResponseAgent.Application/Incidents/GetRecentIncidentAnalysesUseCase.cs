@@ -16,11 +16,12 @@ public sealed class GetRecentIncidentAnalysesUseCase : IGetRecentIncidentAnalyse
 		return records.Select(record => new GetRecentIncidentAnalysesResult
 		{
 			IncidentId = record.Incident.Id,
+			IncidentTitle = record.Incident.Title,
 			IncidentSummary = record.AnalysisResult.IncidentSummary,
 			IncidentDescription = record.Incident.Description,
 			ServiceName = record.Incident.ServiceName,
 			Environment = record.Incident.Environment,
-			Severity = record.Incident.Severity.ToString(),
+			Severity = record.Incident.Severity.ToString().ToLowerInvariant(),
 			Tags = record.Incident.Tags.ToArray(),
 			AnalysisText = record.AnalysisResult.AnalysisText,
 			AnalysisProvider = record.AnalysisResult.AnalysisProvider,
@@ -33,7 +34,19 @@ public sealed class GetRecentIncidentAnalysesUseCase : IGetRecentIncidentAnalyse
 			Notes = record.AnalysisResult.Notes,
 			ActionOutcomes = record.AnalysisResult.ActionOutcomes,
 			Status = record.Status,
-			CreatedAtUtc = record.CreatedAtUtc
+			CreatedAtUtc = record.CreatedAtUtc,
+			Timeline = record.Timeline,
+			ProposedKnowledgeUpdate = record.ProposedKnowledgeUpdate,
+			Feedback = record.Feedback,
+			KnownFacts = record.AnalysisResult.KnownFacts,
+			Unknowns = record.AnalysisResult.Unknowns,
+			RunbookMatches = record.AnalysisResult.RunbookMatches,
+			Hypotheses = record.AnalysisResult.Hypotheses,
+			RecommendedActions = record.AnalysisResult.RecommendedActions,
+			Evidence = record.AnalysisResult.Evidence,
+			SimilarIncidents = record.AnalysisResult.SimilarIncidents,
+			Quality = record.AnalysisResult.Quality,
+			ProviderTransparency = record.AnalysisResult.ProviderTransparency
 		}).ToArray();
 	}
 }

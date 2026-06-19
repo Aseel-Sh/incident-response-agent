@@ -24,7 +24,8 @@ public static class AgentStructuredAnalysisParser
 
 		try
 		{
-			return JsonSerializer.Deserialize<AgentStructuredAnalysis>(json, SerializerOptions);
+			var result = JsonSerializer.Deserialize<AgentStructuredAnalysis>(json, SerializerOptions);
+			return result?.Severity is "SEV-1" or "SEV-2" or "SEV-3" or "SEV-4" or "SEV-5" ? result : null;
 		}
 		catch (JsonException)
 		{

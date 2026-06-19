@@ -1,0 +1,32 @@
+[
+  {
+    "metricName": "request_error_rate",
+    "serviceName": "database-api",
+    "environment": "production",
+    "samples": [{ "timestamp": "2026-06-19T12:00:00Z", "value": 32 }]
+  },
+  {
+    "metricName": "request_error_rate",
+    "serviceName": "blackhole-metrics-api",
+    "environment": "production",
+    "samples": [{ "timestamp": "2026-06-19T12:00:00Z", "value": 41 }]
+  },
+  {
+    "metricName": "request_error_rate",
+    "serviceName": "conflicting-api",
+    "environment": "production",
+    "samples": [{ "timestamp": "2026-06-19T12:00:00Z", "value": 2 }]
+  },
+  {
+    "metricName": "request_error_rate",
+    "serviceName": "model-unavailable-api",
+    "environment": "production",
+    "samples": [{ "timestamp": "2026-06-19T12:00:00Z", "value": 30 }]
+  },
+  {
+    "metricName": "request_error_rate",
+    "serviceName": "rag-unavailable-api",
+    "environment": "production",
+    "samples": [{ "timestamp": "2026-06-19T12:00:00Z", "value": 28 }]
+  }
+]

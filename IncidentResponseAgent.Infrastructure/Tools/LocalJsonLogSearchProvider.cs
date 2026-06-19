@@ -41,7 +41,7 @@ public sealed class LocalJsonLogSearchProvider : ILogSearchProvider
 
 		var matches = entries
 			.Where(entry => IsInWindow(entry, request.StartTime, request.EndTime))
-			.Where(entry => MatchesService(entry, serviceName))
+			.Where(entry => MatchesService(entry, serviceName, queryTokens))
 			.Where(entry => string.IsNullOrWhiteSpace(environment) || entry.Message.Contains(environment, StringComparison.OrdinalIgnoreCase))
 			.Select(entry => new { Entry = entry, Score = Score(entry, queryTokens, serviceName, environment) })
 			.Where(match => match.Score > 0)
@@ -106,16 +106,26 @@ public sealed class LocalJsonLogSearchProvider : ILogSearchProvider
 		return true;
 	}
 
-	private static bool MatchesService(LogSearchEntry entry, string? serviceName)
+	private static bool MatchesService(LogSearchEntry entry, string? serviceName, HashSet<string> queryTokens)
 	{
 		if (string.IsNullOrWhiteSpace(serviceName))
 		{
 			return true;
 		}
 
+		if (entry.Source.Equals(serviceName, StringComparison.OrdinalIgnoreCase)
+		    || entry.Message.Contains(serviceName, StringComparison.OrdinalIgnoreCase)
+		    || (entry.CorrelationId?.Contains(serviceName, StringComparison.OrdinalIgnoreCase) ?? false))
+		{
+			return true;
+		}
+
 		var haystack = Tokenize($"{entry.Source} {entry.Message} {entry.CorrelationId}");
-		var serviceTokens = Tokenize(serviceName);
-		return serviceTokens.Count == 0 || haystack.Overlaps(serviceTokens);
+		var meaningfulServiceTokens = Tokenize(serviceName)
+			.Where(token => token is not ("api" or "service" or "app"))
+			.ToHashSet(StringComparer.OrdinalIgnoreCase);
+		var queryOverlap = queryTokens.Count(haystack.Contains);
+		return meaningfulServiceTokens.Count > 0 && haystack.Overlaps(meaningfulServiceTokens) && queryOverlap >= 2;
 	}
 
 	private static int Score(LogSearchEntry entry, HashSet<string> queryTokens, string? serviceName, string? environment)

@@ -8,5 +8,9 @@ internal interface IRunbookEmbeddingProvider
 
 	int Dimensions { get; }
 
+	bool IsDegraded => false;
+
+	string? DegradedReason => null;
+
 	Task<float[]> GenerateEmbeddingAsync(string text, CancellationToken cancellationToken = default);
 }

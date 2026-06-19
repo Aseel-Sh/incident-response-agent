@@ -21,4 +21,12 @@ public sealed record DetectedIncidentResponse
 	public IReadOnlyList<string> Signals { get; init; } = Array.Empty<string>();
 
 	public IReadOnlyList<string> SuggestedTags { get; init; } = Array.Empty<string>();
+
+	public string Status { get; init; } = "candidate";
+
+	public Guid? DuplicateIncidentId { get; init; }
+
+	public IReadOnlyList<SimilarIncidentResponse> SimilarIncidents { get; init; } = Array.Empty<SimilarIncidentResponse>();
+
+	public IReadOnlyList<IncidentTimelineEventResponse> Timeline { get; init; } = Array.Empty<IncidentTimelineEventResponse>();
 }

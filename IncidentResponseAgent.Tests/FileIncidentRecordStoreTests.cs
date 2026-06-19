@@ -18,7 +18,7 @@ public sealed class FileIncidentRecordStoreTests : IDisposable
 			Guid.NewGuid(),
 			"Inventory API errors",
 			"Inventory API is returning errors.",
-			IncidentSeverity.High,
+			IncidentSeverity.Sev2,
 			"inventory-api",
 			"production");
 		var analysis = new IncidentAnalysisResult
@@ -49,7 +49,7 @@ public sealed class FileIncidentRecordStoreTests : IDisposable
 			Guid.NewGuid(),
 			"Checkout 5xx spike",
 			"Checkout API returned HTTP 500 after deployment.",
-			IncidentSeverity.High,
+			IncidentSeverity.Sev2,
 			"checkout-api",
 			"production",
 			tags: ["checkout", "5xx", "deploy"]);
@@ -72,12 +72,14 @@ public sealed class FileIncidentRecordStoreTests : IDisposable
 			Confidence = "Medium"
 		};
 		await store.SaveAsync(priorIncident, priorAnalysis);
+		await store.UpdateStatusAsync(priorIncident.Id, "resolved");
+		await store.ReviewKnowledgeUpdateAsync(priorIncident.Id, "approved", null, "Approved in test.");
 
 		var currentIncident = new Incident(
 			Guid.NewGuid(),
 			"Checkout 500s after deploy",
 			"Customers see checkout HTTP 500 responses.",
-			IncidentSeverity.High,
+			IncidentSeverity.Sev2,
 			"checkout-api",
 			"production",
 			tags: ["checkout", "5xx"]);
@@ -95,7 +97,7 @@ public sealed class FileIncidentRecordStoreTests : IDisposable
 	{
 		var recordsPath = Path.Combine(_rootPath, "incident-records.json");
 		var store = new FileIncidentRecordStore(Options.Create(new IncidentStorageOptions { IncidentRecordsPath = recordsPath }));
-		var incident = new Incident(Guid.NewGuid(), "Delete me", "Temporary incident.", IncidentSeverity.Low);
+		var incident = new Incident(Guid.NewGuid(), "Delete me", "Temporary incident.", IncidentSeverity.Sev4);
 		var analysis = new IncidentAnalysisResult
 		{
 			IncidentId = incident.Id,
@@ -114,11 +116,109 @@ public sealed class FileIncidentRecordStoreTests : IDisposable
 		Assert.False(await store.DeleteAsync(incident.Id));
 	}
 
+	[Fact]
+	public async Task ApprovedKnowledgeIsPublishedAndRemovedWhenIncidentIsDeleted()
+	{
+		var publisher = new RecordingKnowledgePublisher();
+		var store = new FileIncidentRecordStore(
+			Options.Create(new IncidentStorageOptions { IncidentRecordsPath = Path.Combine(_rootPath, "published-records.json") }),
+			publisher);
+		var incident = new Incident(Guid.NewGuid(), "Redis saturation", "Redis latency saturated the catalog API.", IncidentSeverity.Sev2, "catalog-api", "production");
+		await store.SaveAsync(incident, new IncidentAnalysisResult { IncidentId = incident.Id, IncidentSummary = incident.Title, AnalysisText = "{}", AnalysisProvider = "test", SessionId = "publish-session" });
+		await store.UpdateStatusAsync(incident.Id, "resolved");
+
+		var approved = await store.ReviewKnowledgeUpdateAsync(incident.Id, "approved", "Approved mitigation knowledge.", null);
+		Assert.Equal(approved.Id, publisher.PublishedId);
+		Assert.Equal("Approved mitigation knowledge.", publisher.PublishedContent);
+
+		await store.DeleteAsync(incident.Id);
+		Assert.Equal(approved.Id, publisher.RemovedId);
+	}
+
+	[Fact]
+	public async Task CandidateDecisionPersistsWithoutCreatingReusableIncident()
+	{
+		var recordsPath = Path.Combine(_rootPath, "incident-records.json");
+		var store = new FileIncidentRecordStore(Options.Create(new IncidentStorageOptions { IncidentRecordsPath = recordsPath }));
+		var detectedAt = DateTimeOffset.UtcNow.AddMinutes(-1);
+		var candidate = new DetectedIncidentCandidate
+		{
+			Id = "candidate-false-positive", Title = "Transient warning", Description = "One warning was observed.", Severity = IncidentSeverity.Sev5,
+			ServiceName = "inventory-api", Environment = "production", DetectedAtUtc = detectedAt, Source = "logs", Signals = ["warning count=1"]
+		};
+
+		await store.SaveCandidatesAsync([candidate], new MonitoringScanRecord { StartedAtUtc = detectedAt, CompletedAtUtc = detectedAt.AddSeconds(1), CandidateCount = 1 });
+		await store.DecideCandidateAsync(candidate.Id, "false_positive");
+
+		var saved = Assert.Single(await store.GetCandidatesAsync());
+		Assert.Equal("false_positive", saved.Status);
+		Assert.Contains(saved.Timeline, item => item.Type == "false positive");
+		Assert.Empty(await store.GetRecentAsync(10));
+	}
+
+	[Fact]
+	public async Task AnalysisFeedbackPersistsWithIncident()
+	{
+		var recordsPath = Path.Combine(_rootPath, "incident-records.json");
+		var store = new FileIncidentRecordStore(Options.Create(new IncidentStorageOptions { IncidentRecordsPath = recordsPath }));
+		var incident = new Incident(Guid.NewGuid(), "Feedback test", "A grounded incident.", IncidentSeverity.Sev3);
+		await store.SaveAsync(incident, new IncidentAnalysisResult { IncidentId = incident.Id, IncidentSummary = incident.Title, AnalysisText = "{}", AnalysisProvider = "test", SessionId = "feedback-session", SessionTurnNumber = 1 });
+		var feedback = new IncidentAnalysisFeedback
+		{
+			AnalysisUsefulness = "partially useful", RecommendationCorrectness = "wrong", ReasonTags = ["missing evidence", "bad remediation"], SubmittedAtUtc = DateTimeOffset.UtcNow
+		};
+
+		await store.AddFeedbackAsync(incident.Id, feedback);
+
+		var saved = await store.GetByIncidentIdAsync(incident.Id);
+		Assert.Equal(feedback.Id, Assert.Single(saved!.Feedback).Id);
+		Assert.Contains(saved.Timeline, item => item.Type == "analysis feedback recorded");
+	}
+
+	[Fact]
+	public async Task FallbackProviderAndReasonPersistHonestly()
+	{
+		var recordsPath = Path.Combine(_rootPath, "incident-records.json");
+		var store = new FileIncidentRecordStore(Options.Create(new IncidentStorageOptions { IncidentRecordsPath = recordsPath }));
+		var incident = new Incident(Guid.NewGuid(), "Fallback persistence", "Model provider was unavailable.", IncidentSeverity.Sev4);
+		var analysis = new IncidentAnalysisResult
+		{
+			IncidentId = incident.Id, IncidentSummary = incident.Title, AnalysisText = "{}", AnalysisProvider = "local-prompt", AnalysisModel = "local",
+			UsedFallbackAnalysis = true, FallbackReason = "OpenAI-compatible provider returned 503 Service Unavailable.", SessionId = "fallback-session", SessionTurnNumber = 1,
+			ProviderTransparency = new AnalysisProviderTransparency { ModelProvider = "local-prompt", Model = "local", UsedModelFallback = true, FallbackReason = "OpenAI-compatible provider returned 503 Service Unavailable." }
+		};
+
+		await store.SaveAsync(incident, analysis);
+		var saved = await store.GetByIncidentIdAsync(incident.Id);
+
+		Assert.True(saved!.AnalysisResult.UsedFallbackAnalysis);
+		Assert.Equal("local-prompt", saved.AnalysisResult.ProviderTransparency.ModelProvider);
+		Assert.Contains("503", saved.AnalysisResult.ProviderTransparency.FallbackReason);
+	}
+
 	public void Dispose()
 	{
 		if (Directory.Exists(_rootPath))
 		{
 			Directory.Delete(_rootPath, recursive: true);
+		}
+	}
+
+	private sealed class RecordingKnowledgePublisher : IApprovedKnowledgePublisher
+	{
+		public Guid? PublishedId { get; private set; }
+		public Guid? RemovedId { get; private set; }
+		public string? PublishedContent { get; private set; }
+		public Task PublishAsync(Guid proposalId, string title, string content, CancellationToken cancellationToken = default)
+		{
+			PublishedId = proposalId;
+			PublishedContent = content;
+			return Task.CompletedTask;
+		}
+		public Task RemoveAsync(Guid proposalId, CancellationToken cancellationToken = default)
+		{
+			RemovedId = proposalId;
+			return Task.CompletedTask;
 		}
 	}
 }

@@ -5,11 +5,20 @@ namespace IncidentResponseAgent.Tests;
 public sealed class AgentStructuredAnalysisParserTests
 {
 	[Fact]
+	public void TryParseRejectsInvalidSeverity()
+	{
+		const string json = """{"summary":"test","severity":"Critical","evidence":[],"hypotheses":[],"recommendedActions":[],"confidence":"Low","notes":"test"}""";
+
+		Assert.Null(AgentStructuredAnalysisParser.TryParse(json));
+	}
+
+	[Fact]
 	public void TryParseMapsStructuredJson()
 	{
 		const string json = """
 {
   "summary": "Checkout has elevated 5xx responses.",
+  "severity": "SEV-2",
   "evidence": [
     {
       "summary": "Runbook match found.",
