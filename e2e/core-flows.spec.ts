@@ -23,6 +23,12 @@ test.describe.serial('incident response core flows', () => {
     const themeButton = page.getByRole('button', { name: 'Toggle theme' });
     await themeButton.click();
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+    await page.reload();
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+    const reopenedPage = await page.context().newPage();
+    await reopenedPage.goto('/');
+    await expect(reopenedPage.locator('html')).toHaveAttribute('data-theme', 'dark');
+    await reopenedPage.close();
     await themeButton.click();
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
 
@@ -34,6 +40,11 @@ test.describe.serial('incident response core flows', () => {
     await expect(page.locator('#configOutput')).toContainText('App Mode');
     await expect(page.locator('#configOutput')).toContainText('Vector Store');
     await expect(page.locator('#configOutput')).not.toContainText(/api.?key|sk-[a-z0-9]|hf_[a-z0-9]/i);
+    await page.getByRole('button', { name: 'RAG', exact: true }).click();
+    const ragMatch = page.locator('#ragResults .rag-match').first();
+    await expect(ragMatch).toBeVisible();
+    await expect(ragMatch).toHaveCSS('padding-left', '20px');
+    await expect(ragMatch.locator('.match-score')).toHaveCSS('padding-left', '20px');
     await page.getByRole('button', { name: 'Help' }).click();
     await expect(page.locator('#toastRegion')).toContainText('Use the sidebar');
   });
@@ -60,6 +71,8 @@ test.describe.serial('incident response core flows', () => {
 
     await expect(page.locator('#analysisOutput')).toContainText('SEV-2');
     await expect(page.locator('#analysisOutput')).toContainText(manualLatencyIncident.title);
+    await expect(page.locator('#analysisOutput .confidence-score')).toHaveCSS('border-top-style', 'none');
+    await expect(page.locator('#analysisOutput .confidence-score')).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
     await expect(page.locator('#incidentForm input[name="sessionId"]')).toHaveValue(primary.sessionId);
 
     await page.getByRole('button', { name: 'Dashboard', exact: true }).click();
@@ -67,7 +80,7 @@ test.describe.serial('incident response core flows', () => {
     await page.getByRole('searchbox', { name: 'Search incidents' }).fill('checkout-api');
     await expect(page.locator('#detectedOutput').getByText(manualLatencyIncident.title, { exact: true })).toBeVisible();
     await page.getByRole('searchbox', { name: 'Search incidents' }).fill('');
-    await page.getByRole('button', { name: 'Active', exact: true }).click();
+    await page.getByRole('button', { name: 'Confirmed', exact: true }).click();
     await expect(page.locator('#detectedOutput').getByText(manualLatencyIncident.title, { exact: true })).toBeVisible();
     await page.reload();
     await expect(page.locator('#healthStatus')).toHaveText('Healthy');
@@ -112,9 +125,26 @@ test.describe.serial('incident response core flows', () => {
     await expect(severityBadge).toHaveText('SEV-2');
     const badgeStyle = await severityBadge.evaluate(element => {
       const style = getComputedStyle(element);
-      return { color: style.color, background: style.backgroundColor };
+      return { color: style.color, background: style.backgroundColor, border: style.borderStyle };
     });
     expect(badgeStyle.color).not.toBe(badgeStyle.background);
+    expect(badgeStyle.border).toBe('none');
+    await page.getByRole('button', { name: 'Toggle theme' }).click();
+    const semanticColors = await page.evaluate(() => {
+      const classes = ['severity-sev1', 'severity-sev2', 'severity-sev3', 'severity-sev4', 'severity-sev5', 'provider-model', 'provider-local', 'status-new'];
+      return Object.fromEntries(classes.map(className => {
+        const element = document.createElement('span');
+        element.className = `badge ${className}`;
+        document.body.appendChild(element);
+        const style = getComputedStyle(element);
+        const value = `${style.color}/${style.backgroundColor}`;
+        element.remove();
+        return [className, value];
+      }));
+    });
+    expect(new Set(Object.values(semanticColors)).size).toBe(Object.keys(semanticColors).length);
+    const confidenceRadius = await page.locator('#recentOutput .confidence-badge').first().evaluate(element => getComputedStyle(element).borderRadius);
+    expect(confidenceRadius).toBe('4px');
     await page.getByLabel('Search history').fill('payment authorization');
     await expect(page.locator(`tr[data-history-id="${primary.incidentId}"]`)).toBeVisible();
     await page.getByLabel('Search history').fill('no-such-incident');
@@ -200,6 +230,22 @@ test.describe.serial('incident response core flows', () => {
 
     await page.goto('/');
     await openHistory(page);
+    await expect(page.locator('.history-heading #historyResultCount')).toBeVisible();
+    await expect(page.locator('.history-heading #historyReloadButton')).toBeVisible();
+    await expect(page.locator('#historyStatusFilter option')).toHaveText(['All statuses', 'Confirmed', 'Active', 'Mitigated', 'Resolved']);
+    await page.route('**/api/incidents/recent?maxResults=12', async route => {
+      await new Promise(resolve => setTimeout(resolve, 250));
+      await route.continue();
+    });
+    const refreshButton = page.getByRole('button', { name: 'Refresh history' });
+    await refreshButton.click();
+    await expect(refreshButton).toBeDisabled();
+    await expect(refreshButton).toHaveAttribute('aria-busy', 'true');
+    await expect(refreshButton.locator('.loading-spinner')).toBeVisible();
+    await expect(page.locator('#toastRegion')).toContainText('History refreshed');
+    await expect(refreshButton).toBeEnabled();
+    await page.unroute('**/api/incidents/recent?maxResults=12');
+    await expect(page.locator('#recentOutput .confidence-badge').first()).toHaveCSS('border-top-style', 'none');
     await expect(page.locator('[data-history-page="2"]')).toBeVisible();
     await page.locator('[data-history-page="2"]').click();
     await expect(page.locator('#recentOutput .pagination-bar')).toContainText('11-12 of 12');
@@ -216,19 +262,16 @@ test.describe.serial('incident response core flows', () => {
     await page.getByLabel('Search history').fill('Deleted SEV-4 checkout latency fixture');
     await page.locator(`tr[data-history-id="${deleted.incidentId}"] .link-button`).click();
     const deleteButton = page.getByRole('button', { name: 'Delete incident' });
-    let sawConfirmation = false;
-    page.once('dialog', async dialog => {
-      sawConfirmation = true;
-      expect(dialog.type()).toBe('confirm');
-      expect(dialog.message()).toContain('Permanently delete');
-      await dialog.dismiss();
-    });
     await deleteButton.click();
-    expect(sawConfirmation).toBeTruthy();
+    const confirmation = page.getByRole('alertdialog');
+    await expect(confirmation).toContainText('Permanently delete');
+    await confirmation.getByRole('button', { name: 'Cancel' }).click();
+    await expect(confirmation).toBeHidden();
     await expect(page.getByRole('dialog')).toBeVisible();
 
-    page.once('dialog', dialog => dialog.accept());
     await deleteButton.click();
+    await confirmation.getByRole('button', { name: 'Delete incident' }).click();
+    await expect(confirmation).toBeHidden();
     await expect(page.getByRole('dialog')).toBeHidden();
     expect((await recentIncidents(request)).some(item => item.incidentId === deleted.incidentId)).toBeFalsy();
 
@@ -279,5 +322,8 @@ test.describe.serial('incident response core flows', () => {
 
     const results = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21aa']).analyze();
     expect(results.violations, JSON.stringify(results.violations, null, 2)).toEqual([]);
+    await page.getByRole('button', { name: 'Toggle theme' }).click();
+    const darkResults = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21aa']).analyze();
+    expect(darkResults.violations, JSON.stringify(darkResults.violations, null, 2)).toEqual([]);
   });
 });

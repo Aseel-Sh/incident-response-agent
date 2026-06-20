@@ -68,7 +68,7 @@ async function expectAnalysisUi(page: Page, fixture: GoldenAnalysisFixture) {
   const output = page.locator('#analysisOutput');
   for (const label of [fixture.expected.severityLabel, fixture.title, fixture.description, fixture.serviceName,
     'Known facts', 'Hypotheses', 'Unknowns', 'Evidence', 'Runbook matches', 'Confidence',
-    'Analysis quality', 'Recommended actions', 'Provider information']) {
+    'Analysis quality', 'Recommended actions', 'Provider status']) {
     await expect(output).toContainText(label);
   }
 }
@@ -97,8 +97,8 @@ test.describe.serial('@ai evidence-grounded analysis, RAG, and fallback honesty'
     expect(body.rootCauseHypotheses.concat(body.recommendedActions).some((item: any) =>
       JSON.stringify(item).includes('irrelevant-cache'))).toBeFalsy();
     await expectAnalysisUi(page, fixture);
-    await expect(page.locator('#analysisOutput')).toContainText('Model fallbackNo');
-    await expect(page.locator('#analysisOutput')).not.toContainText('Fallback:');
+    await expect(page.locator('#analysisOutput')).toContainText('Analysis fallbackNot used');
+    await expect(page.locator('#analysisOutput .provider-notices')).not.toContainText('Model fallback');
     expect((await storedAnalysis(request, body.incidentId)).providerTransparency).toMatchObject({
       modelProvider: 'OpenRouter', model: 'fixture/model-v1', usedModelFallback: false
     });
@@ -132,8 +132,7 @@ test.describe.serial('@ai evidence-grounded analysis, RAG, and fallback honesty'
     assertGrounded(body, fixture);
     expect(body.providerTransparency).toMatchObject({ usedStructuredOutputRetry: true, usedModelFallback: false });
     expect(body.providerTransparency.structuredOutputRetryReason).toContain('empty content');
-    await expect(page.locator('#analysisOutput')).toContainText('Structured retrySucceeded');
-    await expect(page.locator('#analysisOutput')).toContainText('Structured-output retry:');
+    await expect(page.locator('#analysisOutput')).toContainText('Structured-output retry');
     const calls = await (await request.get('http://127.0.0.1:5199/__requests')).json();
     expect(calls.filter((item: any) => item.title === fixture.title).map((item: any) => item.strict)).toEqual([true, false]);
     expect(calls.find((item: any) => item.title === fixture.title)).toEqual(expect.objectContaining({
@@ -149,8 +148,9 @@ test.describe.serial('@ai evidence-grounded analysis, RAG, and fallback honesty'
     expect(body.usedFallbackAnalysis).toBe(true);
     expect(body.providerTransparency).toMatchObject({ modelProvider: 'local-prompt', model: 'local', usedModelFallback: true });
     expect(body.fallbackReason).toMatch(/503|model outage|service unavailable/i);
-    await expect(page.locator('#analysisOutput')).toContainText('Model fallbackYes');
-    await expect(page.locator('#analysisOutput')).toContainText('Fallback: OpenRouter model analysis failed');
+    await expect(page.locator('#analysisOutput')).toContainText('Analysis fallbackUsed');
+    await expect(page.locator('#analysisOutput')).toContainText('Model fallback');
+    await expect(page.locator('#analysisOutput')).toContainText('OpenRouter model analysis failed');
     const stored = await storedAnalysis(request, body.incidentId);
     expect(stored.providerTransparency.usedModelFallback).toBe(true);
     expect(stored.providerTransparency.fallbackReason).toBe(body.providerTransparency.fallbackReason);
@@ -176,9 +176,11 @@ test.describe.serial('@ai evidence-grounded analysis, RAG, and fallback honesty'
       modelProvider: 'OpenRouter', model: 'fixture/model-v1', usedModelFallback: false, isDegraded: true
     });
     expect(body.providerTransparency.degradedReason).toBeTruthy();
-    await expect(page.locator('#analysisStatus')).toContainText('RAG degraded');
-    await expect(page.locator('#analysisOutput')).toContainText('RAG degraded:');
-    await expect(page.locator('#analysisOutput')).toContainText('Model fallbackNo');
+    const output = page.locator('#analysisOutput');
+    await expect(output).toContainText('RAG degraded');
+    const degradedReason = body.providerTransparency.degradedReason;
+    expect((await output.innerText()).split(degradedReason).length - 1).toBe(1);
+    await expect(page.locator('#analysisOutput')).toContainText('Analysis fallbackNot used');
     expect((await storedAnalysis(request, body.incidentId)).providerTransparency).toMatchObject({
       modelProvider: 'OpenRouter', usedModelFallback: false, isDegraded: true
     });

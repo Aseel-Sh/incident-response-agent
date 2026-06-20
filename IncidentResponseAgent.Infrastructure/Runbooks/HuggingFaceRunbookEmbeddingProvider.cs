@@ -11,6 +11,7 @@ internal sealed class HuggingFaceRunbookEmbeddingProvider : IRunbookEmbeddingPro
 	private readonly ILogger<HuggingFaceRunbookEmbeddingProvider> _logger;
 	private readonly string _apiKey;
 	private readonly string _endpoint;
+	private readonly TimeSpan _timeout;
 
 	public HuggingFaceRunbookEmbeddingProvider(
 		RunbookRetrievalOptions options,
@@ -22,6 +23,7 @@ internal sealed class HuggingFaceRunbookEmbeddingProvider : IRunbookEmbeddingPro
 		_apiKey = ResolveApiKey(options);
 		ModelName = ResolveModel(options);
 		_endpoint = ResolveEndpoint(options);
+		_timeout = TimeSpan.FromSeconds(Math.Clamp(options.EmbeddingTimeoutSeconds, 3, 60));
 	}
 
 	public string ProviderName => "huggingface";
@@ -53,18 +55,40 @@ internal sealed class HuggingFaceRunbookEmbeddingProvider : IRunbookEmbeddingPro
 		});
 
 		_logger.LogDebug("Generating Hugging Face embedding with model {ModelName}.", ModelName);
-		using var response = await httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
-		response.EnsureSuccessStatusCode();
+		using var response = await SendAsync(httpClient, request, cancellationToken).ConfigureAwait(false);
+		if (!response.IsSuccessStatusCode)
+		{
+			var errorBody = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+			throw new HttpRequestException(
+				$"Hugging Face embedding request failed with HTTP {(int)response.StatusCode} {response.ReasonPhrase}: {Sanitize(errorBody)}",
+				null,
+				response.StatusCode);
+		}
 
 		await using var responseStream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
 		using var jsonDocument = await JsonDocument.ParseAsync(responseStream, cancellationToken: cancellationToken).ConfigureAwait(false);
 		return ParseEmbedding(jsonDocument.RootElement);
 	}
 
+	private async Task<HttpResponseMessage> SendAsync(HttpClient httpClient, HttpRequestMessage request, CancellationToken cancellationToken)
+	{
+		using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+		timeoutCts.CancelAfter(_timeout);
+		try
+		{
+			return await httpClient.SendAsync(request, timeoutCts.Token).ConfigureAwait(false);
+		}
+		catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+		{
+			throw new TimeoutException($"Hugging Face embedding request timed out after {_timeout.TotalSeconds:0} seconds at {new Uri(_endpoint).Host}.");
+		}
+	}
+
 	private Uri BuildEmbeddingUri()
 	{
 		var baseEndpoint = _endpoint.EndsWith("/", StringComparison.Ordinal) ? _endpoint : _endpoint + "/";
-		return new Uri(baseEndpoint + Uri.EscapeDataString(ModelName), UriKind.Absolute);
+		var modelPath = string.Join('/', ModelName.Split('/').Select(Uri.EscapeDataString));
+		return new Uri(baseEndpoint + modelPath, UriKind.Absolute);
 	}
 
 	private static float[] ParseEmbedding(JsonElement element)
@@ -121,6 +145,7 @@ internal sealed class HuggingFaceRunbookEmbeddingProvider : IRunbookEmbeddingPro
 		{
 			apiKey = Environment.GetEnvironmentVariable("HF_TOKEN");
 		}
+		if (string.IsNullOrWhiteSpace(apiKey)) apiKey = Environment.GetEnvironmentVariable("HF_API_TOKEN");
 
 		return string.IsNullOrWhiteSpace(apiKey) ? string.Empty : apiKey.Trim();
 	}
@@ -133,13 +158,19 @@ internal sealed class HuggingFaceRunbookEmbeddingProvider : IRunbookEmbeddingPro
 			model = Environment.GetEnvironmentVariable("HF_EMBEDDING_MODEL");
 		}
 
-		return string.IsNullOrWhiteSpace(model) ? "thenlper/gte-large" : model.Trim();
+		return string.IsNullOrWhiteSpace(model) ? "BAAI/bge-small-en-v1.5" : model.Trim();
 	}
 
 	private static string ResolveEndpoint(RunbookRetrievalOptions options)
 	{
 		return string.IsNullOrWhiteSpace(options.Endpoint)
-			? "https://api-inference.huggingface.co/pipeline/feature-extraction/"
+			? "https://router.huggingface.co/hf-inference/models/"
 			: options.Endpoint.Trim();
+	}
+
+	private static string Sanitize(string value)
+	{
+		var text = string.IsNullOrWhiteSpace(value) ? "no response body" : value.ReplaceLineEndings(" ").Trim();
+		return text.Length <= 300 ? text : string.Concat(text.AsSpan(0, 297), "...");
 	}
 }

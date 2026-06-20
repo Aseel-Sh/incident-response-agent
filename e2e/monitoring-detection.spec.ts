@@ -88,10 +88,13 @@ test.describe.serial('@monitoring source ingestion and automatic detection', () 
     expect(new Date(reloadedScan.scannedAt).getTime()).toBe(completedAt);
     await page.getByRole('button', { name: 'Resume Scanning' }).click();
     await expect(page.locator('#lastScan')).toContainText('Active');
+    const timestampBeforeActiveReload = await page.evaluate(() => JSON.parse(localStorage.getItem('incidentops.lastScan') || 'null')?.scannedAt);
     await page.reload();
     await page.getByRole('button', { name: 'Monitor', exact: true }).click();
     await expect(page.getByRole('button', { name: 'Pause Scanning' })).toBeVisible();
     await expect(page.locator('#lastScan')).toContainText('Active');
+    const timestampAfterActiveReload = await page.evaluate(() => JSON.parse(localStorage.getItem('incidentops.lastScan') || 'null')?.scannedAt);
+    expect(timestampAfterActiveReload).toBe(timestampBeforeActiveReload);
 
     await page.getByRole('button', { name: 'Sources', exact: true }).click();
     const sourcesResponse = await request.get('/api/operations/sources');
@@ -241,8 +244,10 @@ test.describe.serial('@monitoring source ingestion and automatic detection', () 
 
     await page.getByRole('button', { name: 'Dashboard', exact: true }).click();
     for (const [candidate, action] of [[warning, 'False positive'], [health, 'Ignore'], [duplicate, 'Merge duplicate']] as const) {
-      page.once('dialog', dialog => dialog.accept());
       await page.locator(`[data-row-id="${candidate.id}"]`).getByRole('button', { name: action }).click();
+      const confirmation = page.getByRole('alertdialog');
+      await expect(confirmation).toBeVisible();
+      await confirmation.getByRole('button', { name: /Mark false positive|Ignore candidate|Merge candidate/ }).click();
       await expect(page.locator(`[data-row-id="${candidate.id}"]`)).toHaveCount(0);
     }
 

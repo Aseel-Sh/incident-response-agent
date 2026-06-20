@@ -153,7 +153,7 @@ public sealed class IncidentsController : ControllerBase
             Evidence = result.Evidence.Select(item => new IncidentResponseAgent.Api.Contracts.Incidents.IncidentAnalysisEvidenceItem { Summary = item.Summary, Source = item.Source, Details = item.Details }).ToArray(),
             SimilarIncidents = result.SimilarIncidents.Select(ToSimilarResponse).ToArray(),
             Quality = new AnalysisQualityResponse(result.Quality.EvidenceCoverage, result.Quality.RunbookMatchQuality, result.Quality.RecommendationSpecificity, result.Quality.MissingData, result.Quality.ProviderUsed, result.Quality.FallbackStatus),
-            ProviderTransparency = new ProviderTransparencyResponse(result.ProviderTransparency.ModelProvider, result.ProviderTransparency.Model, result.ProviderTransparency.EmbeddingProvider, result.ProviderTransparency.VectorStore, result.ProviderTransparency.RagStatus, result.ProviderTransparency.UsedModelFallback, result.ProviderTransparency.FallbackReason, result.ProviderTransparency.IsDegraded, result.ProviderTransparency.DegradedReason, result.ProviderTransparency.UsedStructuredOutputRetry, result.ProviderTransparency.StructuredOutputRetryReason)
+            ProviderTransparency = ToProviderResponse(result.ProviderTransparency)
         }).ToArray());
     }
 
@@ -321,7 +321,14 @@ public sealed class IncidentsController : ControllerBase
         ActionOutcomes = result.ActionOutcomes.Select(ToOutcomeResponse).ToArray(),
         SimilarIncidents = result.SimilarIncidents.Select(ToSimilarResponse).ToArray(),
         Quality = new AnalysisQualityResponse(result.Quality.EvidenceCoverage, result.Quality.RunbookMatchQuality, result.Quality.RecommendationSpecificity, result.Quality.MissingData, result.Quality.ProviderUsed, result.Quality.FallbackStatus),
-        ProviderTransparency = new ProviderTransparencyResponse(result.ProviderTransparency.ModelProvider, result.ProviderTransparency.Model, result.ProviderTransparency.EmbeddingProvider, result.ProviderTransparency.VectorStore, result.ProviderTransparency.RagStatus, result.ProviderTransparency.UsedModelFallback, result.ProviderTransparency.FallbackReason, result.ProviderTransparency.IsDegraded, result.ProviderTransparency.DegradedReason, result.ProviderTransparency.UsedStructuredOutputRetry, result.ProviderTransparency.StructuredOutputRetryReason),
+        ProviderTransparency = ToProviderResponse(result.ProviderTransparency),
         Confidence = result.Confidence, Notes = result.Notes
     };
+
+    private static ProviderTransparencyResponse ToProviderResponse(AnalysisProviderTransparency provider) => new(
+        provider.ModelProvider, provider.Model, provider.EmbeddingProvider, provider.VectorStore, provider.RagStatus,
+        provider.UsedModelFallback, provider.FallbackReason, provider.IsDegraded, provider.DegradedReason,
+        provider.UsedStructuredOutputRetry, provider.StructuredOutputRetryReason, provider.AttemptedModelProvider,
+        provider.AttemptedModel, provider.EvidenceGatheringDurationMilliseconds, provider.RagDurationMilliseconds,
+        provider.ModelDurationMilliseconds, provider.FallbackStage, provider.TimeoutSource);
 }

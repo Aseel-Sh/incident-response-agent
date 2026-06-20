@@ -64,14 +64,15 @@ test.describe.serial('@learning safe feedback, outcomes, knowledge approval, and
       });
       feedbackIncidentIds.push(incident.incidentId);
       const card = page.locator('#analysisOutput .feedback-card');
-      await card.getByLabel('Analysis usefulness').selectOption({ label: feedback.usefulness });
-      await card.getByLabel('Recommendation correctness').selectOption({ label: feedback.correctness });
+      await card.getByRole('button', { name: feedback.usefulness, exact: true }).click();
+      await card.getByRole('button', { name: feedback.correctness, exact: true }).click();
       for (const reason of feedback.reasons) await card.getByLabel(reason, { exact: true }).check();
-      await card.getByLabel('Comments (optional)').fill(`Deterministic feedback ${index + 1}`);
+      await card.getByLabel('Additional context Optional').fill(`Deterministic feedback ${index + 1}`);
       const saved = page.waitForResponse(response => response.url().endsWith(`/api/incidents/${incident.incidentId}/feedback`));
       await card.getByRole('button', { name: 'Save feedback' }).click();
       expect((await saved).ok()).toBeTruthy();
       await expect(card.locator('[data-feedback-status]')).toHaveText('Feedback saved.');
+      await expect(card).not.toHaveAttribute('open', '');
     }
 
     const records = await recentIncidents(request);
@@ -124,9 +125,9 @@ test.describe.serial('@learning safe feedback, outcomes, knowledge approval, and
 
     const edited = `${original}\n\n## Human review\nValidated during the incident review.`;
     await proposal.fill(edited);
-    page.once('dialog', dialogEvent => dialogEvent.accept());
     const reviewed = page.waitForResponse(response => response.url().endsWith(`/api/incidents/${approved.incidentId}/knowledge-review`));
-    await dialog.getByRole('button', { name: 'Approve' }).click();
+    await dialog.getByRole('button', { name: 'Approve and publish' }).click();
+    await page.getByRole('alertdialog').getByRole('button', { name: 'Approve and publish' }).click();
     expect((await reviewed).ok()).toBeTruthy();
     await expect(dialog).toContainText('approved');
 
@@ -144,9 +145,9 @@ test.describe.serial('@learning safe feedback, outcomes, knowledge approval, and
     rejected = await createViaApi(request, learningFixtures.rejectedUpdate);
     await resolve(request, rejected.incidentId);
     await openIncident(page, learningFixtures.rejectedUpdate.title, rejected.incidentId);
-    page.once('dialog', event => event.accept());
     const rejection = page.waitForResponse(response => response.url().endsWith(`/api/incidents/${rejected.incidentId}/knowledge-review`));
-    await page.getByRole('dialog').getByRole('button', { name: 'Reject' }).click();
+    await page.getByRole('dialog').getByRole('button', { name: 'Reject draft' }).click();
+    await page.getByRole('alertdialog').getByRole('button', { name: 'Reject draft' }).click();
     expect((await rejection).ok()).toBeTruthy();
 
     deleted = await createViaApi(request, learningFixtures.deletedIncident);

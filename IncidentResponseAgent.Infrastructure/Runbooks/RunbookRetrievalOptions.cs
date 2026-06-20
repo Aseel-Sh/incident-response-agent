@@ -16,11 +16,13 @@ public sealed class RunbookRetrievalOptions
 
 	public int QdrantTimeoutSeconds { get; init; } = 5;
 
-	public string? Endpoint { get; init; } = "https://api-inference.huggingface.co/pipeline/feature-extraction/";
+	public string? Endpoint { get; init; } = "https://router.huggingface.co/hf-inference/models/";
 
 	public string? ApiKey { get; init; }
 
-	public string? Model { get; init; } = "thenlper/gte-large";
+	public string? Model { get; init; } = "BAAI/bge-small-en-v1.5";
+
+	public int EmbeddingTimeoutSeconds { get; init; } = 30;
 
 	public string? LocalEmbeddingModel { get; init; } = "local-hashing-384";
 

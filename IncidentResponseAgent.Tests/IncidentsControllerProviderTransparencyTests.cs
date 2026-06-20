@@ -19,7 +19,7 @@ public sealed class IncidentsControllerProviderTransparencyTests : IDisposable
 		{
 			IncidentId = Guid.NewGuid(), IncidentSummary = "Local evidence analysis", AnalysisText = "{}", AnalysisProvider = "local-prompt", AnalysisModel = "local",
 			UsedFallbackAnalysis = true, FallbackReason = "Model returned 503 Service Unavailable.", SessionId = "session", SessionTurnNumber = 1,
-			ProviderTransparency = new AnalysisProviderTransparency { ModelProvider = "local-prompt", Model = "local", UsedModelFallback = true, FallbackReason = "Model returned 503 Service Unavailable.", RagStatus = "available" }
+			ProviderTransparency = new AnalysisProviderTransparency { ModelProvider = "local-prompt", Model = "local", AttemptedModelProvider = "OpenRouter", AttemptedModel = "test/model", UsedModelFallback = true, FallbackReason = "Model returned 503 Service Unavailable.", RagStatus = "available", EvidenceGatheringDurationMilliseconds = 12, RagDurationMilliseconds = 7, ModelDurationMilliseconds = 45_000, FallbackStage = "during_model_execution", TimeoutSource = "ResilientIncidentAnalysisAgent.CancelAfter(45s)" }
 		};
 		var store = new FileIncidentRecordStore(Options.Create(new IncidentStorageOptions { IncidentRecordsPath = Path.Combine(_root, "records.json") }));
 		var controller = new IncidentsController(new StubAnalyzeUseCase(expected), new StubRecentUseCase(), new StubMonitor(), store);
@@ -32,6 +32,9 @@ public sealed class IncidentsControllerProviderTransparencyTests : IDisposable
 		Assert.Equal("local-prompt", response.ProviderTransparency.ModelProvider);
 		Assert.True(response.ProviderTransparency.UsedModelFallback);
 		Assert.Contains("503", response.ProviderTransparency.FallbackReason);
+		Assert.Equal("OpenRouter", response.ProviderTransparency.AttemptedModelProvider);
+		Assert.Equal(45_000, response.ProviderTransparency.ModelDurationMilliseconds);
+		Assert.Equal("during_model_execution", response.ProviderTransparency.FallbackStage);
 	}
 
 	public void Dispose()

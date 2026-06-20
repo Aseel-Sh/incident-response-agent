@@ -27,6 +27,8 @@ public sealed record AnalysisProviderTransparency
 {
 	public string ModelProvider { get; init; } = "unknown";
 	public string? Model { get; init; }
+	public string? AttemptedModelProvider { get; init; }
+	public string? AttemptedModel { get; init; }
 	public string EmbeddingProvider { get; init; } = "unknown";
 	public string VectorStore { get; init; } = "unknown";
 	public string RagStatus { get; init; } = "unknown";
@@ -36,6 +38,11 @@ public sealed record AnalysisProviderTransparency
 	public string? DegradedReason { get; init; }
 	public bool UsedStructuredOutputRetry { get; init; }
 	public string? StructuredOutputRetryReason { get; init; }
+	public long EvidenceGatheringDurationMilliseconds { get; init; }
+	public long RagDurationMilliseconds { get; init; }
+	public long ModelDurationMilliseconds { get; init; }
+	public string? FallbackStage { get; init; }
+	public string? TimeoutSource { get; init; }
 }
 
 public sealed record IncidentAnalysisFeedback

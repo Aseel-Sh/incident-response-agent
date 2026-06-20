@@ -2,6 +2,7 @@ using IncidentResponseAgent.Application.Incidents;
 using IncidentResponseAgent.Domain.Incidents;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using System.Diagnostics;
 
 namespace IncidentResponseAgent.Agent.Incidents;
 
@@ -37,31 +38,63 @@ public sealed class ResilientIncidentAnalysisAgent : IIncidentAnalysisAgent
 		{
 			_logger.LogWarning("Fallback triggered. IncidentId={IncidentId} Reason={Reason}.", incident.Id, "Agent API key is not configured.");
 			var fallbackResult = await _fallbackAgent.AnalyzeAsync(incident, sessionContext, agentContext, cancellationToken).ConfigureAwait(false);
-			return fallbackResult with { FallbackReason = "Agent API key is not configured." };
+			return WithAttempt(fallbackResult, "Agent API key is not configured.", 0, "before_model_execution");
 		}
 
-		var timeout = TimeSpan.FromSeconds(Math.Clamp(_options.AnalysisTimeoutSeconds, 5, 120));
+		var timeout = TimeSpan.FromSeconds(ResolveTimeoutSeconds());
 		using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 		timeoutCts.CancelAfter(timeout);
+		var modelStopwatch = Stopwatch.StartNew();
 
 		try
 		{
-			return await _openAiAgent.AnalyzeAsync(incident, sessionContext, agentContext, timeoutCts.Token).ConfigureAwait(false);
+			var result = await _openAiAgent.AnalyzeAsync(incident, sessionContext, agentContext, timeoutCts.Token).ConfigureAwait(false);
+			modelStopwatch.Stop();
+			_logger.LogInformation("Model analysis completed. IncidentId={IncidentId} DurationMs={DurationMs} Provider={Provider} Model={Model}.", incident.Id, modelStopwatch.ElapsedMilliseconds, result.Provider, result.Model);
+			return result with { ModelDurationMilliseconds = modelStopwatch.ElapsedMilliseconds };
 		}
 		catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
 		{
+			modelStopwatch.Stop();
 			_logger.LogWarning("OpenRouter Microsoft Agent Framework analysis timed out after {TimeoutSeconds} seconds. Falling back to local analysis.", timeout.TotalSeconds);
-			_logger.LogWarning("Fallback triggered. IncidentId={IncidentId} Reason={Reason}.", incident.Id, $"Model timed out after {timeout.TotalSeconds:0} seconds.");
+			_logger.LogWarning("Fallback triggered after model execution started. IncidentId={IncidentId} DurationMs={DurationMs} TimeoutSource={TimeoutSource} Reason={Reason}.", incident.Id, modelStopwatch.ElapsedMilliseconds, "ResilientIncidentAnalysisAgent.CancelAfter", $"Model timed out after {timeout.TotalSeconds:0} seconds.");
 			var fallbackResult = await _fallbackAgent.AnalyzeAsync(incident, sessionContext, agentContext, cancellationToken).ConfigureAwait(false);
-			return fallbackResult with { FallbackReason = $"OpenRouter model analysis timed out after {timeout.TotalSeconds:0} seconds." };
+			return WithAttempt(fallbackResult, $"OpenRouter model analysis timed out after {timeout.TotalSeconds:0} seconds.", modelStopwatch.ElapsedMilliseconds, "during_model_execution", $"ResilientIncidentAnalysisAgent.CancelAfter({timeout.TotalSeconds:0}s)");
 		}
 		catch (Exception exception) when (IsProviderFailure(exception))
 		{
+			modelStopwatch.Stop();
 			_logger.LogWarning(exception, "OpenRouter Microsoft Agent Framework analysis failed. Falling back to local analysis.");
-			_logger.LogWarning("Fallback triggered. IncidentId={IncidentId} Reason={Reason}.", incident.Id, BuildFailureReason(exception));
+			var stage = exception is InvalidOperationException ? "after_model_response_validation" : "during_model_execution";
+			_logger.LogWarning("Fallback triggered. IncidentId={IncidentId} DurationMs={DurationMs} Stage={Stage} Reason={Reason}.", incident.Id, modelStopwatch.ElapsedMilliseconds, stage, BuildFailureReason(exception));
 			var fallbackResult = await _fallbackAgent.AnalyzeAsync(incident, sessionContext, agentContext, cancellationToken).ConfigureAwait(false);
-			return fallbackResult with { FallbackReason = $"OpenRouter model analysis failed: {BuildFailureReason(exception)}" };
+			return WithAttempt(fallbackResult, $"OpenRouter model analysis failed: {BuildFailureReason(exception)}", modelStopwatch.ElapsedMilliseconds, stage);
 		}
+	}
+
+	private IncidentAgentExecutionResult WithAttempt(IncidentAgentExecutionResult result, string reason, long durationMilliseconds, string stage, string? timeoutSource = null) => result with
+	{
+		FallbackReason = reason,
+		ModelDurationMilliseconds = durationMilliseconds,
+		FallbackStage = stage,
+		TimeoutSource = timeoutSource,
+		AttemptedProvider = _options.Provider,
+		AttemptedModel = FirstConfigured(
+			Environment.GetEnvironmentVariable("OPENROUTER_MODEL"),
+			Environment.GetEnvironmentVariable("IRA_AGENT_MODEL"),
+			_options.Model)
+	};
+
+	private static string? FirstConfigured(params string?[] values) => values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
+
+	private int ResolveTimeoutSeconds()
+	{
+		var configured = FirstConfigured(
+			Environment.GetEnvironmentVariable("OPENROUTER_TIMEOUT_SECONDS"),
+			Environment.GetEnvironmentVariable("IRA_AGENT_ANALYSIS_TIMEOUT_SECONDS"));
+		return int.TryParse(configured, out var seconds)
+			? Math.Clamp(seconds, 5, 180)
+			: Math.Clamp(_options.AnalysisTimeoutSeconds, 5, 180);
 	}
 
 	private bool HasConfiguredApiKey()

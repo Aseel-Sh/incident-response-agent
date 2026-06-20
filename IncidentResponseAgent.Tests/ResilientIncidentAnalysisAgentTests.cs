@@ -37,6 +37,10 @@ public sealed class ResilientIncidentAnalysisAgentTests
 		Assert.Equal("local-prompt", result.Provider);
 		Assert.True(result.UsedFallback);
 		Assert.Contains("503", result.FallbackReason);
+		Assert.Equal("OpenRouter", result.AttemptedProvider);
+		Assert.Equal("test/model", result.AttemptedModel);
+		Assert.Equal("during_model_execution", result.FallbackStage);
+		Assert.True(result.ModelDurationMilliseconds >= 0);
 		Assert.Equal(1, fallback.CallCount);
 	}
 

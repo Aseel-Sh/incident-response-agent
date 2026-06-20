@@ -34,6 +34,11 @@ const elements = {
   historyModal: $("#historyModal"),
   historyModalClose: $("#historyModalClose"),
   historyDetail: $("#historyDetail"),
+  confirmModal: $("#confirmModal"),
+  confirmModalTitle: $("#confirmModalTitle"),
+  confirmModalMessage: $("#confirmModalMessage"),
+  confirmModalCancel: $("#confirmModalCancel"),
+  confirmModalAccept: $("#confirmModalAccept"),
   sources: $("#sourcesOutput"),
   ragForm: $("#ragForm"),
   ragSummary: $("#ragSummary"),
@@ -73,6 +78,9 @@ const iconPaths = {
   link: '<path d="M10 13a5 5 0 0 0 7.5.5l2-2a5 5 0 0 0-7-7l-1.1 1"/><path d="M14 11a5 5 0 0 0-7.5-.5l-2 2a5 5 0 0 0 7 7l1.1-1"/>',
   copy: '<rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
   trash: '<path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v5"/><path d="M14 11v5"/>'
+  ,"thumbs-up": '<path d="M7 10v12"/><path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2h0a3.13 3.13 0 0 1 3 3.88Z"/>'
+  ,"thumbs-down": '<path d="M17 14V2"/><path d="M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H20a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2.76a2 2 0 0 0-1.79 1.11L12 22h0a3.13 3.13 0 0 1-3-3.88Z"/>'
+  ,minus: '<path d="M5 12h14"/>'
 };
 
 let detectedCandidates = [];
@@ -86,9 +94,13 @@ let activeIncidentMeta = null;
 let lastScanState = null;
 let currentAnalysisAt = null;
 let currentIncidentId = null;
+let analysisWaitTimer = null;
+let confirmationResolver = null;
+let confirmationReturnFocus = null;
 let dashboardPage = 1;
 let historyPage = 1;
 const pageSize = 10;
+const incidentLifecycleStatuses = ["new", "active", "mitigated", "resolved"];
 
 document.querySelectorAll(".nav-tab").forEach((button) => button.addEventListener("click", () => activateTab(button.dataset.tab)));
 document.querySelectorAll(".filter-chip").forEach((button) => {
@@ -108,8 +120,21 @@ elements.incidentSearch.addEventListener("input", () => {
 elements.manualIncident.addEventListener("click", showManualIncidentForm);
 elements.sample.addEventListener("click", loadSampleIncident);
 elements.historyReload.addEventListener("click", async () => {
-  await loadRecent();
-  showToast("History refreshed", "Saved incidents reloaded.", "success");
+  if (elements.historyReload.disabled) return;
+  elements.historyReload.disabled = true;
+  elements.historyReload.setAttribute("aria-busy", "true");
+  elements.historyReload.innerHTML = '<span class="loading-spinner" aria-hidden="true"></span>';
+  try {
+    await loadRecent();
+    showToast("History refreshed", "Saved incidents reloaded.", "success");
+  } catch (error) {
+    showToast("History refresh failed", error.message || String(error), "error");
+  } finally {
+    elements.historyReload.disabled = false;
+    elements.historyReload.removeAttribute("aria-busy");
+    elements.historyReload.innerHTML = '<span data-icon="refresh"></span>';
+    hydrateIcons(elements.historyReload);
+  }
 });
 [elements.historyServiceFilter, elements.historyStatusFilter, elements.historySessionFilter, elements.historySeverityFilter, elements.historyConfidenceFilter].forEach((select) => {
   select.addEventListener("change", () => {
@@ -165,6 +190,11 @@ elements.historyModalClose.addEventListener("click", closeHistoryModal);
 elements.historyModal.addEventListener("click", (event) => {
   if (event.target === elements.historyModal) closeHistoryModal();
 });
+elements.confirmModalCancel.addEventListener("click", () => closeConfirmation(false));
+elements.confirmModalAccept.addEventListener("click", () => closeConfirmation(true));
+elements.confirmModal.addEventListener("click", (event) => {
+  if (event.target === elements.confirmModal) closeConfirmation(false);
+});
 elements.historyDetail.addEventListener("click", async (event) => {
   const deleteButton = event.target.closest("[data-delete-incident]");
   if (deleteButton) {
@@ -195,13 +225,14 @@ elements.historyDetail.addEventListener("click", async (event) => {
   if (reviewButton) await reviewKnowledgeUpdate(reviewButton.dataset.incidentId, reviewButton.dataset.knowledgeReview);
 });
 document.addEventListener("keydown", (event) => {
-  if (elements.historyModal.hidden) return;
+  const activeModal = !elements.confirmModal.hidden ? elements.confirmModal : !elements.historyModal.hidden ? elements.historyModal : null;
+  if (!activeModal) return;
   if (event.key === "Escape") {
-    closeHistoryModal();
+    if (activeModal === elements.confirmModal) closeConfirmation(false); else closeHistoryModal();
     return;
   }
   if (event.key !== "Tab") return;
-  const focusable = getModalFocusableElements();
+  const focusable = getModalFocusableElements(activeModal);
   if (!focusable.length) return;
   const first = focusable[0];
   const last = focusable[focusable.length - 1];
@@ -218,6 +249,7 @@ let historyModalReturnFocus = null;
 
 function toggleTheme() {
   document.documentElement.dataset.theme = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+  localStorage.setItem("incidentops.theme", document.documentElement.dataset.theme);
 }
 elements.detected.addEventListener("click", async (event) => {
   const pageButton = event.target.closest("[data-dashboard-page]");
@@ -288,6 +320,18 @@ elements.analysisOutput.addEventListener("click", async (event) => {
   const feedbackButton = event.target.closest("[data-submit-feedback]");
   if (feedbackButton) {
     await submitAnalysisFeedback(feedbackButton.closest(".feedback-card"));
+    return;
+  }
+  const feedbackChoice = event.target.closest("[data-feedback-choice]");
+  if (feedbackChoice) {
+    const card = feedbackChoice.closest(".feedback-card");
+    const field = card?.querySelector(`[data-feedback-${feedbackChoice.dataset.feedbackField}]`);
+    if (field) field.value = feedbackChoice.dataset.feedbackValue;
+    card?.querySelectorAll(`[data-feedback-choice][data-feedback-field="${feedbackChoice.dataset.feedbackField}"]`).forEach((button) => {
+      const selected = button === feedbackChoice;
+      button.classList.toggle("selected", selected);
+      button.setAttribute("aria-pressed", String(selected));
+    });
     return;
   }
   const rateButton = event.target.closest("[data-rate-recommendation]");
@@ -397,7 +441,7 @@ function renderSourceBanner() {
   hydrateIcons(elements.sourceBanner);
 }
 
-async function loadDetected(userInitiated = false) {
+async function loadDetected(userInitiated = false, performScan = userInitiated) {
   if (userInitiated) {
     setFeedback(elements.scanFeedback, "Scanning", "Checking logs and metrics now.", "pending");
     elements.manualRefresh.disabled = true;
@@ -405,28 +449,23 @@ async function loadDetected(userInitiated = false) {
     hydrateIcons(elements.lastScan);
   }
   try {
-    const result = await requestJson("/api/incidents/scan", { method: "POST" });
-    detectedCandidates = normalizeArray(result?.candidates);
-    const scan = result?.scan || {};
-    lastScanState = {
-      scannedSources: Number(scan.scannedSourceCount) || 0,
-      connectedSources: Math.max(0, (Number(scan.scannedSourceCount) || 0) - (Number(scan.errorCount) || 0)),
-      errors: Number(scan.errorCount) || 0,
-      signalsFound: Number(scan.candidateCount) || 0,
-      durationSeconds: Math.max(0, (Number(scan.durationMilliseconds) || 0) / 1000),
-      scannedAt: new Date(scan.completedAtUtc)
-    };
-    saveLastScanState();
+    const result = performScan
+      ? await requestJson("/api/incidents/scan", { method: "POST" })
+      : await requestJson("/api/incidents/detected");
+    detectedCandidates = normalizeArray(result?.candidates ?? result);
+    if (performScan) {
+      const scan = result?.scan || {};
+      lastScanState = {
+        scannedSources: Number(scan.scannedSourceCount) || 0,
+        connectedSources: Math.max(0, (Number(scan.scannedSourceCount) || 0) - (Number(scan.errorCount) || 0)),
+        errors: Number(scan.errorCount) || 0,
+        signalsFound: Number(scan.candidateCount) || 0,
+        durationSeconds: Math.max(0, (Number(scan.durationMilliseconds) || 0) / 1000),
+        scannedAt: new Date(scan.completedAtUtc)
+      };
+      saveLastScanState();
+    }
   } catch (error) {
-    lastScanState = {
-      scannedSources: 2,
-      connectedSources: 0,
-      errors: 1,
-      signalsFound: 0,
-      durationSeconds: 0,
-      scannedAt: new Date()
-    };
-    saveLastScanState();
     elements.lastScan.innerHTML = renderMonitorSummary(detectedCandidates);
     renderSidebarLastScan();
     if (userInitiated) setFeedback(elements.scanFeedback, "Scan failed", error.message || String(error), "missing");
@@ -466,11 +505,7 @@ function restoreLastScanState() {
 function renderDetected() {
   const query = elements.incidentSearch.value.trim().toLowerCase();
   const rows = buildDashboardRows()
-    .filter((item) => activeStatus === "all"
-      ? item.statusKey !== "resolved"
-      : activeStatus === "active"
-        ? ["new", "active"].includes(item.statusKey)
-        : item.statusKey === activeStatus)
+    .filter((item) => activeStatus === "all" ? item.statusKey !== "resolved" : item.statusKey === activeStatus)
     .filter((item) => !query || [item.title, item.serviceName, item.environment, item.source, item.provider, ...(item.signals || []), ...(item.tags || [])].join(" ").toLowerCase().includes(query));
   const page = paginateRows(rows, dashboardPage);
   dashboardPage = page.page;
@@ -543,7 +578,8 @@ function renderBacklogRow(item) {
 function updateCounts() {
   const rows = buildDashboardRows();
   $("#newCount").textContent = rows.filter((item) => item.statusKey === "candidate").length;
-  $("#investigatingCount").textContent = rows.filter((item) => ["new", "active"].includes(item.statusKey)).length;
+  $("#confirmedCount").textContent = rows.filter((item) => item.statusKey === "new").length;
+  $("#investigatingCount").textContent = rows.filter((item) => item.statusKey === "active").length;
   $("#mitigatedCount").textContent = rows.filter((item) => item.statusKey === "mitigated").length;
   $("#resolvedCount").textContent = rows.filter((item) => item.statusKey === "resolved").length;
 }
@@ -578,7 +614,7 @@ async function analyzeCurrentIncident() {
   if (!activeIncidentMeta?.detectedAtUtc) {
     activeIncidentMeta = { ...(activeIncidentMeta || {}), detectedAtUtc: currentAnalysisAt };
   }
-  elements.analysisStatus.textContent = "Running retrieval, evidence gathering, and model/fallback analysis...";
+  startAnalysisWait("Gathering evidence and contacting the configured model...");
   elements.analysisOutput.className = "empty-state";
   elements.analysisOutput.innerHTML = renderLoadingState("Analyzing incident...");
   const form = new FormData(elements.incidentForm);
@@ -604,7 +640,9 @@ async function analyzeCurrentIncident() {
   } catch (error) {
     renderError(elements.analysisOutput, error);
     elements.analysisStatus.textContent = "Analysis failed.";
+    showToast("Analysis failed", error.message || String(error), "error");
   } finally {
+    stopAnalysisWait();
     elements.analyze.disabled = false;
   }
 }
@@ -613,7 +651,7 @@ async function confirmCandidate(item) {
   fillIncidentForm(item);
   elements.incidentForm.sessionId.value = "";
   activateTab("analysis");
-  elements.analysisStatus.textContent = "Confirming candidate and gathering evidence...";
+  startAnalysisWait("Confirming candidate, gathering evidence, and contacting the model...");
   elements.analysisOutput.innerHTML = renderLoadingState("Analyzing confirmed incident...");
   try {
     const result = await requestJson(`/api/incidents/candidates/${encodeURIComponent(item.id)}/confirm`, { method: "POST" });
@@ -621,12 +659,22 @@ async function confirmCandidate(item) {
     renderAnalysis(result);
     await Promise.all([loadRecent(), loadDetected(false)]);
     showToast("Candidate confirmed", "The incident is active and its evidence-grounded analysis is ready.", "success");
-  } catch (error) { renderError(elements.analysisOutput, error); }
+  } catch (error) {
+    renderError(elements.analysisOutput, error);
+    elements.analysisStatus.textContent = "Analysis failed.";
+    showToast("Analysis failed", error.message || String(error), "error");
+  } finally { stopAnalysisWait(); }
 }
 
 async function decideCandidate(item, decision) {
   const label = decision.replace("_", " ");
-  if (!window.confirm(`${label} candidate "${item.title}"?`)) return;
+  const confirmed = await showConfirmation({
+    title: `${label[0].toUpperCase()}${label.slice(1)} candidate?`,
+    message: `This will mark “${item.title}” as ${label}. The decision is recorded in its timeline.`,
+    confirmLabel: label === "false positive" ? "Mark false positive" : label === "merged" ? "Merge candidate" : "Ignore candidate",
+    destructive: decision !== "merged"
+  });
+  if (!confirmed) return;
   const mergeIntoIncidentId = decision === "merged" ? item.duplicateIncidentId : null;
   try {
     await requestJson(`/api/incidents/candidates/${encodeURIComponent(item.id)}/decision`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ decision, mergeIntoIncidentId }) });
@@ -651,7 +699,7 @@ function renderAnalysis(result) {
   const confidence = normalizeConfidence(result.confidence);
   const provider = result.providerTransparency || {};
   console.info("Final analysis provider displayed", { provider: provider.modelProvider || result.analysisProvider, model: provider.model || result.analysisModel, fallback: Boolean(provider.usedModelFallback), ragStatus: provider.ragStatus || "unknown", ragDegraded: Boolean(provider.isDegraded), structuredRetry: Boolean(provider.usedStructuredOutputRetry) });
-  elements.analysisStatus.innerHTML = `<span class="status-pill ${mode.className}">${escapeHtml(mode.label)}</span><span>${escapeHtml(formatProviderMessage(result, mode))}</span>${provider.isDegraded ? `<span class="status-pill status-warning">RAG degraded</span>` : ""}`;
+  elements.analysisStatus.innerHTML = `<span class="status-pill ${mode.className}">${escapeHtml(mode.label)}</span><span>${escapeHtml(formatProviderMessage(result, mode))}</span>`;
   elements.analysisOutput.className = "analysis-stack";
   elements.analysisOutput.innerHTML = `
     <article class="analysis-card incident-heading">
@@ -675,7 +723,7 @@ function renderAnalysis(result) {
     ${renderRecommendedActions(result.recommendedActions)}
     ${renderGroundedFacts(result.knownFacts)}
     ${renderHypotheses(result.rootCauseHypotheses)}
-    ${renderAnalysisBlock("Unknowns", result.unknowns, "info", "unknowns-card")}
+    ${renderAnalysisBlock("Unknowns & validation gaps", result.unknowns, "info", "unknowns-card")}
     ${renderEvidenceBlock(result.retrievedEvidence)}
     ${renderRunbookMatches(result.runbookMatches)}
     ${renderConfidenceBlock(confidenceRows(result, similar))}
@@ -712,7 +760,7 @@ function renderActionLine(row, allowRating = true) {
 }
 
 function renderGroundedFacts(facts = []) {
-  return `<section class="analysis-card facts-card"><h3><span data-icon="check"></span>Known facts</h3>${facts.map((item) => `<div class="grounded-item"><p>${escapeHtml(item.claim)}</p><small>Evidence: ${escapeHtml((item.evidenceReferences || []).join(", "))}</small></div>`).join("") || `<p>No grounded facts beyond the submitted incident details.</p>`}</section>`;
+  return `<section class="analysis-card facts-card"><h3><span data-icon="check"></span>Verified operational facts</h3>${facts.map((item) => `<div class="grounded-item"><p>${escapeHtml(item.claim)}</p><small>Evidence: ${escapeHtml((item.evidenceReferences || []).join(", "))}</small></div>`).join("") || `<p>No verified log or metric facts were found. The incident description above remains user-reported context.</p>`}</section>`;
 }
 
 function renderRunbookMatches(matches = []) {
@@ -725,16 +773,56 @@ function renderAnalysisQuality(quality = {}) {
 }
 
 function renderProviderTransparency(provider = {}) {
-  const ragClass = provider.isDegraded || provider.ragStatus !== "available" ? "status-warning" : "status-connected";
-  return `<section class="analysis-card provider-card"><h3><span data-icon="database"></span>Provider information</h3><dl class="provider-grid"><div><dt>Model provider</dt><dd>${escapeHtml(provider.modelProvider || "unknown")}</dd><small>${escapeHtml(provider.model || "model not reported")}</small></div><div><dt>Embedding provider</dt><dd>${escapeHtml(provider.embeddingProvider || "unknown")}</dd></div><div><dt>Vector store</dt><dd>${escapeHtml(provider.vectorStore || "unknown")}</dd></div><div><dt>RAG status</dt><dd><span class="status-pill ${ragClass}">${escapeHtml(provider.ragStatus || "unknown")}</span></dd></div><div><dt>Model fallback</dt><dd>${provider.usedModelFallback ? "Yes" : "No"}</dd></div><div><dt>Structured retry</dt><dd>${provider.usedStructuredOutputRetry ? "Succeeded" : "Not needed"}</dd></div><div><dt>Degraded mode</dt><dd>${provider.isDegraded ? "Yes" : "No"}</dd></div></dl>${provider.structuredOutputRetryReason ? `<p class="warning-banner">Structured-output retry: ${escapeHtml(provider.structuredOutputRetryReason)}</p>` : ""}${provider.degradedReason ? `<p class="warning-banner">RAG degraded: ${escapeHtml(provider.degradedReason)}</p>` : ""}${provider.fallbackReason ? `<p class="warning-banner">Fallback: ${escapeHtml(provider.fallbackReason)}</p>` : ""}</section>`;
+  const degradedReason = cleanStatusMessage(provider.degradedReason);
+  const fallbackReason = cleanStatusMessage(provider.fallbackReason);
+  const retryReason = cleanStatusMessage(provider.structuredOutputRetryReason);
+  const modelTimedOut = /timed out|timeout/i.test(fallbackReason);
+  const ragDegraded = Boolean(provider.isDegraded);
+  const embeddingDegraded = /embedding/i.test(degradedReason);
+  const modelState = provider.usedModelFallback ? (modelTimedOut ? "Timed out" : "Failed") : "Completed";
+  const attemptedProvider = provider.attemptedModelProvider || (provider.usedModelFallback && /openrouter/i.test(fallbackReason) ? "OpenRouter" : provider.modelProvider) || "unknown";
+  const attemptedModel = provider.attemptedModel || (provider.usedModelFallback && provider.model === "local" ? "configured model" : provider.model) || "model not reported";
+  const modelTone = provider.usedModelFallback ? "error" : "ok";
+  const embeddingName = embeddingDegraded ? "Local embeddings" : (provider.embeddingProvider || "unknown");
+  const embeddingState = embeddingDegraded ? "Primary provider unavailable" : "Available";
+  const ragState = ragDegraded ? "Degraded" : String(provider.ragStatus || "unknown");
+  return `<section class="analysis-card provider-card"><h3><span data-icon="database"></span>Provider status</h3><div class="provider-status-list">
+    ${renderProviderStatus("Model provider", attemptedProvider, `${attemptedModel} · ${modelState}`, modelTone)}
+    ${renderProviderStatus("Embedding provider", embeddingName, embeddingState, embeddingDegraded ? "warning" : "ok")}
+    ${renderProviderStatus("RAG retrieval", provider.vectorStore || "unknown", ragDegraded ? "Available with degraded embeddings" : ragState, ragDegraded || provider.ragStatus !== "available" ? "warning" : "ok")}
+    ${renderProviderStatus("Analysis fallback", provider.usedModelFallback ? "Used" : "Not used", provider.usedModelFallback ? "Local evidence analyzer produced this result" : "The model produced this result", provider.usedModelFallback ? "warning" : "ok")}
+  </div>
+  <div class="provider-notices">
+    ${degradedReason ? `<p class="system-notice notice-warning"><strong>RAG degraded</strong><span>${escapeHtml(degradedReason)}</span></p>` : ""}
+    ${fallbackReason ? `<p class="system-notice notice-error"><strong>${modelTimedOut ? "Model timeout" : "Model fallback"}</strong><span>${escapeHtml(fallbackReason)}</span></p>` : ""}
+    ${retryReason ? `<p class="system-notice notice-info"><strong>Structured-output retry</strong><span>${escapeHtml(retryReason)}</span></p>` : ""}
+  </div>${renderProviderDiagnostics(provider)}</section>`;
+}
+
+function renderProviderDiagnostics(provider = {}) {
+  const rows = [
+    ["Evidence gathering", provider.evidenceGatheringDurationMilliseconds],
+    ["RAG retrieval", provider.ragDurationMilliseconds],
+    ["Model execution", provider.modelDurationMilliseconds]
+  ].filter(([, value]) => Number(value) > 0);
+  const stage = provider.fallbackStage ? formatDiagnosticValue(provider.fallbackStage) : "not triggered";
+  const timeoutSource = provider.timeoutSource || "none";
+  if (!rows.length && stage === "not triggered" && timeoutSource === "none") return "";
+  return `<details class="provider-diagnostics"><summary>Execution diagnostics</summary><dl>${rows.map(([label, value]) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(`${Number(value)} ms`)}</dd></div>`).join("")}<div><dt>Fallback stage</dt><dd>${escapeHtml(stage)}</dd></div><div><dt>Timeout source</dt><dd>${escapeHtml(timeoutSource)}</dd></div></dl></details>`;
+}
+
+function formatDiagnosticValue(value) { return String(value || "").replaceAll("_", " "); }
+
+function renderProviderStatus(label, value, detail, tone) {
+  return `<div class="provider-status-row"><span class="provider-status-dot tone-${escapeHtml(tone)}" aria-hidden="true"></span><div><span class="provider-label">${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong><small>${escapeHtml(detail)}</small></div></div>`;
 }
 
 function renderEvidenceBlock(evidence) {
   const visible = (evidence || []).slice(0, 7);
   return `<section class="analysis-card evidence-card"><h3><span data-icon="activity"></span>Evidence (${visible.length})</h3>${visible.map((item) => {
-    const evidenceTime = formatEvidenceTime(item.details) || formatReadableTime(currentAnalysisAt);
+    const evidenceTime = formatEvidenceTime(item.details);
     return `<div class="evidence-line"><div class="evidence-meta"><span class="evidence-label evidence-${escapeHtml(evidenceKind(item.source))}">${escapeHtml(formatEvidenceSource(item.source))}</span>${evidenceTime ? `<time>${escapeHtml(evidenceTime)}</time>` : ""}</div><div class="code-row"><code>${escapeHtml(item.summary)}</code><button type="button" class="copy-code-button" data-copy-code aria-label="Copy evidence"><span data-icon="copy"></span></button></div></div>`;
-  }).join("") || `<p class="meta">No evidence returned.</p>`}</section>`;
+  }).join("") || `<p class="meta">No operational evidence was returned. Incident metadata is intentionally excluded.</p>`}</section>`;
 }
 
 function renderRunbookSteps(actions) {
@@ -749,7 +837,7 @@ function renderSimilarBlock(items) {
     const id = item.incidentId;
     const percent = similarPercent(item.score, 0);
     const scoreClass = scoreColor(percent);
-    return `<div class="similar-line" data-similar-id="${escapeHtml(id)}"><div class="similar-body"><small>${escapeHtml(shortenId(id))} <span class="badge env-badge">${escapeHtml(item.environment || "unknown")}</span> ${escapeHtml(new Date(item.createdAtUtc).toLocaleDateString())}</small><strong>${escapeHtml(item.incidentSummary)}</strong><small>${escapeHtml(item.serviceName || "unknown service")} · Shared signals: ${escapeHtml((item.sharedSignals || []).join(", ") || "none reported")}</small></div><div class="similar-score score-${scoreClass}"><strong>${percent}%</strong><div class="similar-links"><button class="link-inline" type="button" data-history-link="${escapeHtml(id)}">History</button><span aria-hidden="true">&middot;</span><button class="link-inline" type="button" data-compare-incident="${escapeHtml(id)}">Compare</button></div></div><div class="score-bar score-${scoreClass}"><span style="width:${percent}%"></span></div></div>`;
+    return `<div class="similar-line" data-similar-id="${escapeHtml(id)}"><div class="similar-body"><small>${escapeHtml(shortenId(id))} <span class="badge env-badge">${escapeHtml(item.environment || "unknown")}</span> ${escapeHtml(new Date(item.createdAtUtc).toLocaleDateString())}</small><strong>${escapeHtml(item.incidentSummary)}</strong><small>${escapeHtml(item.serviceName || "unknown service")} · Shared signals: ${escapeHtml((item.sharedSignals || []).join(", ") || "none reported")}</small></div><div class="similar-score score-${scoreClass}" title="Weighted lexical similarity plus matching service, environment, and severity"><small>Heuristic match</small><strong>${percent}%</strong><div class="similar-links"><button class="link-inline" type="button" data-history-link="${escapeHtml(id)}">History</button><span aria-hidden="true">&middot;</span><button class="link-inline" type="button" data-compare-incident="${escapeHtml(id)}">Compare</button></div></div><div class="score-bar score-${scoreClass}"><span style="width:${percent}%"></span></div></div>`;
   }).join("")}<div id="comparePanel" class="compare-panel" hidden></div></section>`;
 }
 
@@ -776,7 +864,17 @@ function renderOutcomeHistory(outcomes = []) {
 
 function renderFeedbackCard() {
   const reasons = ["shallow", "missing evidence", "hallucinated evidence", "wrong SEV", "wrong root cause", "bad remediation", "ignored runbook", "repeated failed past action", "other"];
-  return `<section class="analysis-card feedback-card"><h3><span data-icon="check"></span>Analysis feedback</h3><div class="feedback-grid"><label>Analysis usefulness<select data-feedback-usefulness><option value="">Select</option><option>Useful</option><option>Partially Useful</option><option>Not Useful</option></select></label><label>Recommendation correctness<select data-feedback-correctness><option value="">Select</option><option>Correct</option><option>Partially Correct</option><option>Wrong</option></select></label></div><fieldset><legend>Reason tags</legend><div class="reason-tags">${reasons.map((reason) => `<label><input type="checkbox" value="${escapeHtml(reason)}" data-feedback-reason>${escapeHtml(reason)}</label>`).join("")}</div></fieldset><label>Recommendation being rated (optional)<input data-feedback-recommendation placeholder="Paste or summarize the recommendation"></label><label>Comments (optional)<textarea data-feedback-comments placeholder="What helped or what was wrong?"></textarea></label><button type="button" data-submit-feedback>Save feedback</button><p class="meta" data-feedback-status>Feedback is stored with this analysis.</p></section>`;
+  const ratingIcon = (value) => /^(Useful|Correct)$/.test(value) ? "thumbs-up" : /^(Not Useful|Wrong)$/.test(value) ? "thumbs-down" : "minus";
+  const ratingButtons = (field, values) => `<div class="rating-choice-row" role="group" aria-label="${field === "usefulness" ? "Analysis usefulness" : "Recommendation correctness"}">${values.map((value) => `<button class="rating-choice" type="button" aria-pressed="false" data-feedback-choice data-feedback-field="${field}" data-feedback-value="${escapeHtml(value)}"><span data-icon="${ratingIcon(value)}"></span>${escapeHtml(value)}</button>`).join("")}</div>`;
+  return `<details class="analysis-card feedback-card" open><summary><span><span data-icon="check"></span><strong data-feedback-heading>Rate this analysis</strong></span><small>Help improve future incident guidance</small></summary><div class="feedback-body">
+    <input type="hidden" data-feedback-usefulness><input type="hidden" data-feedback-correctness>
+    <div class="feedback-rating"><span>Was the analysis useful?</span>${ratingButtons("usefulness", ["Useful", "Partially Useful", "Not Useful"])}</div>
+    <div class="feedback-rating"><span>Were the recommendations correct?</span>${ratingButtons("correctness", ["Correct", "Partially Correct", "Wrong"])}</div>
+    <fieldset><legend>What influenced your rating?</legend><div class="reason-tags">${reasons.map((reason) => `<label><input type="checkbox" value="${escapeHtml(reason)}" data-feedback-reason><span>${escapeHtml(reason)}</span></label>`).join("")}</div></fieldset>
+    <label>Recommendation being rated <span class="optional-label">Optional</span><input data-feedback-recommendation placeholder="Paste or summarize the recommendation"></label>
+    <label>Additional context <span class="optional-label">Optional</span><textarea data-feedback-comments placeholder="What helped, or what should change?"></textarea></label>
+    <div class="feedback-actions"><button type="button" data-submit-feedback>Save feedback</button><p class="meta" data-feedback-status>Your rating is stored with this analysis.</p></div>
+  </div></details>`;
 }
 
 async function submitAnalysisFeedback(card) {
@@ -796,7 +894,10 @@ async function submitAnalysisFeedback(card) {
     await requestJson(`/api/incidents/${encodeURIComponent(currentIncidentId)}/feedback`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
     card.querySelector("[data-feedback-status]").textContent = "Feedback saved.";
     card.querySelector("[data-submit-feedback]").disabled = true;
-    showToast("Feedback saved", "Thanks — this rating is attached to the analysis record.", "success");
+    card.querySelector("[data-feedback-heading]").textContent = "Feedback saved";
+    card.dataset.saved = "true";
+    card.open = false;
+    showToast("Feedback saved", "Your rating was attached to this analysis.", "success");
     void loadRecent();
   } catch (error) { showToast("Feedback failed", error.message || String(error), "error"); }
 }
@@ -808,18 +909,26 @@ function renderTimeline(events = []) {
 
 function renderKnowledgeUpdate(incidentId, proposal) {
   if (!proposal) return "";
-  return `<section class="analysis-card knowledge-card"><h3><span data-icon="book"></span>Proposed knowledge update <span class="badge">${escapeHtml(proposal.status)}</span></h3><p>Only an approved update is eligible for future similarity and action reuse.</p><textarea data-knowledge-content>${escapeHtml(proposal.content)}</textarea>${proposal.status === "pending" ? `<div class="candidate-actions"><button type="button" data-knowledge-review="approved" data-incident-id="${escapeHtml(incidentId)}">Approve</button><button class="secondary" type="button" data-knowledge-review="rejected" data-incident-id="${escapeHtml(incidentId)}">Reject</button></div>` : ""}</section>`;
+  const pending = proposal.status === "pending";
+  return `<section class="analysis-card knowledge-card"><div class="knowledge-heading"><div><p class="eyebrow">Resolution learning</p><h3><span data-icon="book"></span>Proposed runbook / postmortem update</h3></div><span class="badge knowledge-status knowledge-${escapeHtml(proposal.status)}">${escapeHtml(proposal.status)}</span></div><p>Review this draft before it can become reusable incident knowledge. Rejected drafts are excluded from RAG and similarity.</p><label>Edit proposed update<textarea data-knowledge-content ${pending ? "" : "readonly"}>${escapeHtml(proposal.content)}</textarea></label>${pending ? `<div class="knowledge-actions"><button type="button" data-knowledge-review="approved" data-incident-id="${escapeHtml(incidentId)}">Approve and publish</button><button class="secondary danger-outline" type="button" data-knowledge-review="rejected" data-incident-id="${escapeHtml(incidentId)}">Reject draft</button></div>` : `<p class="system-notice ${proposal.status === "approved" ? "notice-success" : "notice-neutral"}"><strong>${proposal.status === "approved" ? "Published" : "Not published"}</strong><span>${proposal.status === "approved" ? "This approved update is available to future retrieval." : "This rejected update will not be used by RAG or similarity."}</span></p>`}</section>`;
 }
 
 async function reviewKnowledgeUpdate(incidentId, decision) {
   const content = elements.historyDetail.querySelector("[data-knowledge-content]")?.value || null;
-  if (!window.confirm(`${decision} this proposed knowledge update?`)) return;
+  const approving = decision === "approved";
+  const confirmed = await showConfirmation({
+    title: approving ? "Approve and publish this update?" : "Reject this proposed update?",
+    message: approving ? "The edited draft will become reusable knowledge for future RAG and similar-incident analysis." : "The draft will remain in the incident record but will not be reusable knowledge.",
+    confirmLabel: approving ? "Approve and publish" : "Reject draft",
+    destructive: !approving
+  });
+  if (!confirmed) return;
   try {
     await requestJson(`/api/incidents/${encodeURIComponent(incidentId)}/knowledge-review`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ decision, content }) });
     await loadRecent();
     const item = recentAnalyses.find((analysis) => analysis.incidentId === incidentId);
     if (item) renderHistoryDetail(item);
-    showToast("Knowledge reviewed", `Update ${decision}.`, "success");
+    showToast(approving ? "Knowledge published" : "Draft rejected", approving ? "The approved update is now available to future retrieval." : "The draft will not be used by future retrieval.", "success");
   } catch (error) { showToast("Review failed", error.message || String(error), "error"); }
 }
 
@@ -850,7 +959,7 @@ async function loadRecent() {
 
 function populateHistoryFilters(rows) {
   setSelectOptions(elements.historyServiceFilter, "All services", uniqueValues(rows.map((row) => row.service)));
-  setSelectOptions(elements.historyStatusFilter, "All statuses", uniqueValues(rows.map((row) => row.status)));
+  setSelectOptions(elements.historyStatusFilter, "All statuses", incidentLifecycleStatuses, formatStatusLabel);
   setSessionFilterOptions(rows);
   setSelectOptions(elements.historySeverityFilter, "All severities", uniqueValues(rows.map((row) => row.severity)));
   setSelectOptions(elements.historyConfidenceFilter, "All confidence", uniqueValues(rows.map((row) => row.confidence)));
@@ -862,7 +971,7 @@ function renderHistory() {
   historyPage = page.page;
   elements.historyTotal.textContent = recentAnalyses.length;
   elements.historyResultCount.textContent = `${rows.length} result${rows.length === 1 ? "" : "s"}`;
-  elements.recentOutput.innerHTML = renderHistoryTable(page.items, rows.length) + renderPagination("history", page, "data-history-page");
+  elements.recentOutput.innerHTML = renderPendingKnowledgeReviews() + renderHistoryTable(page.items, rows.length) + renderPagination("history", page, "data-history-page");
   hydrateIcons(elements.recentOutput);
 }
 
@@ -895,7 +1004,7 @@ function renderHistoryRow(row) {
   const connected = thread.count > 1;
   const threadStyle = connected ? ` style="--thread-hue:${sessionHue(row.sessionId)}"` : "";
   const relationship = row.sessionTurnNumber > 1 ? `Follow-up ${row.sessionTurnNumber - 1}` : "Original";
-  return `<tr class="${connected ? "session-connected" : ""}"${threadStyle} data-history-id="${escapeHtml(row.incidentId)}" tabindex="0" aria-label="Open ${escapeHtml(row.summary)}"><td><span class="history-id">${escapeHtml(row.displayId)}</span>${connected ? `<span class="thread-marker"><span data-icon="link"></span>${thread.count} linked · ${relationship}</span>` : ""}</td><td><button class="link-button" data-history-id="${escapeHtml(row.incidentId)}">${escapeHtml(trimTitle(row.summary))}</button><p class="history-description">${escapeHtml(row.description || "No description provided.")}</p><small>${row.tags.map((tag) => `<span>#${escapeHtml(tag)}</span>`).join(" ")}</small></td><td>${escapeHtml(row.service)}</td><td><span class="severity severity-${escapeHtml(row.severity)}">${escapeHtml(formatSeverityLabel(row.severity))}</span></td><td>${renderStatusText(row.status)}</td><td><span class="badge ${row.provider === "model" ? "badge-info" : "badge-warning"}">${escapeHtml(row.provider)}</span></td><td class="confidence-${escapeHtml(row.confidence)}">${escapeHtml(row.confidence)}</td></tr>`;
+  return `<tr class="${connected ? "session-connected" : ""}"${threadStyle} data-history-id="${escapeHtml(row.incidentId)}" tabindex="0" aria-label="Open ${escapeHtml(row.summary)}"><td><span class="history-id">${escapeHtml(row.displayId)}</span>${connected ? `<span class="thread-marker"><span data-icon="link"></span>${thread.count} linked · ${relationship}</span>` : ""}</td><td><button class="link-button" data-history-id="${escapeHtml(row.incidentId)}">${escapeHtml(trimTitle(row.summary))}</button><p class="history-description">${escapeHtml(row.description || "No description provided.")}</p><small>${row.tags.map((tag) => `<span>#${escapeHtml(tag)}</span>`).join(" ")}</small></td><td>${escapeHtml(row.service)}</td><td><span class="severity severity-${escapeHtml(row.severity)}">${escapeHtml(formatSeverityLabel(row.severity))}</span></td><td>${renderStatusText(row.status)}</td><td><span class="badge provider-${escapeHtml(row.provider)}">${escapeHtml(row.provider)}</span></td><td><span class="confidence-badge confidence-${escapeHtml(row.confidence)}">${escapeHtml(row.confidence)}</span></td></tr>`;
 }
 
 function getSessionThread(sessionId) {
@@ -937,6 +1046,31 @@ function renderLoadingState(message) {
   return `<div class="loading-state"><span class="loading-spinner" aria-hidden="true"></span><span>${escapeHtml(message)}</span></div>`;
 }
 
+function renderPendingKnowledgeReviews() {
+  const pending = recentAnalyses.filter(item => item.status === "resolved" && item.proposedKnowledgeUpdate?.status === "pending");
+  if (!pending.length) return "";
+  return `<section class="learning-review-banner"><div><strong><span data-icon="book"></span>${pending.length} runbook update${pending.length === 1 ? "" : "s"} awaiting review</strong><p>Open a resolved incident to edit, approve, or reject its proposed reusable knowledge.</p></div><div>${pending.slice(0, 3).map(item => `<button class="secondary compact-button" type="button" data-history-id="${escapeHtml(item.incidentId)}">Review ${escapeHtml(formatHistoryId(item.incidentId, 0))}</button>`).join("")}</div></section>`;
+}
+
+function startAnalysisWait(initialMessage) {
+  stopAnalysisWait();
+  const startedAt = Date.now();
+  const update = () => {
+    const elapsed = Math.floor((Date.now() - startedAt) / 1000);
+    let message = initialMessage;
+    if (elapsed >= 35) message = `OpenRouter is still responding (${elapsed}s). The result will identify any timeout or fallback.`;
+    else if (elapsed >= 15) message = `OpenRouter model request in progress (${elapsed}s)...`;
+    elements.analysisStatus.innerHTML = `<span class="loading-spinner" aria-hidden="true"></span><span>${escapeHtml(message)}</span>`;
+  };
+  update();
+  analysisWaitTimer = window.setInterval(update, 1000);
+}
+
+function stopAnalysisWait() {
+  if (analysisWaitTimer) window.clearInterval(analysisWaitTimer);
+  analysisWaitTimer = null;
+}
+
 function renderTicketActions(incidentId, currentStatus) {
   const normalized = normalizeIncidentStatus(currentStatus);
   const actionsByStatus = {
@@ -952,7 +1086,13 @@ function renderTicketActions(incidentId, currentStatus) {
 async function deleteIncident(incidentId) {
   const incident = recentAnalyses.find((analysis) => analysis.incidentId === incidentId);
   const label = incident?.incidentSummary || "this incident";
-  if (!window.confirm(`Permanently delete "${label}"? This removes only this incident. Other linked incidents remain in the same session.`)) return;
+  const confirmed = await showConfirmation({
+    title: "Permanently delete this incident?",
+    message: `“${label}” will be removed from history and future similarity retrieval. Other incidents in the linked session remain available.`,
+    confirmLabel: "Delete incident",
+    destructive: true
+  });
+  if (!confirmed) return;
 
   try {
     await requestJson(`/api/incidents/${encodeURIComponent(incidentId)}`, { method: "DELETE" });
@@ -995,7 +1135,7 @@ function renderHistoryDetail(item) {
   const hypotheses = item.hypotheses || [];
   const evidence = item.evidence || [];
   const linkedAnalyses = recentAnalyses.filter((analysis) => analysis.sessionId === item.sessionId).length;
-  elements.historyDetail.innerHTML = `<p class="eyebrow">${item.sessionTurnNumber > 1 ? `Follow-up analysis ${item.sessionTurnNumber - 1}` : "Original analysis"}</p><div class="modal-title-row"><div><h3 id="historyModalTitle">${escapeHtml(item.incidentTitle || item.incidentSummary)}</h3>${renderStatusText(item.status || "active")}</div>${renderTicketActions(item.incidentId, item.status || "active")}</div><p class="incident-detail-description">${escapeHtml(item.incidentDescription || "No description provided.")}</p>${item.incidentSummary && item.incidentSummary !== item.incidentTitle ? `<p class="analysis-summary"><strong>Analysis summary:</strong> ${escapeHtml(item.incidentSummary)}</p>` : ""}<div class="session-link-row"><div class="session-identity"><span><span class="live-dot"></span>Linked session</span><code title="${escapeHtml(item.sessionId)}">${escapeHtml(item.sessionId)}</code></div><div class="session-count"><strong>Turn ${item.sessionTurnNumber}</strong><span>${linkedAnalyses} linked ${linkedAnalyses === 1 ? "analysis" : "analyses"}</span></div><button class="icon-refresh-button" type="button" data-copy-session="${escapeHtml(item.sessionId)}" aria-label="Copy session ID"><span data-icon="copy"></span></button><button class="secondary compact-button" type="button" data-follow-up-session="${escapeHtml(item.sessionId)}">Continue session</button></div>${renderProviderTransparency(item.providerTransparency)}${renderRecommendedActions(actions, false)}${renderGroundedFacts(item.knownFacts)}${renderHypotheses(hypotheses)}${renderAnalysisBlock("Unknowns", item.unknowns, "info")}${renderStoredEvidenceBlock(evidence)}${renderRunbookMatches(item.runbookMatches)}${renderAnalysisQuality(item.quality)}${renderPriorActions(item.similarIncidents)}${renderOutcomeHistory(item.actionOutcomes)}${renderFeedbackHistory(item.feedback)}${renderTimeline(item.timeline)}${renderKnowledgeUpdate(item.incidentId, item.proposedKnowledgeUpdate)}<section class="danger-zone"><div><strong>Delete incident</strong><p>Remove this incident from history and future similarity matches.</p></div><button class="compact-button delete-incident-button" type="button" data-delete-incident="${escapeHtml(item.incidentId)}"><span data-icon="trash"></span>Delete incident</button></section>`;
+  elements.historyDetail.innerHTML = `<p class="eyebrow">${item.sessionTurnNumber > 1 ? `Follow-up analysis ${item.sessionTurnNumber - 1}` : "Original analysis"}</p><div class="modal-title-row"><div><h3 id="historyModalTitle">${escapeHtml(item.incidentTitle || item.incidentSummary)}</h3>${renderStatusText(item.status || "active")}</div>${renderTicketActions(item.incidentId, item.status || "active")}</div><p class="incident-detail-description">${escapeHtml(item.incidentDescription || "No description provided.")}</p>${item.incidentSummary && item.incidentSummary !== item.incidentTitle ? `<p class="analysis-summary"><strong>Analysis summary:</strong> ${escapeHtml(item.incidentSummary)}</p>` : ""}<div class="session-link-row"><div class="session-identity"><span><span class="live-dot"></span>Linked session</span><code title="${escapeHtml(item.sessionId)}">${escapeHtml(item.sessionId)}</code></div><div class="session-count"><strong>Turn ${item.sessionTurnNumber}</strong><span>${linkedAnalyses} linked ${linkedAnalyses === 1 ? "analysis" : "analyses"}</span></div><button class="icon-refresh-button" type="button" data-copy-session="${escapeHtml(item.sessionId)}" aria-label="Copy session ID"><span data-icon="copy"></span></button><button class="secondary compact-button" type="button" data-follow-up-session="${escapeHtml(item.sessionId)}">Continue session</button></div>${renderKnowledgeUpdate(item.incidentId, item.proposedKnowledgeUpdate)}${renderProviderTransparency(item.providerTransparency)}${renderRecommendedActions(actions, false)}${renderGroundedFacts(item.knownFacts)}${renderHypotheses(hypotheses)}${renderAnalysisBlock("Unknowns & validation gaps", item.unknowns, "info")}${renderStoredEvidenceBlock(evidence)}${renderRunbookMatches(item.runbookMatches)}${renderAnalysisQuality(item.quality)}${renderPriorActions(item.similarIncidents)}${renderOutcomeHistory(item.actionOutcomes)}${renderFeedbackHistory(item.feedback)}${renderTimeline(item.timeline)}<section class="danger-zone"><div><strong>Delete incident</strong><p>Remove this incident from history and future similarity matches.</p></div><button class="compact-button delete-incident-button" type="button" data-delete-incident="${escapeHtml(item.incidentId)}"><span data-icon="trash"></span>Delete incident</button></section>`;
   elements.historyModal.hidden = false;
   hydrateIcons(elements.historyDetail);
   requestAnimationFrame(() => elements.historyModalClose.focus());
@@ -1019,8 +1159,33 @@ function closeHistoryModal() {
   if (returnFocus?.isConnected) returnFocus.focus();
 }
 
-function getModalFocusableElements() {
-  return [...elements.historyModal.querySelectorAll('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])')]
+function showConfirmation({ title, message, confirmLabel = "Confirm", destructive = false }) {
+  if (confirmationResolver) closeConfirmation(false);
+  confirmationReturnFocus = document.activeElement;
+  elements.confirmModalTitle.textContent = title;
+  elements.confirmModalMessage.textContent = message;
+  elements.confirmModalAccept.textContent = confirmLabel;
+  elements.confirmModalAccept.classList.toggle("danger-button", destructive);
+  elements.confirmModalAccept.classList.toggle("primary-confirm-button", !destructive);
+  elements.confirmModal.classList.toggle("confirm-destructive", destructive);
+  elements.confirmModal.hidden = false;
+  requestAnimationFrame(() => (destructive ? elements.confirmModalCancel : elements.confirmModalAccept).focus());
+  return new Promise((resolve) => { confirmationResolver = resolve; });
+}
+
+function closeConfirmation(confirmed) {
+  if (elements.confirmModal.hidden && !confirmationResolver) return;
+  elements.confirmModal.hidden = true;
+  const resolve = confirmationResolver;
+  const returnFocus = confirmationReturnFocus;
+  confirmationResolver = null;
+  confirmationReturnFocus = null;
+  resolve?.(confirmed);
+  if (returnFocus?.isConnected) returnFocus.focus();
+}
+
+function getModalFocusableElements(modal = elements.historyModal) {
+  return [...modal.querySelectorAll('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])')]
     .filter((element) => !element.hidden && element.getClientRects().length > 0);
 }
 
@@ -1039,7 +1204,7 @@ async function sendLogSignal() {
   const form = new FormData(elements.logSignalForm);
   await requestJson("/api/signals/logs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(Object.fromEntries(form.entries())) });
   setFeedback(elements.ingestionFeedback, "Log accepted", "Signal written. Rescanning backlog.", "connected");
-  await loadDetected();
+  await loadDetected(false, true);
 }
 
 async function sendMetricSignal() {
@@ -1049,7 +1214,7 @@ async function sendMetricSignal() {
   payload.value = Number(payload.value);
   await requestJson("/api/signals/metrics", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
   setFeedback(elements.ingestionFeedback, "Metric accepted", "Sample written. Rescanning backlog.", "connected");
-  await loadDetected();
+  await loadDetected(false, true);
 }
 
 async function searchRag() {
@@ -1143,16 +1308,19 @@ function inferProviderMode(result) {
   const provider = String(result.analysisProvider || "");
   const reason = String(result.fallbackReason || "");
   if (provider.includes("deterministic-structured-fallback") || reason.includes("deterministic structured")) return { label: "Structured fallback", className: "status-warning", description: "Model JSON was invalid; deterministic fields are displayed." };
-  if (result.usedFallbackAnalysis) return { label: "Local analysis", className: "status-connected", description: "Local evidence-based analyzer summarized runbooks, logs, metrics, and similar incidents." };
+  if (result.usedFallbackAnalysis) return { label: "Local fallback", className: "status-warning", description: "The local evidence analyzer produced this result." };
   return { label: "Model-backed", className: "status-connected", description: "Structured output came from the configured model." };
 }
 
 function formatProviderMessage(result, mode) {
   const reason = String(result.fallbackReason || "");
-  if (reason.includes("API key is not configured")) return "Running local analysis because no model API key is configured.";
+  const ragDegraded = Boolean(result.providerTransparency?.isDegraded);
+  const ragNote = ragDegraded ? " RAG continued with degraded embeddings." : "";
+  if (reason.includes("API key is not configured")) return `No model key was available; local evidence analysis was used.${ragNote}`;
+  if (/timed out|timeout/i.test(reason)) return `OpenRouter timed out; local evidence analysis was used.${ragNote}`;
   if (reason.includes("empty analysis response") || reason.includes("empty output") || reason.includes("empty message")) return "The model returned an empty response, so local analysis used the gathered evidence instead.";
   if (reason.includes("429") || reason.includes("Too Many Requests") || reason.includes("rate-limited")) return "The model provider is rate-limited, so local analysis used the gathered evidence instead.";
-  return result.usedFallbackAnalysis ? mode.description : reason || mode.description;
+  return result.usedFallbackAnalysis ? `${mode.description}${ragNote}` : `${reason || mode.description}${ragNote}`;
 }
 
 function confidenceRows(result, similar) {
@@ -1203,6 +1371,10 @@ async function requestJson(url, options = {}) {
 }
 
 function normalizeArray(value) { return Array.isArray(value) ? value : Array.isArray(value?.value) ? value.value : []; }
+function cleanStatusMessage(value) {
+  const sentences = String(value || "").split(/(?<=[.!?])\s+/).map((item) => item.trim()).filter(Boolean);
+  return [...new Map(sentences.map((item) => [item.toLowerCase(), item])).values()].join(" ");
+}
 function splitTags(value) { return String(value || "").split(",").map((tag) => tag.trim()).filter(Boolean); }
 function emptyToNull(value) { const text = String(value || "").trim(); return text ? text : null; }
 function escapeHtml(value) { return String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#039;"); }
@@ -1300,14 +1472,14 @@ function renderPagination(name, page, attr) {
   const end = Math.min(page.start + page.items.length, page.total);
   return `<div class="pagination-bar"><span>${start}-${end} of ${page.total}</span><div><button class="secondary compact-button" type="button" ${attr}="${previous}"${page.page === 1 ? " disabled" : ""}>Previous</button><button class="secondary compact-button" type="button" ${attr}="${next}"${page.page === page.pageCount ? " disabled" : ""}>Next</button></div></div>`;
 }
-function setSelectOptions(select, label, values) {
+function setSelectOptions(select, label, values, formatLabel = (value) => value) {
   const previous = select.value;
-  select.innerHTML = `<option value="all">${escapeHtml(label)}</option>${values.map((value) => `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`).join("")}`;
+  select.innerHTML = `<option value="all">${escapeHtml(label)}</option>${values.map((value) => `<option value="${escapeHtml(value)}">${escapeHtml(formatLabel(value))}</option>`).join("")}`;
   select.value = values.includes(previous) ? previous : "all";
 }
 function renderError(target, error) { target.innerHTML = `<div class="error-box">${escapeHtml(error.message || String(error))}</div>`; }
 function setFeedback(target, title, message, status) { target.innerHTML = `<span class="status-pill status-${status}">${escapeHtml(title)}</span><span>${escapeHtml(message)}</span>`; }
-function showToast(title, message, tone = "info") { const toast = document.createElement("div"); toast.className = `toast toast-${tone}`; toast.innerHTML = `<strong>${escapeHtml(title)}</strong><span>${escapeHtml(message)}</span>`; elements.toast.appendChild(toast); setTimeout(() => toast.remove(), 3600); }
+function showToast(title, message, tone = "info") { const toast = document.createElement("div"); toast.className = `toast toast-${tone}`; toast.setAttribute("role", tone === "error" ? "alert" : "status"); toast.innerHTML = `<strong>${escapeHtml(title)}</strong><span>${escapeHtml(message)}</span>`; elements.toast.appendChild(toast); setTimeout(() => toast.remove(), 4200); }
 async function copyCodeText(button) {
   const text = button.closest(".code-row")?.querySelector("code")?.textContent || "";
   if (!text) return;
@@ -1352,6 +1524,7 @@ function renderSidebarLastScan() {
 }
 
 async function initialize() {
+  document.documentElement.dataset.theme = localStorage.getItem("incidentops.theme") === "dark" ? "dark" : "light";
   const savedInterval = Number(localStorage.getItem("incidentops.pollingIntervalSeconds"));
   if (savedInterval >= Number(elements.pollingSlider.min) && savedInterval <= Number(elements.pollingSlider.max)) {
     elements.pollingSlider.value = String(savedInterval);
@@ -1369,7 +1542,7 @@ async function initialize() {
   renderSidebarLastScan();
   hydrateIcons(elements.lastScan);
   void loadRecent();
-  if (polling) void loadDetected(false);
+  void loadDetected(false, false);
   void searchRag();
   void loadEvaluation();
   const initialTab = location.hash.replace("#", "");
@@ -1420,7 +1593,7 @@ function startPolling() {
   stopPolling();
   const intervalMs = Math.max(10, Number(elements.pollingSlider.value) || 30) * 1000;
   pollingTimer = window.setInterval(() => {
-    if (polling) void loadDetected();
+    if (polling) void loadDetected(false, true);
   }, intervalMs);
 }
 

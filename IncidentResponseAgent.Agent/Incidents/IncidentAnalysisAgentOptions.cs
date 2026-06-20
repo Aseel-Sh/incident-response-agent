@@ -16,7 +16,7 @@ public sealed record IncidentAnalysisAgentOptions
 
 	public string? AppName { get; init; }
 
-	public int AnalysisTimeoutSeconds { get; init; } = 30;
+	public int AnalysisTimeoutSeconds { get; init; } = 75;
 
 	public int MaxOutputTokens { get; init; } = 1200;
 

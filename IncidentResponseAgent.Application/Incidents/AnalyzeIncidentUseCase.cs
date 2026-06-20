@@ -4,6 +4,7 @@ using IncidentResponseAgent.Application.Runbooks;
 using IncidentResponseAgent.Application.Tools;
 using Microsoft.Extensions.Logging;
 using System.Text.RegularExpressions;
+using System.Diagnostics;
 
 namespace IncidentResponseAgent.Application.Incidents;
 
@@ -45,6 +46,7 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 			incident.Severity,
 			incident.ServiceName,
 			incident.Environment);
+		var evidenceStopwatch = Stopwatch.StartNew();
 		var sessionContextTask = _incidentAnalysisSessionStore.GetOrCreateAsync(sessionId, cancellationToken);
 		var runbookResultTask = RetrieveRunbooksSafelyAsync(incident, cancellationToken);
 		var logResultTask = _logSearchProvider.SearchAsync(BuildLogSearchRequest(incident), cancellationToken);
@@ -55,6 +57,7 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 			: _incidentRecordStore.GetRecentAsync(100, cancellationToken);
 
 		await Task.WhenAll(sessionContextTask, runbookResultTask, logResultTask, metricsResultTask, similarIncidentsTask, linkedSessionRecordsTask);
+		evidenceStopwatch.Stop();
 
 		var sessionContext = await sessionContextTask;
 		var runbookResult = await runbookResultTask;
@@ -70,8 +73,10 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 		var groundedEvidence = BuildEvidence(incident, runbookResult, logResult, metricsResult, similarIncidents);
 		var evidenceSources = groundedEvidence.Select(item => item.Source).Where(item => !string.IsNullOrWhiteSpace(item)).Select(item => item!).ToHashSet(StringComparer.OrdinalIgnoreCase);
 		_logger.LogInformation(
-			"Incident evidence gathered for IncidentId={IncidentId}: Runbooks={RunbookCount} Logs={LogCount} MetricSamples={MetricSampleCount} SimilarIncidents={SimilarIncidentCount}.",
+			"Incident evidence gathered for IncidentId={IncidentId}: DurationMs={DurationMs} RagDurationMs={RagDurationMs} Runbooks={RunbookCount} Logs={LogCount} MetricSamples={MetricSampleCount} SimilarIncidents={SimilarIncidentCount}.",
 			incident.Id,
+			evidenceStopwatch.ElapsedMilliseconds,
+			runbookResult.DurationMilliseconds,
 			runbookResult.Runbooks.Count,
 			logResult.Entries.Count,
 			metricsResult.Samples.Count,
@@ -135,11 +140,18 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 			ProviderTransparency = new AnalysisProviderTransparency
 			{
 				ModelProvider = agentResult.Provider, Model = agentResult.Model, EmbeddingProvider = runbookResult.EmbeddingProvider,
+				AttemptedModelProvider = agentResult.AttemptedProvider, AttemptedModel = agentResult.AttemptedModel,
 				VectorStore = runbookResult.VectorStoreProvider, RagStatus = runbookResult.RagStatus,
 				UsedModelFallback = agentResult.UsedFallback || usedDeterministicStructuredFallback,
 				FallbackReason = agentResult.FallbackReason ?? (usedDeterministicStructuredFallback ? "Model returned invalid structured output." : null),
 				IsDegraded = runbookResult.IsDegraded, DegradedReason = runbookResult.DegradedReason,
-				UsedStructuredOutputRetry = agentResult.UsedStructuredOutputRetry, StructuredOutputRetryReason = agentResult.StructuredOutputRetryReason
+				UsedStructuredOutputRetry = agentResult.UsedStructuredOutputRetry,
+				StructuredOutputRetryReason = agentResult.StructuredOutputRetryReason,
+				EvidenceGatheringDurationMilliseconds = evidenceStopwatch.ElapsedMilliseconds,
+				RagDurationMilliseconds = runbookResult.DurationMilliseconds,
+				ModelDurationMilliseconds = agentResult.ModelDurationMilliseconds,
+				FallbackStage = agentResult.FallbackStage,
+				TimeoutSource = agentResult.TimeoutSource
 			},
 			Confidence = confidence,
 			Notes = BuildNotes(
@@ -198,27 +210,32 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 	private async Task<RunbookRetrievalResult> RetrieveRunbooksSafelyAsync(Incident incident, CancellationToken cancellationToken)
 	{
 		_logger.LogInformation("RAG retrieval started. IncidentId={IncidentId}.", incident.Id);
+		var stopwatch = Stopwatch.StartNew();
 		try
 		{
 			var result = await _runbookRetrievalService.RetrieveAsync(BuildRunbookRetrievalRequest(incident), cancellationToken);
+			stopwatch.Stop();
+			result = result with { DurationMilliseconds = stopwatch.ElapsedMilliseconds };
 			if (result.IsDegraded)
 			{
-				_logger.LogWarning("RAG degraded. IncidentId={IncidentId} EmbeddingProvider={EmbeddingProvider} VectorStore={VectorStore} Reason={Reason}.", incident.Id, result.EmbeddingProvider, result.VectorStoreProvider, result.DegradedReason);
+				_logger.LogWarning("RAG degraded but retrieval completed. IncidentId={IncidentId} DurationMs={DurationMs} Status={Status} RunbookCount={RunbookCount} EmbeddingProvider={EmbeddingProvider} VectorStore={VectorStore} Reason={Reason}.", incident.Id, stopwatch.ElapsedMilliseconds, result.RagStatus, result.Runbooks.Count, result.EmbeddingProvider, result.VectorStoreProvider, result.DegradedReason);
 			}
 			else
 			{
-				_logger.LogInformation("RAG retrieval completed. IncidentId={IncidentId} Status={Status} RunbookCount={RunbookCount} EmbeddingProvider={EmbeddingProvider} VectorStore={VectorStore}.", incident.Id, result.RagStatus, result.Runbooks.Count, result.EmbeddingProvider, result.VectorStoreProvider);
+				_logger.LogInformation("RAG retrieval completed. IncidentId={IncidentId} DurationMs={DurationMs} Status={Status} RunbookCount={RunbookCount} EmbeddingProvider={EmbeddingProvider} VectorStore={VectorStore}.", incident.Id, stopwatch.ElapsedMilliseconds, result.RagStatus, result.Runbooks.Count, result.EmbeddingProvider, result.VectorStoreProvider);
 			}
 			return result;
 		}
 		catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
 		catch (Exception exception)
 		{
-			_logger.LogWarning(exception, "Runbook retrieval failed for IncidentId={IncidentId}; model analysis will continue without RAG.", incident.Id);
+			stopwatch.Stop();
+			_logger.LogWarning(exception, "Runbook retrieval failed for IncidentId={IncidentId} after DurationMs={DurationMs}; model analysis will continue without RAG.", incident.Id, stopwatch.ElapsedMilliseconds);
 			return new RunbookRetrievalResult
 			{
 				RagStatus = "degraded", IsDegraded = true, EmbeddingProvider = "unavailable", VectorStoreProvider = "unavailable",
-				DegradedReason = $"Runbook retrieval failed: {exception.GetType().Name}. Model analysis continued without RAG."
+				DegradedReason = $"Runbook retrieval failed: {exception.GetType().Name}. Model analysis continued without RAG.",
+				DurationMilliseconds = stopwatch.ElapsedMilliseconds
 			};
 		}
 	}
@@ -276,21 +293,21 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 			.ToArray();
 		return grounded.Length > 0
 			? grounded
-			: [new IncidentActionRecommendation { Description = "Collect a current log and primary service metric before selecting a mitigation.", Priority = "High", Rationale = "Available evidence is not sufficient to ground a specific remediation.", SupportingSignals = ["incident.description"] }];
+			: [new IncidentActionRecommendation { Description = "Collect a current service log and primary service metric, then rerun analysis before selecting a mitigation.", Priority = "High", Rationale = "The submitted description is context, not verified operational evidence.", SupportingSignals = Array.Empty<string>() }];
 	}
 
 	private static IReadOnlyList<GroundedIncidentClaim> BuildKnownFacts(IReadOnlyList<IncidentAnalysisEvidenceItem> evidence) =>
 		evidence
-			.Where(item => item.Source is not null && (item.Source.StartsWith("incident.", StringComparison.OrdinalIgnoreCase) || item.Source.StartsWith("tool.logs", StringComparison.OrdinalIgnoreCase) || item.Source.StartsWith("tool.metrics", StringComparison.OrdinalIgnoreCase)))
+			.Where(item => item.Source is not null && (item.Source.StartsWith("tool.logs", StringComparison.OrdinalIgnoreCase) || item.Source.StartsWith("tool.metrics", StringComparison.OrdinalIgnoreCase)))
 			.Select(item => new GroundedIncidentClaim { Claim = item.Summary, EvidenceReferences = [item.Source!] })
 			.Take(10)
 			.ToArray();
 
 	private static IReadOnlyList<string> BuildUnknowns(Incident incident, RunbookRetrievalResult runbooks, LogSearchResult logs, MetricsQueryResult metrics)
 	{
-		var unknowns = new List<string> { "Root cause is not confirmed until a responder validates a hypothesis." };
-		if (logs.Entries.Count == 0) unknowns.Add("No matching log entries were available for the incident window.");
-		if (metrics.Samples.Count == 0) unknowns.Add("No matching metric samples were available for the incident window.");
+		var unknowns = new List<string> { "Root cause is unverified. Validate the leading hypothesis against fresh logs and metrics, perform one controlled action, and record whether the predicted signal changed." };
+		if (logs.Entries.Count == 0) unknowns.Add($"Validation blocked: no matching {incident.ServiceName ?? "service"} logs were available for the incident window. Connect or ingest logs covering that window, then rerun analysis.");
+		if (metrics.Samples.Count == 0) unknowns.Add($"Validation blocked: no {metrics.MetricName} samples were available for the incident window. Connect or ingest that metric, then rerun analysis.");
 		if (runbooks.Runbooks.Count == 0) unknowns.Add(runbooks.IsDegraded ? "Runbook matches are unknown because RAG is degraded." : "No relevant runbook match was found.");
 		if (string.IsNullOrWhiteSpace(incident.ServiceName)) unknowns.Add("The impacted service is unknown.");
 		if (string.IsNullOrWhiteSpace(incident.Environment)) unknowns.Add("The impacted environment is unknown.");
@@ -437,41 +454,7 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 		MetricsQueryResult metricsResult,
 		IReadOnlyList<SimilarIncidentMatch> similarIncidents)
 	{
-		var evidence = new List<IncidentAnalysisEvidenceItem>
-		{
-			new IncidentAnalysisEvidenceItem
-			{
-				Summary = incident.Description,
-				Source = "incident.description",
-				Details = incident.Title
-			},
-			new IncidentAnalysisEvidenceItem { Summary = $"User or rule assigned {incident.Severity}.", Source = "incident.severity", Details = incident.Severity.ToString() }
-		};
-
-		if (!string.IsNullOrWhiteSpace(incident.ServiceName))
-		{
-			evidence.Add(new IncidentAnalysisEvidenceItem { Summary = "Impacted service supplied with the incident.", Source = "incident.serviceName", Details = incident.ServiceName });
-		}
-
-		if (incident.Tags.Count > 0)
-		{
-			evidence.Add(new IncidentAnalysisEvidenceItem
-			{
-				Summary = "Incident tags indicate impacted area and context.",
-				Source = "incident.tags",
-				Details = string.Join(", ", incident.Tags)
-			});
-		}
-
-		if (incident.Timestamp is not null)
-		{
-			evidence.Add(new IncidentAnalysisEvidenceItem
-			{
-				Summary = "Incident timestamp available for time-based correlation.",
-				Source = "incident.timestamp",
-				Details = incident.Timestamp.Value.ToString("O")
-			});
-		}
+		var evidence = new List<IncidentAnalysisEvidenceItem>();
 
 		foreach (var runbook in runbookResult.Runbooks)
 		{

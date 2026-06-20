@@ -131,7 +131,7 @@ Qdrant docs:
 The project supports two embedding paths:
 
 - Local fallback: `local-hashing-384`
-- Hosted Hugging Face model: `thenlper/gte-large`
+- Hosted Hugging Face feature-extraction model: `BAAI/bge-small-en-v1.5`
 
 If a Hugging Face token is configured, the app tries Hugging Face first. If Hugging Face is unreachable, rate-limited, misconfigured, or otherwise fails, the app logs the failure and falls back to local embeddings for the current process.
 
@@ -144,7 +144,7 @@ Set it with environment variables:
 
 ```powershell
 $env:HF_TOKEN = "your-hugging-face-token"
-$env:HF_EMBEDDING_MODEL = "thenlper/gte-large"
+$env:HF_EMBEDDING_MODEL = "BAAI/bge-small-en-v1.5"
 ```
 
 Or in `IncidentResponseAgent.Api/appsettings.Development.json`:
@@ -154,11 +154,13 @@ Or in `IncidentResponseAgent.Api/appsettings.Development.json`:
   "Runbooks": {
     "SemanticRetrieval": {
       "ApiKey": "your-hugging-face-token",
-      "Model": "thenlper/gte-large"
+      "Model": "BAAI/bge-small-en-v1.5"
     }
   }
 }
 ```
+
+ASP.NET Core loads this file automatically when `ASPNETCORE_ENVIRONMENT=Development` (the checked-in development launch profile already sets it). Environment variables still take precedence, so `HF_TOKEN` and `HF_EMBEDDING_MODEL` can override the local development file without editing it.
 
 Do not commit real keys.
 
@@ -187,7 +189,8 @@ Set it with environment variables:
 
 ```powershell
 $env:OPENROUTER_API_KEY = "your-openrouter-key"
-$env:OPENROUTER_MODEL = "nex-agi/nex-n2-pro:free"
+$env:OPENROUTER_MODEL = "nvidia/nemotron-3-super-120b-a12b:free"
+$env:OPENROUTER_TIMEOUT_SECONDS = "75"
 $env:OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 $env:OPENROUTER_SITE_URL = "https://your-app.example" # optional
 $env:OPENROUTER_APP_NAME = "Incident Response Agent"  # optional
@@ -200,7 +203,7 @@ Or in `IncidentResponseAgent.Api/appsettings.Development.json`:
   "Agent": {
     "IncidentAnalysis": {
       "Provider": "OpenRouter",
-      "Model": "nex-agi/nex-n2-pro:free",
+      "Model": "nvidia/nemotron-3-super-120b-a12b:free",
       "Endpoint": "https://openrouter.ai/api/v1",
       "ApiKey": "your-openrouter-key"
     }
@@ -234,7 +237,7 @@ npm.cmd run test:e2e:ai
 npm.cmd run test:e2e:learning
 ```
 
-During local testing, `nex-agi/nex-n2-pro:free` responded faster and followed strict JSON better than the previous Nemotron free model. Free model availability changes over time, so you can swap the model id without changing application code.
+During live testing on June 20, 2026, `nvidia/nemotron-3-super-120b-a12b:free` returned valid structured JSON in about 1.2 seconds. The previous `nex-agi/nex-n2-pro:free` route took about 31.5 seconds for a minimal request and repeatedly exceeded the incident-analysis timeout. Free model availability changes over time, so the model id remains configurable.
 
 ## Local Operational Data
 

@@ -3,8 +3,16 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <script>
+    (() => {
+      try {
+        const savedTheme = localStorage.getItem("incidentops.theme");
+        document.documentElement.dataset.theme = savedTheme === "dark" ? "dark" : "light";
+      } catch { document.documentElement.dataset.theme = "light"; }
+    })();
+  </script>
   <title>incidentOps</title>
-  <link rel="stylesheet" href="/styles.css?v=20260618-session-filter-6">
+  <link rel="stylesheet" href="/styles.css?v=20260620-evidence-rag-5">
 </head>
 <body>
   <div class="app-shell">
@@ -47,6 +55,7 @@
         <div id="sourceModeBanner" class="mode-banner"></div>
         <dl class="metric-strip dashboard-stats">
           <div class="stat-new"><dt>Candidates</dt><dd id="newCount">0</dd></div>
+          <div class="stat-confirmed"><dt>Confirmed</dt><dd id="confirmedCount">0</dd></div>
           <div class="stat-active"><dt>Investigating</dt><dd id="investigatingCount">0</dd></div>
           <div class="stat-mitigated"><dt>Mitigated</dt><dd id="mitigatedCount">0</dd></div>
           <div class="stat-resolved"><dt>Resolved</dt><dd id="resolvedCount">0</dd></div>
@@ -60,6 +69,7 @@
             <div id="statusFilters" class="chip-row">
               <button class="filter-chip active" type="button" data-status="all">All</button>
               <button class="filter-chip" type="button" data-status="candidate">Candidates</button>
+              <button class="filter-chip" type="button" data-status="new">Confirmed</button>
               <button class="filter-chip" type="button" data-status="active">Active</button>
               <button class="filter-chip" type="button" data-status="mitigated">Mitigated</button>
               <button class="filter-chip" type="button" data-status="resolved">Resolved</button>
@@ -102,9 +112,9 @@
       </section>
 
       <section id="historyView" class="tab-view">
-        <div class="page-heading">
-          <h2><span data-icon="history"></span>Incident History</h2>
-          <p><span id="historyTotal">0</span> total incidents</p>
+        <div class="page-heading history-heading">
+          <div><h2><span data-icon="history"></span>Incident History</h2><p><span id="historyResultCount">0 results</span><span class="history-count-divider" aria-hidden="true">·</span><span id="historyTotal">0</span> total incidents</p></div>
+          <button id="historyReloadButton" class="icon-refresh-button" type="button" data-icon="refresh" aria-label="Refresh history"></button>
         </div>
         <div class="section-title history-filters">
           <div class="filter-icon" data-icon="search"></div>
@@ -114,8 +124,6 @@
           <select id="historySessionFilter" aria-label="Session filter"><option value="all">All sessions</option></select>
           <select id="historySeverityFilter" aria-label="Severity filter"><option value="all">All severities</option></select>
           <select id="historyConfidenceFilter" aria-label="Confidence filter"><option value="all">All confidence</option></select>
-          <span id="historyResultCount" class="meta">0 results</span>
-          <button id="historyReloadButton" class="icon-refresh-button" type="button" data-icon="refresh" aria-label="Refresh history"></button>
         </div>
         <section class="panel">
           <div class="history-layout">
@@ -234,6 +242,17 @@
       <div id="historyDetail" class="history-detail"><p class="eyebrow">Selected run</p><h3 id="historyModalTitle">No analysis selected</h3><p class="meta">Choose a saved run to inspect evidence, actions, and provider mode.</p></div>
     </section>
   </div>
-  <script src="/app.js?v=20260618-e2e-trust-1"></script>
+  <div id="confirmModal" class="modal-backdrop confirm-backdrop" hidden>
+    <section class="modal-panel confirm-panel" role="alertdialog" aria-modal="true" aria-labelledby="confirmModalTitle" aria-describedby="confirmModalMessage">
+      <div class="confirm-icon" data-icon="alert"></div>
+      <h2 id="confirmModalTitle">Confirm action</h2>
+      <p id="confirmModalMessage"></p>
+      <div class="confirm-actions">
+        <button id="confirmModalCancel" class="secondary" type="button">Cancel</button>
+        <button id="confirmModalAccept" class="danger-button" type="button">Confirm</button>
+      </div>
+    </section>
+  </div>
+  <script src="/app.js?v=20260620-evidence-rag-5"></script>
 </body>
 </html>

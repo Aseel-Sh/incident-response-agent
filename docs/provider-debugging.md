@@ -9,7 +9,7 @@ RAG exceptions are converted to a degraded empty `RunbookRetrievalResult` before
 ## Effective model configuration
 
 - Provider: OpenRouter, invoked through Microsoft Agent Framework's OpenAI integration.
-- Model: `nex-agi/nex-n2-pro:free`.
+- Model: `nvidia/nemotron-3-super-120b-a12b:free` by default.
 - Base URL: `https://openrouter.ai/api/v1`.
 - API: `POST /chat/completions` with `choices[].message.content` response parsing.
 - `appsettings.json` contains no API key. The verified development environment supplied `OPENROUTER_API_KEY`. Launch profiles do not define it and the API project has no `UserSecretsId`, so launches that do not inherit that environment variable fall back before sending a request.
@@ -18,7 +18,7 @@ RAG exceptions are converted to a degraded empty `RunbookRetrievalResult` before
 
 ```json
 {
-  "model": "nex-agi/nex-n2-pro:free",
+  "model": "nvidia/nemotron-3-super-120b-a12b:free",
   "messages": [
     { "role": "system", "content": "incident analysis and JSON schema instructions" },
     { "role": "user", "content": "JSON containing incident, session, runbooks, logs, metrics, and approved similar incidents" }
@@ -54,3 +54,15 @@ The implementation defect was incomplete retry coverage. Only an empty successfu
 ## Corrected behavior
 
 Strict output is validated for JSON shape, required fields, enum fields, and numeric SEV. Empty, invalid JSON, schema-invalid, wrong-SEV, and HTTP 400/422 strict-mode rejection trigger one prompt-only JSON retry. A successful retry remains model analysis and records/displays the retry reason. Failure of both attempts reaches the resilient local fallback. Local fallback refuses to synthesize analysis when no log, metric, runbook, or approved prior incident exists.
+
+## June 20 provider investigation
+
+- The persisted 45-second failures were created by an older build whose `appsettings.json` set `AnalysisTimeoutSeconds` to 45. Current source uses 75 seconds. The cancellation originates in `ResilientIncidentAnalysisAgent.CancelAfter`, after evidence and RAG gathering and while Microsoft Agent Framework is executing the OpenRouter request.
+- The previous free model was `nex-agi/nex-n2-pro:free`. A minimal direct request took about 31.5 seconds, so a full structured agent request could exceed 45 seconds even without slow local tools. `nvidia/nemotron-3-super-120b-a12b:free` returned valid structured JSON in about 1.2 seconds with the same key and is now the default. A paid low-latency model could not be verified because the current OpenRouter key reports its total spending limit exceeded.
+- Microsoft Agent Framework is on the real path: `MicrosoftAgentFrameworkIncidentAnalysisAgent` creates a `ChatClientAgent`, registers seven `AITool` functions, creates an `AgentSession`, and calls `RunAsync`. Local analysis is invoked only by `ResilientIncidentAnalysisAgent` after missing credentials, provider failure, validation failure, or cancellation.
+- RAG was available but degraded, not unavailable. Persisted analyses contained three runbook matches while `IsDegraded=true`: SQLite retrieval succeeded using local hashing embeddings after the primary Hugging Face provider failed.
+- The Hugging Face root cause was a retired legacy endpoint: `api-inference.huggingface.co` no longer resolved during diagnosis. The provider now targets `https://router.huggingface.co/hf-inference/models/`, supports both `HF_TOKEN` and `HF_API_TOKEN`, enforces a 15-second embedding timeout, and persists a sanitized exception/status reason when local embeddings take over.
+- New provider transparency includes evidence-gathering, RAG, and model durations, fallback stage, and timeout source. Tool calls also log their individual durations.
+- Live end-to-end verification with the published app running from its content root completed in 11.3 seconds: Microsoft Agent Framework returned provider `OpenRouter`, model `nvidia/nemotron-3-super-120b-a12b:free`, `UsedFallback=false`, model duration 10.9 seconds, RAG duration 165 ms, three runbook matches, and `RagDegraded=false`.
+- Launching the published DLL from a different working directory reproduced an immediate configuration fallback (`Agent:IncidentAnalysis:Model is not configured`). Production must run from the publish directory or set `OPENROUTER_MODEL`, `OPENROUTER_BASE_URL`, and the API key explicitly.
+- With no Hugging Face token, the corrected router endpoint returned HTTP 401 in 134 ms. This proves DNS and routing work; set `HF_TOKEN` or `HF_API_TOKEN` to enable Hugging Face. Without a token, local embeddings are the configured active provider and RAG is available rather than degraded.

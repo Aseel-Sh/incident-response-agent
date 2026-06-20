@@ -15,4 +15,6 @@ public sealed record RunbookRetrievalResult
 	public bool IsDegraded { get; init; }
 
 	public string? DegradedReason { get; init; }
+
+	public long DurationMilliseconds { get; init; }
 }

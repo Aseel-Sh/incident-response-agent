@@ -8,6 +8,7 @@ internal sealed class ResilientRunbookEmbeddingProvider : IRunbookEmbeddingProvi
 	private readonly ILogger<ResilientRunbookEmbeddingProvider> _logger;
 	private readonly IRunbookEmbeddingProvider? _primary;
 	private volatile bool _useFallbackOnly;
+	private string? _failureReason;
 
 	public ResilientRunbookEmbeddingProvider(
 		IRunbookEmbeddingProvider? primary,
@@ -30,7 +31,7 @@ internal sealed class ResilientRunbookEmbeddingProvider : IRunbookEmbeddingProvi
 
 			return _useFallbackOnly
 				? $"{_primary.ProviderName}-failed/{_fallback.ProviderName}"
-				: $"{_primary.ProviderName}/{_fallback.ProviderName}-fallback";
+				: _primary.ProviderName;
 		}
 	}
 
@@ -45,7 +46,7 @@ internal sealed class ResilientRunbookEmbeddingProvider : IRunbookEmbeddingProvi
 
 			return _useFallbackOnly
 				? $"{_primary.ModelName}->fallback:{_fallback.ModelName}"
-				: $"{_primary.ModelName}|fallback:{_fallback.ModelName}";
+				: _primary.ModelName;
 		}
 	}
 
@@ -53,7 +54,9 @@ internal sealed class ResilientRunbookEmbeddingProvider : IRunbookEmbeddingProvi
 
 	public bool IsDegraded => _useFallbackOnly;
 
-	public string? DegradedReason => _useFallbackOnly ? $"Primary embedding provider {_primary?.ProviderName} failed; {_fallback.ProviderName} is serving embeddings." : null;
+	public string? DegradedReason => _useFallbackOnly
+		? $"Primary embedding provider {_primary?.ProviderName} failed ({_failureReason ?? "unknown failure"}); {_fallback.ProviderName} is serving embeddings."
+		: null;
 
 	public async Task<float[]> GenerateEmbeddingAsync(string text, CancellationToken cancellationToken = default)
 	{
@@ -71,6 +74,8 @@ internal sealed class ResilientRunbookEmbeddingProvider : IRunbookEmbeddingProvi
 			}
 
 			_logger.LogWarning("Primary embedding provider {ProviderName} returned an empty vector. Falling back to {FallbackProviderName}.", _primary.ProviderName, _fallback.ProviderName);
+			_failureReason = "empty embedding vector";
+			_useFallbackOnly = true;
 		}
 		catch (OperationCanceledException)
 		{
@@ -78,11 +83,18 @@ internal sealed class ResilientRunbookEmbeddingProvider : IRunbookEmbeddingProvi
 		}
 		catch (Exception exception)
 		{
+			_failureReason = SanitizeFailure(exception);
 			_useFallbackOnly = true;
-			_logger.LogWarning(exception, "Embedding provider failed. Provider={ProviderName} FallbackProvider={FallbackProviderName}.", _primary.ProviderName, _fallback.ProviderName);
-			_logger.LogWarning(exception, "Primary embedding provider {ProviderName} failed. Falling back to {FallbackProviderName} for this process.", _primary.ProviderName, _fallback.ProviderName);
+			_logger.LogWarning(exception, "Primary embedding provider failed. Provider={ProviderName} FailureReason={FailureReason} FallbackProvider={FallbackProviderName}.", _primary.ProviderName, _failureReason, _fallback.ProviderName);
 		}
 
 		return await _fallback.GenerateEmbeddingAsync(text, cancellationToken).ConfigureAwait(false);
+	}
+
+	private static string SanitizeFailure(Exception exception)
+	{
+		var message = string.IsNullOrWhiteSpace(exception.Message) ? exception.GetType().Name : exception.Message.ReplaceLineEndings(" ").Trim();
+		if (message.Length > 300) message = string.Concat(message.AsSpan(0, 297), "...");
+		return $"{exception.GetType().Name}: {message}";
 	}
 }

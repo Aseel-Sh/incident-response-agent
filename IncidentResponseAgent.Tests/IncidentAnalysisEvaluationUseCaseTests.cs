@@ -81,6 +81,35 @@ public sealed class IncidentAnalysisEvaluationUseCaseTests
 		}
 	}
 
+	[Fact]
+	public async Task UserSubmittedMetadataIsContextNotOperationalEvidence()
+	{
+		var incident = new Incident(
+			Guid.NewGuid(),
+			"Order fulfillment backlog",
+			"Order fulfillment jobs are piling up faster than workers can process them.",
+			IncidentSeverity.Sev3,
+			"orders-worker",
+			"production",
+			DateTimeOffset.UtcNow,
+			["orders", "queue"]);
+		var useCase = new AnalyzeIncidentUseCase(
+			new UnstructuredAgent(), new InMemorySessionStore(), new InMemoryIncidentRecordStore(),
+			new EmptyLogSearchProvider(), new EmptyMetricsProvider(),
+			new ConfigurableRunbookRetrievalService(new RunbookRetrievalResult()),
+			NullLogger<AnalyzeIncidentUseCase>.Instance);
+
+		var result = await useCase.AnalyzeAsync(incident);
+
+		Assert.Empty(result.Evidence);
+		Assert.Empty(result.KnownFacts);
+		Assert.DoesNotContain(result.Evidence, item => item.Source?.StartsWith("incident.", StringComparison.OrdinalIgnoreCase) == true);
+		Assert.Contains(result.Unknowns, item => item.Contains("controlled action", StringComparison.OrdinalIgnoreCase));
+		Assert.Contains(result.Unknowns, item => item.Contains("no matching orders-worker logs", StringComparison.OrdinalIgnoreCase));
+		Assert.Contains(result.Unknowns, item => item.Contains("no queue_depth samples", StringComparison.OrdinalIgnoreCase));
+		Assert.All(result.RecommendedActions, item => Assert.Empty(item.SupportingSignals));
+	}
+
 	private sealed class UnstructuredAgent : IIncidentAnalysisAgent
 	{
 		public Task<IncidentAgentExecutionResult> AnalyzeAsync(
@@ -278,6 +307,17 @@ public sealed class IncidentAnalysisEvaluationUseCaseTests
 				]
 			});
 		}
+	}
+
+	private sealed class EmptyLogSearchProvider : ILogSearchProvider
+	{
+		public Task<LogSearchResult> SearchAsync(LogSearchRequest request, CancellationToken cancellationToken = default) => Task.FromResult(new LogSearchResult());
+	}
+
+	private sealed class EmptyMetricsProvider : IMetricsProvider
+	{
+		public Task<MetricsQueryResult> QueryAsync(MetricsQueryRequest request, CancellationToken cancellationToken = default) =>
+			Task.FromResult(new MetricsQueryResult { MetricName = request.MetricName });
 	}
 
 	private static bool ContainsAny(string? value, params string[] terms)

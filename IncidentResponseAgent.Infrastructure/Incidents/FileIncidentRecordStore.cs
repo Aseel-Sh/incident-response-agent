@@ -484,31 +484,31 @@ public sealed class FileIncidentRecordStore : IIncidentRecordStore
 		HashSet<string> queryTokens,
 		IncidentAnalysisRecord record)
 	{
-		var candidateTokens = Tokenize(BuildIncidentText(record.Incident, record.AnalysisResult));
+		var candidateTokens = Tokenize(BuildIncidentText(record.Incident));
 		var shared = queryTokens.Intersect(candidateTokens, StringComparer.OrdinalIgnoreCase)
 			.Order(StringComparer.OrdinalIgnoreCase)
-			.Take(12)
 			.ToArray();
 
-		var score = queryTokens.Count == 0
+		var diceSimilarity = queryTokens.Count == 0 || candidateTokens.Count == 0
 			? 0d
-			: shared.Length / (double)queryTokens.Count;
+			: (2d * shared.Length) / (queryTokens.Count + candidateTokens.Count);
+		var score = diceSimilarity * 0.62;
 
 		if (!string.IsNullOrWhiteSpace(incident.ServiceName) &&
 		    string.Equals(incident.ServiceName, record.Incident.ServiceName, StringComparison.OrdinalIgnoreCase))
 		{
-			score += 0.35;
+			score += 0.22;
 		}
 
 		if (!string.IsNullOrWhiteSpace(incident.Environment) &&
 		    string.Equals(incident.Environment, record.Incident.Environment, StringComparison.OrdinalIgnoreCase))
 		{
-			score += 0.1;
+			score += 0.08;
 		}
 
 		if (incident.Severity == record.Incident.Severity)
 		{
-			score += 0.05;
+			score += 0.08;
 		}
 
 		return new SimilarIncidentMatch
@@ -520,7 +520,7 @@ public sealed class FileIncidentRecordStore : IIncidentRecordStore
 			ResolutionSummary = BuildResolutionSummary(record.AnalysisResult),
 			Score = Math.Round(Math.Min(score, 1), 4),
 			CreatedAtUtc = record.CreatedAtUtc,
-			SharedSignals = shared,
+			SharedSignals = shared.Take(12).ToArray(),
 			SuccessfulActions = record.AnalysisResult.ActionOutcomes.Where(item => item.Status is "worked" or "partial").Select(item => item.Description).ToArray(),
 			FailedActions = record.AnalysisResult.ActionOutcomes.Where(item => item.Status == "failed").Select(item => item.Description).ToArray()
 		};
@@ -612,9 +612,13 @@ public sealed class FileIncidentRecordStore : IIncidentRecordStore
 
 	private static HashSet<string> Tokenize(string value)
 	{
+		var stopWords = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+		{
+			"the", "and", "for", "with", "from", "after", "before", "into", "that", "this", "are", "was", "were", "has", "have", "had", "production", "incident"
+		};
 		return Regex.Matches(value.ToLowerInvariant(), "[a-z0-9]+")
 			.Select(match => match.Value)
-			.Where(token => token.Length > 2)
+			.Where(token => token.Length > 2 && !stopWords.Contains(token))
 			.ToHashSet(StringComparer.OrdinalIgnoreCase);
 	}
 
