@@ -40,13 +40,16 @@ export default defineConfig({
       'Runbooks__SemanticRetrieval__Endpoint': 'http://127.0.0.1:5199/embeddings',
       'Runbooks__SemanticRetrieval__Model': 'fixture-embedding',
       'Runbooks__SemanticRetrieval__KnowledgeBasePath': '.tmp/e2e-ai/knowledge',
+      'Runbooks__SemanticRetrieval__SourceRegistryPath': '.tmp/e2e-ai/runbook-sources.json',
       'Runbooks__SemanticRetrieval__VectorStoreProvider': 'SQLite',
       'Runbooks__SemanticRetrieval__DatabasePath': '.tmp/e2e-ai/rag.sqlite',
       'Runbooks__SemanticRetrieval__MinimumRelevanceScore': '0.95',
       'Storage__Incidents__SessionDatabasePath': '.tmp/e2e-ai/sessions.sqlite',
       'Storage__Incidents__IncidentRecordsPath': '.tmp/e2e-ai/incidents.json',
       'Tools__OperationalData__LogEntriesPath': '.tmp/e2e-ai/logs.json',
-      'Tools__OperationalData__MetricSamplesPath': '.tmp/e2e-ai/metrics.json'
+      'Tools__OperationalData__MetricSamplesPath': '.tmp/e2e-ai/metrics.json',
+      'Monitoring__Enabled': 'false',
+      'Monitoring__StatePath': '.tmp/e2e-ai/monitoring-state.json'
     }
   },
   projects: [{ name: 'chromium-ai', use: { ...devices['Desktop Chrome'] } }]

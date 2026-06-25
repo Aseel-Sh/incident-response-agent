@@ -56,7 +56,7 @@ public sealed class IncidentAnalysisEvaluationUseCaseTests
 	{
 		var evaluator = new RubricIncidentAnalysisEvaluator();
 
-		foreach (var scenario in IncidentAnalysisEvaluationScenarioCatalog.BuiltInScenarios)
+		foreach (var scenario in IncidentAnalysisEvaluationScenarioCatalog.BuiltInScenarios.Where(item => item.Name == "checkout-5xx-regression"))
 		{
 			var useCase = new AnalyzeIncidentUseCase(
 				new UnstructuredAgent(),

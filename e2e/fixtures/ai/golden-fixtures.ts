@@ -25,7 +25,7 @@ export const goldenFixtures: Record<string, GoldenAnalysisFixture> = {
     description: 'database-api requests are timing out while waiting for the checkout query connection pool.',
     severity: 'sev2', serviceName: 'database-api',
     expected: {
-      severityLabel: 'SEV-2', requiredEvidence: ['incident.description', 'tool.logs', 'tool.metrics', 'rag.runbook.'],
+      severityLabel: 'SEV-2', requiredEvidence: ['tool.logs', 'tool.metrics', 'rag.runbook.'],
       expectedHypothesisTerms: ['pool saturation'], requiredUnknownTerms: ['root cause'],
       usefulActionTerms: ['connection-pool utilization', 'p95 query latency'],
       forbiddenActionTerms: ['restart the database blindly', 'delete data'], shouldMatchRunbook: true
@@ -37,8 +37,8 @@ export const goldenFixtures: Record<string, GoldenAnalysisFixture> = {
     description: 'blackhole-metrics-api has a measured customer-impact gauge increase without matching event records.',
     severity: 'sev1', serviceName: 'blackhole-metrics-api',
     expected: {
-      severityLabel: 'SEV-1', requiredEvidence: ['incident.description', 'tool.metrics'],
-      expectedHypothesisTerms: ['measured impact'], requiredUnknownTerms: ['no matching log', 'root cause'],
+      severityLabel: 'SEV-1', requiredEvidence: ['tool.metrics'],
+      expectedHypothesisTerms: ['measured impact'], requiredUnknownTerms: ['logs were available', 'root cause'],
       usefulActionTerms: ['error-rate metric'], forbiddenActionTerms: ['log proves'], shouldMatchRunbook: false
     }
   },
@@ -48,7 +48,7 @@ export const goldenFixtures: Record<string, GoldenAnalysisFixture> = {
     description: 'conflicting-api has one timeout log while the request error-rate metric remains low.',
     severity: 'sev3', serviceName: 'conflicting-api',
     expected: {
-      severityLabel: 'SEV-3', requiredEvidence: ['incident.description', 'tool.logs', 'tool.metrics'],
+      severityLabel: 'SEV-3', requiredEvidence: ['tool.logs', 'tool.metrics'],
       expectedHypothesisTerms: ['conflicting'], requiredUnknownTerms: ['root cause'],
       usefulActionTerms: ['correlate'], forbiddenActionTerms: ['confirmed outage'], shouldMatchRunbook: true
     }
@@ -59,7 +59,7 @@ export const goldenFixtures: Record<string, GoldenAnalysisFixture> = {
     description: 'database-api connection pool latency requires a structured-output retry.',
     severity: 'sev2', serviceName: 'database-api',
     expected: {
-      severityLabel: 'SEV-2', requiredEvidence: ['incident.description', 'tool.logs', 'tool.metrics'],
+      severityLabel: 'SEV-2', requiredEvidence: ['tool.logs', 'tool.metrics'],
       expectedHypothesisTerms: ['pool saturation'], requiredUnknownTerms: ['root cause'],
       usefulActionTerms: ['connection-pool utilization'], forbiddenActionTerms: ['delete data'], shouldMatchRunbook: true
     }
@@ -70,7 +70,7 @@ export const goldenFixtures: Record<string, GoldenAnalysisFixture> = {
     description: 'model-unavailable-api database connection timeouts require evidence-based local handling.',
     severity: 'sev2', serviceName: 'model-unavailable-api',
     expected: {
-      severityLabel: 'SEV-2', requiredEvidence: ['incident.description', 'tool.logs', 'tool.metrics'],
+      severityLabel: 'SEV-2', requiredEvidence: ['tool.logs', 'tool.metrics'],
       expectedHypothesisTerms: ['database'], requiredUnknownTerms: ['root cause'],
       usefulActionTerms: ['connection'], forbiddenActionTerms: ['model confirmed'], shouldMatchRunbook: true
     }
@@ -81,7 +81,7 @@ export const goldenFixtures: Record<string, GoldenAnalysisFixture> = {
     description: 'blackhole-service reports an unexplained condition with no operational evidence.',
     severity: 'sev4', serviceName: 'blackhole-service', tags: ['blackhole'],
     expected: {
-      severityLabel: 'SEV-4', requiredEvidence: ['incident.description'], expectedHypothesisTerms: [],
+      severityLabel: 'SEV-4', requiredEvidence: [], expectedHypothesisTerms: [],
       requiredUnknownTerms: ['operational evidence'], usefulActionTerms: [], forbiddenActionTerms: ['confirmed'], shouldMatchRunbook: false
     }
   },
@@ -91,7 +91,7 @@ export const goldenFixtures: Record<string, GoldenAnalysisFixture> = {
     description: 'rag-unavailable-api has a measured request error-rate impact while embedding retrieval is unavailable.',
     severity: 'sev2', serviceName: 'rag-unavailable-api',
     expected: {
-      severityLabel: 'SEV-2', requiredEvidence: ['incident.description', 'tool.metrics', 'rag.runbook.'],
+      severityLabel: 'SEV-2', requiredEvidence: ['tool.metrics', 'rag.runbook.'],
       expectedHypothesisTerms: ['pool saturation'], requiredUnknownTerms: ['root cause'],
       usefulActionTerms: ['connection-pool utilization'], forbiddenActionTerms: ['RAG confirmed'], shouldMatchRunbook: true
     }

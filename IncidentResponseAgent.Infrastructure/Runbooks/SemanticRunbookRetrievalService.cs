@@ -9,7 +9,7 @@ using Microsoft.Extensions.Options;
 
 namespace IncidentResponseAgent.Infrastructure.Runbooks;
 
-public sealed class SemanticRunbookRetrievalService : IRunbookRetrievalService, IRunbookRetrievalDiagnosticsService
+public sealed class SemanticRunbookRetrievalService : IRunbookRetrievalService, IRunbookRetrievalDiagnosticsService, IRunbookSourceManagementService
 {
 	private const string IndexVersion = "rag-index-v2";
 	private static readonly JsonSerializerOptions SerializerOptions = new(JsonSerializerDefaults.Web);
@@ -18,6 +18,7 @@ public sealed class SemanticRunbookRetrievalService : IRunbookRetrievalService, 
 	private readonly RunbookRetrievalOptions _options;
 	private readonly QdrantRunbookVectorStore? _qdrantVectorStore;
 	private readonly SemaphoreSlim _indexLock = new(1, 1);
+	private readonly SemaphoreSlim _registryLock = new(1, 1);
 	private bool _isInitialized;
 	private string? _sourceFingerprint;
 
@@ -123,6 +124,87 @@ public sealed class SemanticRunbookRetrievalService : IRunbookRetrievalService, 
 		};
 	}
 
+	public async Task<IReadOnlyList<RunbookSourceStatus>> GetSourcesAsync(CancellationToken cancellationToken = default)
+	{
+		var registrations = await LoadSourceRegistrationsAsync(cancellationToken).ConfigureAwait(false);
+		return registrations.Select(ToSourceStatus).ToArray();
+	}
+
+	public async Task<RunbookSourceStatus> AddSourceAsync(RunbookSourceInput input, CancellationToken cancellationToken = default)
+	{
+		ArgumentNullException.ThrowIfNull(input);
+		var name = string.IsNullOrWhiteSpace(input.Name) ? throw new ArgumentException("Source name is required.", nameof(input)) : input.Name.Trim();
+		var type = NormalizeSourceType(input.Type);
+		var path = ResolveSourceDirectory(input.Path);
+		ValidateSourcePath(type, path);
+
+		await _registryLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+		try
+		{
+			var registrations = (await ReadCustomSourceRegistrationsAsync(cancellationToken).ConfigureAwait(false)).ToList();
+			if (registrations.Any(item => string.Equals(item.Path, path, StringComparison.OrdinalIgnoreCase)))
+			{
+				throw new InvalidOperationException("That runbook directory is already connected.");
+			}
+			var registration = new RunbookSourceRegistration
+			{
+				Id = $"source-{Guid.NewGuid():N}", Name = name, Type = type, Path = path, Enabled = true
+			};
+			registrations.Add(registration);
+			await WriteSourceRegistrationsAsync(registrations, cancellationToken).ConfigureAwait(false);
+			InvalidateIndex();
+			return ToSourceStatus(registration);
+		}
+		finally { _registryLock.Release(); }
+	}
+
+	public async Task<RunbookSourceStatus> SetEnabledAsync(string sourceId, bool enabled, CancellationToken cancellationToken = default)
+	{
+		await _registryLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+		try
+		{
+			var registrations = (await ReadCustomSourceRegistrationsAsync(cancellationToken).ConfigureAwait(false)).ToList();
+			var index = registrations.FindIndex(item => string.Equals(item.Id, sourceId, StringComparison.OrdinalIgnoreCase));
+			if (index < 0) throw new KeyNotFoundException($"Runbook source {sourceId} was not found or is managed by configuration.");
+			registrations[index] = registrations[index] with { Enabled = enabled, LastError = null };
+			await WriteSourceRegistrationsAsync(registrations, cancellationToken).ConfigureAwait(false);
+			InvalidateIndex();
+			return ToSourceStatus(registrations[index]);
+		}
+		finally { _registryLock.Release(); }
+	}
+
+	public async Task<RunbookSourceStatus> SynchronizeAsync(string sourceId, CancellationToken cancellationToken = default)
+	{
+		var registrations = await LoadSourceRegistrationsAsync(cancellationToken).ConfigureAwait(false);
+		var registration = registrations.FirstOrDefault(item => string.Equals(item.Id, sourceId, StringComparison.OrdinalIgnoreCase))
+			?? throw new KeyNotFoundException($"Runbook source {sourceId} was not found.");
+		ValidateSourcePath(registration.Type, registration.Path);
+		InvalidateIndex();
+		await EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
+		var synchronized = registration with { LastSynchronizedAtUtc = DateTimeOffset.UtcNow, LastError = null };
+		if (registration.Removable)
+		{
+			await UpdateCustomRegistrationAsync(synchronized, cancellationToken).ConfigureAwait(false);
+		}
+		return ToSourceStatus(synchronized);
+	}
+
+	public async Task<bool> RemoveSourceAsync(string sourceId, CancellationToken cancellationToken = default)
+	{
+		await _registryLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+		try
+		{
+			var registrations = (await ReadCustomSourceRegistrationsAsync(cancellationToken).ConfigureAwait(false)).ToList();
+			var removed = registrations.RemoveAll(item => string.Equals(item.Id, sourceId, StringComparison.OrdinalIgnoreCase)) > 0;
+			if (!removed) return false;
+			await WriteSourceRegistrationsAsync(registrations, cancellationToken).ConfigureAwait(false);
+			InvalidateIndex();
+			return true;
+		}
+		finally { _registryLock.Release(); }
+	}
+
 	private async Task<ScoredRetrieval> GetScoredMatchesAsync(
 		string query,
 		string? serviceName,
@@ -214,7 +296,7 @@ public sealed class SemanticRunbookRetrievalService : IRunbookRetrievalService, 
 		{
 			cancellationToken.ThrowIfCancellationRequested();
 
-			var document = ParseDocument(source.Path, source.Content);
+			var document = ParseDocument(source);
 			currentDocumentIds.Add(document.Id);
 			var contentHash = ComputeHash($"{IndexVersion}\n{source.Content}");
 			var existingState = await GetExistingDocumentIndexStateAsync(connection, document.Id, cancellationToken).ConfigureAwait(false);
@@ -583,16 +665,16 @@ create index if not exists ix_runbook_documents_content_hash on runbook_document
 
 	private IReadOnlyList<RunbookSource> LoadRunbookSources()
 	{
-		var directory = ResolveKnowledgeBasePath();
-		if (!Directory.Exists(directory))
+		var sources = new List<RunbookSource>();
+		foreach (var registration in LoadSourceRegistrations())
 		{
-			return Array.Empty<RunbookSource>();
+			if (!registration.Enabled || !Directory.Exists(registration.Path)) continue;
+			foreach (var path in EnumerateMarkdownFiles(registration.Path))
+			{
+				sources.Add(new RunbookSource(registration.Id, registration.Path, path, File.ReadAllText(path), registration.Removable));
+			}
 		}
-
-		return Directory.EnumerateFiles(directory, "*.md", SearchOption.TopDirectoryOnly)
-			.OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
-			.Select(path => new RunbookSource(path, File.ReadAllText(path)))
-			.ToArray();
+		return sources;
 	}
 
 	private string ResolveKnowledgeBasePath()
@@ -614,27 +696,29 @@ create index if not exists ix_runbook_documents_content_hash on runbook_document
 
 	private string ComputeSourceFingerprint()
 	{
-		var directory = ResolveKnowledgeBasePath();
-		if (!Directory.Exists(directory)) return "missing";
-		var state = Directory.EnumerateFiles(directory, "*.md", SearchOption.TopDirectoryOnly)
+		var state = LoadSourceRegistrations()
+			.Where(item => item.Enabled)
+			.SelectMany(item => Directory.Exists(item.Path)
+				? EnumerateMarkdownFiles(item.Path)
+				: Array.Empty<string>())
 			.OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
-			.Select(path =>
-			{
-				var info = new FileInfo(path);
-				return $"{info.FullName}|{info.Length}|{info.LastWriteTimeUtc.Ticks}";
-			});
+			.Select(path => { var info = new FileInfo(path); return $"{info.FullName}|{info.Length}|{info.LastWriteTimeUtc.Ticks}"; });
 		return ComputeHash(string.Join('\n', state));
 	}
 
-	private static RunbookDocument ParseDocument(string filePath, string content)
+	private static RunbookDocument ParseDocument(RunbookSource source)
 	{
+		var filePath = source.Path;
+		var content = source.Content;
 		var fileName = Path.GetFileNameWithoutExtension(filePath);
+		var relativeName = Path.ChangeExtension(Path.GetRelativePath(source.RootPath, filePath), null)?.Replace('\\', '-').Replace('/', '-') ?? fileName;
+		var documentId = source.IsManaged ? $"{source.SourceId}--{relativeName}" : fileName;
 		var lines = content.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None);
 		var title = lines.FirstOrDefault(line => line.StartsWith("# ", StringComparison.Ordinal))?.TrimStart('#', ' ').Trim() ?? fileName;
 		var summary = ExtractPurpose(lines) ?? ExtractSummary(lines) ?? title;
 		var tags = ExtractTags(lines);
 
-		return new RunbookDocument(fileName, title, summary, content, tags);
+		return new RunbookDocument(documentId, title, summary, content, tags);
 	}
 
 	private static string? ExtractPurpose(string[] lines)
@@ -754,6 +838,130 @@ create index if not exists ix_runbook_documents_content_hash on runbook_document
 	{
 		return string.Equals(options.VectorStoreProvider, "Qdrant", StringComparison.OrdinalIgnoreCase);
 	}
+
+	private void InvalidateIndex()
+	{
+		_isInitialized = false;
+		_sourceFingerprint = null;
+	}
+
+	private IReadOnlyList<RunbookSourceRegistration> LoadSourceRegistrations()
+	{
+		var configured = new RunbookSourceRegistration
+		{
+			Id = "configured-primary",
+			Name = string.IsNullOrWhiteSpace(_options.KnowledgeBasePath) ? "Bundled runbooks" : "Configured runbook directory",
+			Type = "directory",
+			Path = ResolveKnowledgeBasePath(),
+			Enabled = true,
+			Removable = false
+		};
+		try
+		{
+			var path = ResolveSourceRegistryPath();
+			if (!File.Exists(path)) return [configured];
+			var json = File.ReadAllText(path);
+			var custom = JsonSerializer.Deserialize<RunbookSourceRegistration[]>(json, SerializerOptions) ?? [];
+			return [configured, .. custom.Select(item => item with { Removable = true })];
+		}
+		catch (Exception exception)
+		{
+			_logger.LogWarning(exception, "Could not read the runbook source registry. The configured primary source remains available.");
+			return [configured];
+		}
+	}
+
+	private Task<IReadOnlyList<RunbookSourceRegistration>> LoadSourceRegistrationsAsync(CancellationToken cancellationToken)
+	{
+		cancellationToken.ThrowIfCancellationRequested();
+		return Task.FromResult(LoadSourceRegistrations());
+	}
+
+	private async Task<IReadOnlyList<RunbookSourceRegistration>> ReadCustomSourceRegistrationsAsync(CancellationToken cancellationToken)
+	{
+		var path = ResolveSourceRegistryPath();
+		if (!File.Exists(path)) return Array.Empty<RunbookSourceRegistration>();
+		await using var stream = File.OpenRead(path);
+		return await JsonSerializer.DeserializeAsync<RunbookSourceRegistration[]>(stream, SerializerOptions, cancellationToken).ConfigureAwait(false) ?? [];
+	}
+
+	private async Task WriteSourceRegistrationsAsync(IReadOnlyCollection<RunbookSourceRegistration> registrations, CancellationToken cancellationToken)
+	{
+		var path = ResolveSourceRegistryPath();
+		Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+		await using var stream = File.Create(path);
+		await JsonSerializer.SerializeAsync(stream, registrations, SerializerOptions, cancellationToken).ConfigureAwait(false);
+	}
+
+	private async Task UpdateCustomRegistrationAsync(RunbookSourceRegistration registration, CancellationToken cancellationToken)
+	{
+		await _registryLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+		try
+		{
+			var registrations = (await ReadCustomSourceRegistrationsAsync(cancellationToken).ConfigureAwait(false)).ToList();
+			var index = registrations.FindIndex(item => string.Equals(item.Id, registration.Id, StringComparison.OrdinalIgnoreCase));
+			if (index >= 0)
+			{
+				registrations[index] = registration with { Removable = false };
+				await WriteSourceRegistrationsAsync(registrations, cancellationToken).ConfigureAwait(false);
+			}
+		}
+		finally { _registryLock.Release(); }
+	}
+
+	private RunbookSourceStatus ToSourceStatus(RunbookSourceRegistration registration)
+	{
+		var reachable = Directory.Exists(registration.Path) && (registration.Type != "git" || Directory.Exists(Path.Combine(registration.Path, ".git")));
+		var documents = reachable ? EnumerateMarkdownFiles(registration.Path).ToArray() : [];
+		var sectionCount = 0;
+		foreach (var path in documents)
+		{
+			try
+			{
+				var source = new RunbookSource(registration.Id, registration.Path, path, File.ReadAllText(path), registration.Removable);
+				sectionCount += MarkdownRunbookChunker.Chunk(ParseDocument(source)).Count;
+			}
+			catch { }
+		}
+		return new RunbookSourceStatus
+		{
+			Id = registration.Id, Name = registration.Name, Type = registration.Type, Path = registration.Path,
+			Enabled = registration.Enabled, Reachable = reachable, Removable = registration.Removable,
+			DocumentCount = documents.Length, SectionCount = sectionCount,
+			LastSynchronizedAtUtc = registration.LastSynchronizedAtUtc,
+			LastError = reachable ? registration.LastError : registration.Type == "git" ? "Path is missing or is not a Git working tree." : "Directory is unavailable."
+		};
+	}
+
+	private string ResolveSourceRegistryPath()
+	{
+		if (!string.IsNullOrWhiteSpace(_options.SourceRegistryPath))
+			return Path.GetFullPath(Environment.ExpandEnvironmentVariables(_options.SourceRegistryPath));
+		return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "IncidentResponseAgent", "runbook-sources.json");
+	}
+
+	private static string NormalizeSourceType(string? type)
+	{
+		var normalized = type?.Trim().ToLowerInvariant();
+		return normalized is "directory" or "git" ? normalized : throw new ArgumentException("Runbook source type must be directory or git.", nameof(type));
+	}
+
+	private static string ResolveSourceDirectory(string? path)
+	{
+		if (string.IsNullOrWhiteSpace(path)) throw new ArgumentException("Runbook source path is required.", nameof(path));
+		return Path.GetFullPath(Environment.ExpandEnvironmentVariables(path.Trim()));
+	}
+
+	private static void ValidateSourcePath(string type, string path)
+	{
+		if (!Directory.Exists(path)) throw new InvalidOperationException($"Runbook source directory does not exist: {path}");
+		if (type == "git" && !Directory.Exists(Path.Combine(path, ".git"))) throw new InvalidOperationException($"Git runbook source is not a Git working tree: {path}");
+	}
+
+	private static IEnumerable<string> EnumerateMarkdownFiles(string directory) =>
+		Directory.EnumerateFiles(directory, "*.md", SearchOption.AllDirectories)
+			.Where(path => !Path.GetRelativePath(directory, path).Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).Contains(".history", StringComparer.OrdinalIgnoreCase))
+			.OrderBy(path => path, StringComparer.OrdinalIgnoreCase);
 
 	private ScoredRunbookChunk ToScoredRunbookChunk(
 		QdrantRunbookMatch match,
@@ -931,7 +1139,19 @@ create index if not exists ix_runbook_documents_content_hash on runbook_document
 		return Convert.ToHexString(bytes);
 	}
 
-	private sealed record RunbookSource(string Path, string Content);
+	private sealed record RunbookSource(string SourceId, string RootPath, string Path, string Content, bool IsManaged);
+
+	private sealed record RunbookSourceRegistration
+	{
+		public required string Id { get; init; }
+		public required string Name { get; init; }
+		public required string Type { get; init; }
+		public required string Path { get; init; }
+		public bool Enabled { get; init; } = true;
+		public bool Removable { get; init; }
+		public DateTimeOffset? LastSynchronizedAtUtc { get; init; }
+		public string? LastError { get; init; }
+	}
 
 	private sealed record RunbookDocumentIndexState(string ContentHash, string EmbeddingProvider, string EmbeddingModel);
 

@@ -10,6 +10,7 @@ public sealed class IncidentAnalysisEvaluationScenarioCatalogTests
 		var scenarios = IncidentAnalysisEvaluationScenarioCatalog.BuiltInScenarios;
 
 		Assert.NotEmpty(scenarios);
+		Assert.Equal(12, scenarios.Count);
 		Assert.Contains(scenarios, scenario => scenario.Name == "checkout-5xx-regression");
 		Assert.All(scenarios, scenario =>
 		{

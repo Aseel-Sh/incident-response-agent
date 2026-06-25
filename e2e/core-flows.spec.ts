@@ -32,9 +32,9 @@ test.describe.serial('incident response core flows', () => {
     await themeButton.click();
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
 
-    for (const tab of ['Dashboard', 'Analysis', 'History', 'Sources', 'Ingestion', 'RAG', 'Evaluation', 'Monitor', 'Config']) {
+    for (const [tab, view] of Object.entries({ Dashboard: 'dashboard', Analysis: 'analysis', History: 'history', Sources: 'sources', Diagnostics: 'ingestion', RAG: 'rag', Evaluation: 'evaluation', Monitor: 'monitor', Config: 'config' })) {
       await page.getByRole('button', { name: tab, exact: true }).click();
-      await expect(page.locator(`#${tab.toLowerCase()}View`)).toHaveClass(/active/);
+      await expect(page.locator(`#${view}View`)).toHaveClass(/active/);
     }
 
     await expect(page.locator('#configOutput')).toContainText('App Mode');
@@ -232,7 +232,7 @@ test.describe.serial('incident response core flows', () => {
     await openHistory(page);
     await expect(page.locator('.history-heading #historyResultCount')).toBeVisible();
     await expect(page.locator('.history-heading #historyReloadButton')).toBeVisible();
-    await expect(page.locator('#historyStatusFilter option')).toHaveText(['All statuses', 'Confirmed', 'Active', 'Mitigated', 'Resolved']);
+    await expect(page.locator('#historyStatusFilter option')).toHaveText(['All statuses', 'Confirmed', 'Active', 'Mitigated', 'Resolved', 'Recovered']);
     await page.route('**/api/incidents/recent?maxResults=12', async route => {
       await new Promise(resolve => setTimeout(resolve, 250));
       await route.continue();

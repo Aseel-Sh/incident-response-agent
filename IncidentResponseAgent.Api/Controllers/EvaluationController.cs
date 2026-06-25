@@ -17,6 +17,7 @@ public sealed class EvaluationController : ControllerBase
 			{
 				Name = scenario.Name,
 				Title = scenario.Incident.Title,
+				Description = scenario.Incident.Description,
 				Severity = scenario.Incident.Severity.ToString(),
 				ServiceName = scenario.Incident.ServiceName,
 				Environment = scenario.Incident.Environment,

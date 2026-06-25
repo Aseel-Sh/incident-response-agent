@@ -127,6 +127,27 @@ public sealed class FileIncidentRecordStore : IIncidentRecordStore
 			foreach (var candidate in candidates)
 			{
 				if (state.Candidates.Any(item => item.Id == candidate.Id)) continue;
+				var existingCandidateIndex = state.Candidates.FindIndex(item =>
+					item.Status == "candidate" &&
+					!item.Source.Contains("manual", StringComparison.OrdinalIgnoreCase) &&
+					string.Equals(item.ServiceName, candidate.ServiceName, StringComparison.OrdinalIgnoreCase) &&
+					string.Equals(item.Environment, candidate.Environment, StringComparison.OrdinalIgnoreCase));
+				if (existingCandidateIndex >= 0)
+				{
+					var existing = state.Candidates[existingCandidateIndex];
+					state.Candidates[existingCandidateIndex] = existing with
+					{
+						Title = candidate.Title,
+						Description = candidate.Description,
+						Severity = (IncidentSeverity)Math.Min((int)existing.Severity, (int)candidate.Severity),
+						DetectedAtUtc = candidate.DetectedAtUtc,
+						Source = string.Join(", ", new[] { existing.Source, candidate.Source }.SelectMany(value => value.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)).Distinct(StringComparer.OrdinalIgnoreCase)),
+						Signals = existing.Signals.Concat(candidate.Signals).Distinct(StringComparer.OrdinalIgnoreCase).Take(12).ToArray(),
+						SuggestedTags = existing.SuggestedTags.Concat(candidate.SuggestedTags).Distinct(StringComparer.OrdinalIgnoreCase).Take(10).ToArray(),
+						Timeline = existing.Timeline.Append(Event("candidate detected", $"Additional observable signals detected from {candidate.Source} during monitoring scan {scan.Id}.", candidate.DetectedAtUtc, evidenceReference: string.Join(", ", candidate.Signals))).Append(Event("scan completed", $"Monitoring scan {scan.Id} refreshed this candidate without creating a duplicate.", scan.CompletedAtUtc)).ToArray()
+					};
+					continue;
+				}
 				var probe = ToIncident(candidate);
 				var active = records.Values.Where(record => record.Status is "new" or "active" or "mitigated").ToArray();
 				var duplicate = active.FirstOrDefault(record => SameScope(probe, record.Incident));
@@ -141,6 +162,15 @@ public sealed class FileIncidentRecordStore : IIncidentRecordStore
 						Event("scan completed", $"Monitoring scan {scan.Id} completed with {scan.CandidateCount} candidate(s).", scan.CompletedAtUtc)
 					]
 				});
+			}
+			if (scan.Status == "completed" && scan.ErrorCount == 0)
+			{
+				var activeScopes = candidates.Select(item => $"{item.ServiceName}|{item.Environment}").ToHashSet(StringComparer.OrdinalIgnoreCase);
+				state.Candidates = state.Candidates.Select(existing =>
+				{
+					if (existing.Status != "candidate" || existing.Source.Contains("manual", StringComparison.OrdinalIgnoreCase) || activeScopes.Contains($"{existing.ServiceName}|{existing.Environment}")) return existing;
+					return existing with { Status = "recovered", Timeline = existing.Timeline.Append(Event("recovered", "Observable signals returned below detection thresholds on a successful monitoring scan.", scan.CompletedAtUtc)).ToArray() };
+				}).ToList();
 			}
 			state.Scans.Add(scan);
 			state.Scans = state.Scans.OrderByDescending(item => item.CompletedAtUtc).Take(100).ToList();
@@ -287,7 +317,7 @@ public sealed class FileIncidentRecordStore : IIncidentRecordStore
 			await WriteRecordsAsync(records.Values, cancellationToken);
 			if (_approvedKnowledgePublisher is not null && normalized == "approved")
 			{
-				await _approvedKnowledgePublisher.PublishAsync(updatedProposal.Id, updatedProposal.Title, updatedProposal.Content, cancellationToken);
+				await _approvedKnowledgePublisher.PublishAsync(updatedProposal.Id, incidentId, updatedProposal.Title, updatedProposal.Content, cancellationToken);
 			}
 			return updatedProposal;
 		}

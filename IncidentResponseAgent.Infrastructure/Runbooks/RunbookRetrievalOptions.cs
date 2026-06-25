@@ -8,6 +8,8 @@ public sealed class RunbookRetrievalOptions
 
 	public string? KnowledgeBasePath { get; init; }
 
+	public string? SourceRegistryPath { get; init; }
+
 	public string QdrantEndpoint { get; init; } = "http://localhost:6333";
 
 	public string QdrantCollectionName { get; init; } = "incident_runbook_chunks";

@@ -130,6 +130,12 @@ test.describe.serial('@learning safe feedback, outcomes, knowledge approval, and
     await page.getByRole('alertdialog').getByRole('button', { name: 'Approve and publish' }).click();
     expect((await reviewed).ok()).toBeTruthy();
     await expect(dialog).toContainText('approved');
+    await expect(dialog).toContainText('Published to runbook knowledge');
+    await expect(dialog).toContainText(/approved-[a-f0-9]{32}\.md/);
+    await dialog.getByRole('button', { name: 'View published runbook in RAG' }).click();
+    await expect(page.locator('#ragView')).toHaveClass(/active/);
+    await expect(page.locator('#ragSummary')).toContainText('RAG Status available');
+    await expect(page.locator('#ragResults')).toContainText(/approved-[a-f0-9]{32}\.md/);
 
     const stored = (await recentIncidents(request)).find(item => item.incidentId === approved.incidentId);
     expect(stored.actionOutcomes.map((item: any) => item.status)).toEqual(['worked', 'partial', 'failed']);

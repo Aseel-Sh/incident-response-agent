@@ -7,6 +7,7 @@ const logsPath = resolve('.tmp/e2e-data/logs.json');
 const metricsPath = resolve('.tmp/e2e-data/metrics.json');
 const recordsPath = resolve('.tmp/e2e-data/incident-records.json');
 const workflowPath = resolve('.tmp/e2e-data/incident-records-workflow.json');
+let signalTimestamp = '';
 
 const fixtures = {
   errorRate: { metricName: 'request_error_rate', serviceName: 'error-api', environment: 'production', value: 45 },
@@ -17,7 +18,7 @@ const fixtures = {
 
 async function ingestMetric(request: any, fixture: Record<string, unknown>) {
   const response = await request.post('/api/signals/metrics', {
-    data: { ...fixture, timestamp: '2026-06-19T12:00:00Z' }
+    data: { ...fixture, timestamp: signalTimestamp }
   });
   expect(response.status()).toBe(202);
 }
@@ -36,6 +37,7 @@ test.describe.serial('@monitoring source ingestion and automatic detection', () 
   let mergedCandidateId = '';
 
   test.beforeAll(async () => {
+    signalTimestamp = new Date().toISOString();
     await Promise.all([
       rm(recordsPath, { force: true }),
       rm(workflowPath, { force: true }),
@@ -59,25 +61,25 @@ test.describe.serial('@monitoring source ingestion and automatic detection', () 
 
     const before = Date.now();
     const scanResponsePromise = page.waitForResponse(response =>
-      response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/incidents/scan');
+      response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/monitoring/scan');
     await page.getByRole('button', { name: 'Manual Refresh' }).click();
     const scanResponse = await scanResponsePromise;
     expect(scanResponse.ok()).toBeTruthy();
     const scanPayload = await scanResponse.json();
-    const completedAt = new Date(scanPayload.scan.completedAtUtc).getTime();
+    const completedAt = new Date(scanPayload.lastScan.completedAtUtc).getTime();
     expect(completedAt).toBeGreaterThanOrEqual(before);
     expect(completedAt).toBeLessThanOrEqual(Date.now());
-    expect(scanPayload.scan.scannedSourceCount).toBe(2);
-    expect(scanPayload.scan.errorCount).toBe(0);
-    expect(scanPayload.scan.durationMilliseconds).toBeGreaterThanOrEqual(0);
+    expect(scanPayload.lastScan.scannedSourceCount).toBe(2);
+    expect(scanPayload.lastScan.errorCount).toBe(0);
+    expect(scanPayload.lastScan.durationMilliseconds).toBeGreaterThanOrEqual(0);
     await expect(page.locator('#lastScan')).toContainText('Scanned 2 sources');
-    await expect(page.locator('#lastScan')).toContainText(`${scanPayload.scan.candidateCount} signals`);
+    await expect(page.locator('#lastScan')).toContainText(`${scanPayload.lastScan.candidateCount} signals`);
     await expect(page.locator('#lastScan')).toContainText('0 errors');
-    await expect(page.locator('#lastScan')).toContainText(`${(scanPayload.scan.durationMilliseconds / 1000).toFixed(1)}s`);
+    await expect(page.locator('#lastScan')).toContainText(`${(scanPayload.lastScan.durationMilliseconds / 1000).toFixed(1)}s`);
 
-    const storedScan = await request.get('/api/incidents/monitoring/last-scan');
+    const storedScan = await request.get('/api/monitoring/state');
     expect(storedScan.ok()).toBeTruthy();
-    expect((await storedScan.json()).scan.id).toBe(scanPayload.scan.id);
+    expect((await storedScan.json()).lastScan.id).toBe(scanPayload.lastScan.id);
     const localScan = await page.evaluate(() => JSON.parse(localStorage.getItem('incidentops.lastScan') || 'null'));
     expect(new Date(localScan.scannedAt).getTime()).toBe(completedAt);
 
@@ -118,10 +120,10 @@ test.describe.serial('@monitoring source ingestion and automatic detection', () 
     await expect(metricCard).not.toContainText('connected');
     await page.getByRole('button', { name: 'Monitor', exact: true }).click();
     const degradedScanPromise = page.waitForResponse(response =>
-      response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/incidents/scan');
+      response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/monitoring/scan');
     await page.getByRole('button', { name: 'Manual Refresh' }).click();
     const degradedScan = await (await degradedScanPromise).json();
-    expect(degradedScan.scan.errorCount).toBe(1);
+    expect(degradedScan.lastScan.errorCount).toBe(1);
     await expect(page.locator('#lastScan')).toContainText('1 errors');
     await writeFile(metricsPath, '[]\n');
   });
@@ -138,7 +140,7 @@ test.describe.serial('@monitoring source ingestion and automatic detection', () 
     duplicateIncidentId = duplicate.incidentId;
 
     await page.goto('/');
-    await page.getByRole('button', { name: 'Ingestion', exact: true }).click();
+    await page.getByRole('button', { name: 'Diagnostics', exact: true }).click();
     const logForm = page.locator('#logSignalForm');
     await logForm.locator('[name="source"]').fill('warning-api');
     await logForm.locator('[name="level"]').selectOption('Warning');
@@ -148,7 +150,7 @@ test.describe.serial('@monitoring source ingestion and automatic detection', () 
     expect((await logAccepted).status()).toBe(202);
     await expect(page.locator('#ingestionFeedback')).toContainText('Log accepted');
     await ingestLog(request, {
-      timestamp: '2026-06-19T12:00:01Z', source: 'warning-api', level: 'Warning',
+      timestamp: signalTimestamp, source: 'warning-api', level: 'Warning',
       message: 'production latency warning repeated for the same service'
     });
 
@@ -191,10 +193,11 @@ test.describe.serial('@monitoring source ingestion and automatic detection', () 
     const incidentsBefore = await recentIncidents(request);
     await page.goto('/');
     await page.getByRole('button', { name: 'Monitor', exact: true }).click();
-    const scanPromise = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/incidents/scan');
+    const scanPromise = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/monitoring/scan');
     await page.getByRole('button', { name: 'Manual Refresh' }).click();
     const scanPayload = await (await scanPromise).json();
-    candidates = scanPayload.candidates;
+    expect(scanPayload.lastScan.status).toBe('completed');
+    candidates = await (await request.get('/api/incidents/detected')).json();
 
     const errorRate = candidates.find((item: any) => item.serviceName === 'error-api');
     const latency = candidates.find((item: any) => item.serviceName === 'latency-api');

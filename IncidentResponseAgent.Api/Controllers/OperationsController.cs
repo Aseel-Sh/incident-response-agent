@@ -2,6 +2,7 @@ using IncidentResponseAgent.Api.Contracts.Operations;
 using IncidentResponseAgent.Infrastructure.Incidents;
 using IncidentResponseAgent.Infrastructure.Runbooks;
 using IncidentResponseAgent.Infrastructure.Tools;
+using IncidentResponseAgent.Application.Tools;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
 
@@ -14,21 +15,25 @@ public sealed class OperationsController : ControllerBase
 	private readonly OperationalDataOptions _operationalDataOptions;
 	private readonly RunbookRetrievalOptions _runbookRetrievalOptions;
 	private readonly IncidentStorageOptions _incidentStorageOptions;
+	private readonly IOperationalSourceHealthProbe _sourceHealthProbe;
 
 	public OperationsController(
 		IOptions<OperationalDataOptions> operationalDataOptions,
 		IOptions<RunbookRetrievalOptions> runbookRetrievalOptions,
-		IOptions<IncidentStorageOptions> incidentStorageOptions)
+		IOptions<IncidentStorageOptions> incidentStorageOptions,
+		IOperationalSourceHealthProbe sourceHealthProbe)
 	{
 		_operationalDataOptions = operationalDataOptions.Value ?? new OperationalDataOptions();
 		_runbookRetrievalOptions = runbookRetrievalOptions.Value ?? new RunbookRetrievalOptions();
 		_incidentStorageOptions = incidentStorageOptions.Value ?? new IncidentStorageOptions();
+		_sourceHealthProbe = sourceHealthProbe;
 	}
 
 	[HttpGet("sources")]
 	[ProducesResponseType(typeof(IReadOnlyList<OperationalSourceResponse>), StatusCodes.Status200OK)]
-	public ActionResult<IReadOnlyList<OperationalSourceResponse>> GetSources()
+	public async Task<ActionResult<IReadOnlyList<OperationalSourceResponse>>> GetSources(CancellationToken cancellationToken)
 	{
+		var sourceHealth = await _sourceHealthProbe.CheckAsync(cancellationToken);
 		var logPath = ResolveFilePath(_operationalDataOptions.LogEntriesPath, Path.Combine("Tools", "SampleData", "logs.json"));
 		var metricPath = ResolveFilePath(_operationalDataOptions.MetricSamplesPath, Path.Combine("Tools", "SampleData", "metrics.json"));
 		var runbookPath = ResolveDirectoryPath(_runbookRetrievalOptions.KnowledgeBasePath, Path.Combine("Runbooks", "KnowledgeBase"));
@@ -45,8 +50,8 @@ public sealed class OperationsController : ControllerBase
 				Type = "file",
 				Mode = string.IsNullOrWhiteSpace(_operationalDataOptions.LogEntriesPath) ? "sample" : "configured",
 				Location = logPath,
-				Status = System.IO.File.Exists(logPath) ? "connected" : "missing",
-				Description = "The detector searches this JSON file for errors, warnings, timeouts, latency, backlog, failures, and HTTP 500 signals.",
+				Status = !sourceHealth.Connected ? "unavailable" : System.IO.File.Exists(logPath) ? "connected" : "missing",
+				Description = !sourceHealth.Connected ? sourceHealth.Error ?? "The telemetry producer is unavailable." : "The detector searches this JSON file for errors, warnings, timeouts, latency, backlog, failures, and HTTP 500 signals.",
 				IsDemoMode = string.IsNullOrWhiteSpace(_operationalDataOptions.LogEntriesPath),
 				Capabilities = ["file override", "HTTP ingestion", "polling detection"]
 			},
@@ -56,8 +61,8 @@ public sealed class OperationsController : ControllerBase
 				Type = "file",
 				Mode = string.IsNullOrWhiteSpace(_operationalDataOptions.MetricSamplesPath) ? "sample" : "configured",
 				Location = metricPath,
-				Status = System.IO.File.Exists(metricPath) ? "connected" : "missing",
-				Description = "The detector reads this JSON file for request error rate and queue depth threshold breaches.",
+				Status = !sourceHealth.Connected ? "unavailable" : System.IO.File.Exists(metricPath) ? "connected" : "missing",
+				Description = !sourceHealth.Connected ? sourceHealth.Error ?? "The telemetry producer is unavailable." : "The detector reads this JSON file for request error rate and queue depth threshold breaches.",
 				IsDemoMode = string.IsNullOrWhiteSpace(_operationalDataOptions.MetricSamplesPath),
 				Capabilities = ["file override", "HTTP ingestion", "threshold detection"]
 			},

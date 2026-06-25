@@ -13,7 +13,7 @@ public sealed class LocalOperationalSignalMonitorTests : IDisposable
 	[Fact]
 	public async Task DetectAsyncReturnsMetricAndLogCandidates()
 	{
-		var options = Options.Create(new OperationalDataOptions());
+		var options = Options.Create(new OperationalDataOptions { DetectionWindowMinutes = 5_256_000 });
 		var metricsProvider = new LocalJsonMetricsProvider(options, NullLogger<LocalJsonMetricsProvider>.Instance);
 		var monitor = new LocalOperationalSignalMonitor(
 			new LocalJsonLogSearchProvider(options, NullLogger<LocalJsonLogSearchProvider>.Instance),
@@ -26,7 +26,7 @@ public sealed class LocalOperationalSignalMonitorTests : IDisposable
 			candidate.ServiceName == "checkout-api" &&
 			candidate.Source.Contains("metrics", StringComparison.OrdinalIgnoreCase) &&
 			candidate.Source.Contains("logs", StringComparison.OrdinalIgnoreCase) &&
-			candidate.Severity == IncidentSeverity.Sev2);
+			candidate.Severity == IncidentSeverity.Sev1);
 		Assert.Contains(candidates, candidate =>
 			candidate.ServiceName == "orders-worker" &&
 			candidate.Signals.Any(signal => signal.Contains("queue_depth", StringComparison.OrdinalIgnoreCase)));

@@ -117,6 +117,30 @@ public sealed class FileIncidentRecordStoreTests : IDisposable
 	}
 
 	[Fact]
+	public async Task RepeatedScopeRefreshesCandidateAndSuccessfulClearMarksRecovery()
+	{
+		var store = new FileIncidentRecordStore(Options.Create(new IncidentStorageOptions { IncidentRecordsPath = Path.Combine(_rootPath, "candidate-records.json") }));
+		var first = new DetectedIncidentCandidate { Id = "signal-1", Title = "Errors", Description = "Error threshold", Severity = IncidentSeverity.Sev2, ServiceName = "checkout-api", Environment = "production", DetectedAtUtc = DateTimeOffset.UtcNow, Source = "logs", Signals = ["HTTP 500"] };
+		var second = first with { Id = "signal-2", Title = "Errors and latency", Severity = IncidentSeverity.Sev1, Source = "metrics", Signals = ["request_error_rate=80"] };
+		var firstScan = new MonitoringScanRecord { StartedAtUtc = DateTimeOffset.UtcNow, CompletedAtUtc = DateTimeOffset.UtcNow, CandidateCount = 1, ScannedSourceCount = 2 };
+
+		await store.SaveCandidatesAsync([first], firstScan);
+		await store.SaveCandidatesAsync([second], firstScan with { Id = Guid.NewGuid(), CompletedAtUtc = DateTimeOffset.UtcNow.AddSeconds(1) });
+		var refreshed = await store.GetCandidatesAsync();
+
+		Assert.Single(refreshed);
+		Assert.Equal("signal-1", refreshed[0].Id);
+		Assert.Equal(IncidentSeverity.Sev1, refreshed[0].Severity);
+		Assert.Contains("request_error_rate=80", refreshed[0].Signals);
+		Assert.Contains(refreshed[0].Timeline, item => item.Summary.Contains("without creating a duplicate", StringComparison.OrdinalIgnoreCase));
+
+		await store.SaveCandidatesAsync([], firstScan with { Id = Guid.NewGuid(), CandidateCount = 0, CompletedAtUtc = DateTimeOffset.UtcNow.AddSeconds(2) });
+		var recovered = Assert.Single(await store.GetCandidatesAsync());
+		Assert.Equal("recovered", recovered.Status);
+		Assert.Contains(recovered.Timeline, item => item.Type == "recovered");
+	}
+
+	[Fact]
 	public async Task ApprovedKnowledgeIsPublishedAndRemovedWhenIncidentIsDeleted()
 	{
 		var publisher = new RecordingKnowledgePublisher();
@@ -209,7 +233,7 @@ public sealed class FileIncidentRecordStoreTests : IDisposable
 		public Guid? PublishedId { get; private set; }
 		public Guid? RemovedId { get; private set; }
 		public string? PublishedContent { get; private set; }
-		public Task PublishAsync(Guid proposalId, string title, string content, CancellationToken cancellationToken = default)
+		public Task PublishAsync(Guid proposalId, Guid incidentId, string title, string content, CancellationToken cancellationToken = default)
 		{
 			PublishedId = proposalId;
 			PublishedContent = content;

@@ -9,8 +9,11 @@ using IncidentResponseAgent.Infrastructure.Incidents;
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Mvc;
 using System.Net;
+using IncidentResponseAgent.Api.Services;
 
 var builder = WebApplication.CreateBuilder(args);
+builder.Logging.ClearProviders();
+builder.Logging.AddConsole();
 
 // Add services to the container.
 
@@ -20,9 +23,13 @@ builder.Services.Configure<IncidentAnalysisAgentOptions>(builder.Configuration.G
 builder.Services.Configure<RunbookRetrievalOptions>(builder.Configuration.GetSection("Runbooks:SemanticRetrieval"));
 builder.Services.Configure<OperationalDataOptions>(builder.Configuration.GetSection("Tools:OperationalData"));
 builder.Services.Configure<IncidentStorageOptions>(builder.Configuration.GetSection("Storage:Incidents"));
+builder.Services.Configure<MonitoringRuntimeOptions>(builder.Configuration.GetSection("Monitoring"));
 builder.Services.AddApplication();
 builder.Services.AddInfrastructure();
 builder.Services.AddAgent();
+builder.Services.AddSingleton<ServerIncidentMonitoringService>();
+builder.Services.AddSingleton<IIncidentMonitoringCoordinator>(provider => provider.GetRequiredService<ServerIncidentMonitoringService>());
+builder.Services.AddHostedService(provider => provider.GetRequiredService<ServerIncidentMonitoringService>());
 // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
 builder.Services.AddOpenApi();
 builder.Services.AddProblemDetails();

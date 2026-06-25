@@ -1,4 +1,6 @@
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
+import fs from 'node:fs/promises';
+import path from 'node:path';
 import { goldenFixtures, type GoldenAnalysisFixture } from './fixtures/ai/golden-fixtures';
 
 const fixtureTime = new Date('2026-06-19T12:30:00Z');
@@ -67,7 +69,7 @@ function assertGrounded(result: any, fixture: GoldenAnalysisFixture) {
 async function expectAnalysisUi(page: Page, fixture: GoldenAnalysisFixture) {
   const output = page.locator('#analysisOutput');
   for (const label of [fixture.expected.severityLabel, fixture.title, fixture.description, fixture.serviceName,
-    'Known facts', 'Hypotheses', 'Unknowns', 'Evidence', 'Runbook matches', 'Confidence',
+    'Verified operational facts', 'Hypotheses', 'Unknowns', 'Evidence', 'Runbook matches', 'Confidence',
     'Analysis quality', 'Recommended actions', 'Provider status']) {
     await expect(output).toContainText(label);
   }
@@ -81,6 +83,31 @@ async function storedAnalysis(request: APIRequestContext, incidentId: string) {
 }
 
 test.describe.serial('@ai evidence-grounded analysis, RAG, and fallback honesty', () => {
+  test('connects, synchronizes, searches, disables, and removes an external Markdown source', async ({ page }) => {
+    const sourcePath = path.resolve('.tmp/e2e-ai/external-runbooks');
+    await fs.mkdir(sourcePath, { recursive: true });
+    await fs.writeFile(path.join(sourcePath, 'inventory-recovery.md'), '# Inventory dependency recovery\n\n## Purpose\n\nRecover inventory-api when a warehouse dependency timeout occurs.\n\n## Mitigation\n\nFail over the warehouse dependency and verify inventory request latency.\n');
+    await page.goto('/#rag');
+    await page.getByRole('button', { name: 'RAG' }).click();
+    await page.locator('#runbookSourceForm [name="name"]').fill('Inventory operations');
+    await page.locator('#runbookSourceForm [name="type"]').selectOption('directory');
+    await page.locator('#runbookSourceForm [name="path"]').fill(sourcePath);
+    await page.getByRole('button', { name: 'Connect source' }).click();
+    const card = page.locator('#runbookSources .runbook-source-card').filter({ hasText: 'Inventory operations' });
+    await expect(card).toContainText('Reachable');
+    await expect(card).toContainText('1 documents');
+    await card.getByRole('button', { name: 'Sync' }).click();
+    await expect(card).toContainText(/Last synchronized (?!not yet)/);
+    await page.locator('#ragForm [name="query"]').fill('inventory warehouse dependency timeout');
+    await page.locator('#ragForm').getByRole('button', { name: 'Search' }).click();
+    await expect(page.locator('#ragResults')).toContainText('inventory-recovery.md');
+    await card.getByRole('button', { name: 'Disable' }).click();
+    await expect(card).toContainText('Disabled');
+    await card.getByRole('button', { name: 'Remove' }).click();
+    await page.getByRole('alertdialog').getByRole('button', { name: 'Remove source' }).click();
+    await expect(card).toHaveCount(0);
+  });
+
   test('model + RAG path is evidence-grounded, specific, and honestly displayed', async ({ page, request }) => {
     const fixture = goldenFixtures.clearDatabaseLatency;
     const { response, body } = await analyzeThroughUi(page, fixture);
@@ -112,7 +139,7 @@ test.describe.serial('@ai evidence-grounded analysis, RAG, and fallback honesty'
     expect(body.retrievedEvidence.some((item: any) => item.source === 'tool.logs')).toBeFalsy();
     expect(body.runbookMatches).toHaveLength(0);
     await expect(page.locator('#analysisOutput')).toContainText('No runbook matched. This is not evidence that no runbook exists.');
-    await expect(page.locator('#analysisOutput')).toContainText(/no matching log/i);
+    await expect(page.locator('#analysisOutput')).toContainText(/no matching .* logs/i);
   });
 
   test('conflicting evidence remains a hypothesis instead of becoming a claimed outage', async ({ page }) => {

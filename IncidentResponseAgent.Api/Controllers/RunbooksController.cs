@@ -8,11 +8,36 @@ namespace IncidentResponseAgent.Api.Controllers;
 public sealed class RunbooksController : ControllerBase
 {
 	private readonly IRunbookRetrievalDiagnosticsService _diagnosticsService;
+	private readonly IRunbookSourceManagementService _sourceManagementService;
 
-	public RunbooksController(IRunbookRetrievalDiagnosticsService diagnosticsService)
+	public RunbooksController(IRunbookRetrievalDiagnosticsService diagnosticsService, IRunbookSourceManagementService sourceManagementService)
 	{
 		_diagnosticsService = diagnosticsService;
+		_sourceManagementService = sourceManagementService;
 	}
+
+	[HttpGet("sources")]
+	public async Task<ActionResult<IReadOnlyList<RunbookSourceStatus>>> GetSourcesAsync(CancellationToken cancellationToken) =>
+		Ok(await _sourceManagementService.GetSourcesAsync(cancellationToken));
+
+	[HttpPost("sources")]
+	public async Task<ActionResult<RunbookSourceStatus>> AddSourceAsync([FromBody] RunbookSourceInput input, CancellationToken cancellationToken)
+	{
+		var source = await _sourceManagementService.AddSourceAsync(input, cancellationToken);
+		return Created($"/api/runbooks/sources/{source.Id}", source);
+	}
+
+	[HttpPut("sources/{sourceId}/enabled")]
+	public async Task<ActionResult<RunbookSourceStatus>> SetSourceEnabledAsync(string sourceId, [FromBody] RunbookSourceEnabledRequest request, CancellationToken cancellationToken) =>
+		Ok(await _sourceManagementService.SetEnabledAsync(sourceId, request.Enabled, cancellationToken));
+
+	[HttpPost("sources/{sourceId}/synchronize")]
+	public async Task<ActionResult<RunbookSourceStatus>> SynchronizeSourceAsync(string sourceId, CancellationToken cancellationToken) =>
+		Ok(await _sourceManagementService.SynchronizeAsync(sourceId, cancellationToken));
+
+	[HttpDelete("sources/{sourceId}")]
+	public async Task<IActionResult> RemoveSourceAsync(string sourceId, CancellationToken cancellationToken) =>
+		await _sourceManagementService.RemoveSourceAsync(sourceId, cancellationToken) ? NoContent() : NotFound();
 
 	[HttpGet("search")]
 	[ProducesResponseType(typeof(RunbookRetrievalDiagnosticsResult), StatusCodes.Status200OK)]
@@ -42,3 +67,5 @@ public sealed class RunbooksController : ControllerBase
 		return Ok(result);
 	}
 }
+
+public sealed record RunbookSourceEnabledRequest(bool Enabled);

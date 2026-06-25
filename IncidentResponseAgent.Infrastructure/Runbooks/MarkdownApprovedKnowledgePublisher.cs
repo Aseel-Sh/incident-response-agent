@@ -13,13 +13,22 @@ public sealed class MarkdownApprovedKnowledgePublisher : IApprovedKnowledgePubli
 		_options = options.Value ?? new RunbookRetrievalOptions();
 	}
 
-	public async Task PublishAsync(Guid proposalId, string title, string content, CancellationToken cancellationToken = default)
+	public async Task PublishAsync(Guid proposalId, Guid incidentId, string title, string content, CancellationToken cancellationToken = default)
 	{
 		if (string.IsNullOrWhiteSpace(content)) throw new ArgumentException("Approved knowledge content is required.", nameof(content));
 		var directory = ResolveKnowledgeBasePath();
 		Directory.CreateDirectory(directory);
-		var document = $"# {title.Trim()}\n\ntags: approved, incident-learning\n\n{content.Trim()}\n";
-		await File.WriteAllTextAsync(GetPath(directory, proposalId), document, new UTF8Encoding(false), cancellationToken).ConfigureAwait(false);
+		var path = GetPath(directory, proposalId);
+		var approvedAt = DateTimeOffset.UtcNow;
+		if (File.Exists(path))
+		{
+			var revisions = Path.Combine(directory, ".history", $"approved-{proposalId:N}");
+			Directory.CreateDirectory(revisions);
+			var revision = Path.Combine(revisions, $"{approvedAt:yyyyMMddTHHmmssfffffffZ}.md");
+			File.Copy(path, revision, overwrite: false);
+		}
+		var document = $"---\nproposal-id: {proposalId}\nincident-id: {incidentId}\napproved-at-utc: {approvedAt:O}\napproved-by: human-review\ntags: approved, incident-learning\n---\n\n# {title.Trim()}\n\n{content.Trim()}\n";
+		await File.WriteAllTextAsync(path, document, new UTF8Encoding(false), cancellationToken).ConfigureAwait(false);
 	}
 
 	public Task RemoveAsync(Guid proposalId, CancellationToken cancellationToken = default)

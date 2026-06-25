@@ -16,10 +16,12 @@ public static class DependencyInjection
 		services.AddSingleton<LocalJsonMetricsProvider>();
 		services.AddSingleton<IMetricsProvider>(provider => provider.GetRequiredService<LocalJsonMetricsProvider>());
 		services.AddSingleton<IMetricSeriesCatalog>(provider => provider.GetRequiredService<LocalJsonMetricsProvider>());
-		services.AddSingleton<IRunbookRetrievalService, SemanticRunbookRetrievalService>();
+		services.AddSingleton<IOperationalSourceHealthProbe, HttpOperationalSourceHealthProbe>();
+		services.AddSingleton<SemanticRunbookRetrievalService>();
+		services.AddSingleton<IRunbookRetrievalService>(provider => provider.GetRequiredService<SemanticRunbookRetrievalService>());
+		services.AddSingleton<IRunbookSourceManagementService>(provider => provider.GetRequiredService<SemanticRunbookRetrievalService>());
 		services.AddSingleton<IApprovedKnowledgePublisher, MarkdownApprovedKnowledgePublisher>();
-		services.AddSingleton<IRunbookRetrievalDiagnosticsService>(serviceProvider =>
-			(IRunbookRetrievalDiagnosticsService)serviceProvider.GetRequiredService<IRunbookRetrievalService>());
+		services.AddSingleton<IRunbookRetrievalDiagnosticsService>(provider => provider.GetRequiredService<SemanticRunbookRetrievalService>());
 		services.AddSingleton<IIncidentSignalMonitor, LocalOperationalSignalMonitor>();
 		services.AddSingleton<IIncidentAnalysisSessionStore, SqliteIncidentAnalysisSessionStore>();
 		services.AddSingleton<IIncidentRecordStore, FileIncidentRecordStore>();

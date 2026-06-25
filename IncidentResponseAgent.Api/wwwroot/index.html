@@ -12,7 +12,7 @@
     })();
   </script>
   <title>incidentOps</title>
-  <link rel="stylesheet" href="/styles.css?v=20260620-evidence-rag-5">
+  <link rel="stylesheet" href="/styles.css?v=20260620-runbook-sources-7">
 </head>
 <body>
   <div class="app-shell">
@@ -26,7 +26,7 @@
         <button class="nav-tab" type="button" data-tab="analysis" data-icon="brain">Analysis</button>
         <button class="nav-tab" type="button" data-tab="history" data-icon="history">History</button>
         <button class="nav-tab" type="button" data-tab="sources" data-icon="plug">Sources</button>
-        <button class="nav-tab" type="button" data-tab="ingestion" data-icon="terminal">Ingestion</button>
+        <button class="nav-tab" type="button" data-tab="ingestion" data-icon="terminal">Diagnostics</button>
         <button class="nav-tab" type="button" data-tab="rag" data-icon="book">RAG</button>
         <button class="nav-tab" type="button" data-tab="evaluation" data-icon="check">Evaluation</button>
         <button class="nav-tab" type="button" data-tab="monitor" data-icon="activity">Monitor</button>
@@ -144,9 +144,10 @@
 
       <section id="ingestionView" class="tab-view">
         <div class="page-heading">
-          <h2><span data-icon="activity"></span>Signal Ingestion</h2>
-          <p>Post log signals or metric samples for immediate analysis</p>
+          <h2><span data-icon="activity"></span>Signal Diagnostics</h2>
+          <p>Manual ingestion for connector testing, emergency input, and detection-rule validation</p>
         </div>
+        <div class="mode-banner"><div class="mode-banner-content"><span data-icon="info"></span><span>Signals submitted here are persisted into the configured log and metric stores and enter the same server-side detection pipeline as connected telemetry. This diagnostics tool is not a replacement for production collectors.</span></div></div>
         <div class="split-layout">
           <section class="panel">
             <div class="section-title"><h2><span data-icon="terminal"></span>POST LOG SIGNAL</h2></div>
@@ -183,6 +184,16 @@
           <h2><span data-icon="book"></span>RAG Diagnostics</h2>
           <p>Embedding provider, vector store, and retrieval match quality</p>
         </div>
+        <section class="panel runbook-sources-panel">
+          <div class="section-title"><div><h3>Connected runbook sources</h3><p>Connect a Markdown directory or an existing local Git working tree. Credentials stay outside the app.</p></div></div>
+          <form id="runbookSourceForm" class="source-connect-form">
+            <label>Name<input name="name" required placeholder="Operations runbooks"></label>
+            <label>Type<select name="type"><option value="directory">Local / mounted directory</option><option value="git">Git working tree</option></select></label>
+            <label class="wide">Directory path<input name="path" required placeholder="C:\\ops\\runbooks"></label>
+            <button type="submit" data-icon="plug">Connect source</button>
+          </form>
+          <div id="runbookSources" class="runbook-source-list"></div>
+        </section>
         <section class="panel">
           <div id="ragSummary" class="rag-summary"></div>
           <form id="ragForm" class="search-bar"><input name="query" value="checkout 5xx latency" aria-label="RAG query"><button type="submit" data-icon="search">Search</button></form>
@@ -253,6 +264,6 @@
       </div>
     </section>
   </div>
-  <script src="/app.js?v=20260620-evidence-rag-5"></script>
+  <script src="/app.js?v=20260620-runbook-sources-7"></script>
 </body>
 </html>

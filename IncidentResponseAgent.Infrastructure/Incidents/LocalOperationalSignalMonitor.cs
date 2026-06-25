@@ -13,19 +13,27 @@ public sealed class LocalOperationalSignalMonitor : IIncidentSignalMonitor
 	private readonly ILogSearchProvider _logSearchProvider;
 	private readonly IMetricSeriesCatalog _metricSeriesCatalog;
 	private readonly OperationalDataOptions _options;
+	private readonly IOperationalSourceHealthProbe? _healthProbe;
 
 	public LocalOperationalSignalMonitor(
 		ILogSearchProvider logSearchProvider,
 		IMetricSeriesCatalog metricSeriesCatalog,
-		IOptions<OperationalDataOptions> options)
+		IOptions<OperationalDataOptions> options,
+		IOperationalSourceHealthProbe? healthProbe = null)
 	{
 		_logSearchProvider = logSearchProvider;
 		_metricSeriesCatalog = metricSeriesCatalog;
 		_options = options.Value ?? new OperationalDataOptions();
+		_healthProbe = healthProbe;
 	}
 
 	public async Task<IReadOnlyList<DetectedIncidentCandidate>> DetectAsync(CancellationToken cancellationToken = default)
 	{
+		if (_healthProbe is not null)
+		{
+			var health = await _healthProbe.CheckAsync(cancellationToken).ConfigureAwait(false);
+			if (!health.Connected) throw new HttpRequestException(health.Error ?? "Configured telemetry source is unavailable.");
+		}
 		var candidates = new List<DetectedIncidentCandidate>();
 		candidates.AddRange(await DetectMetricIncidentsAsync(cancellationToken).ConfigureAwait(false));
 		candidates.AddRange(await DetectLogIncidentsAsync(cancellationToken).ConfigureAwait(false));
@@ -81,12 +89,15 @@ public sealed class LocalOperationalSignalMonitor : IIncidentSignalMonitor
 	{
 		var result = await _logSearchProvider.SearchAsync(new LogSearchRequest
 		{
-			Query = "error warning timeout latency backlog failure 500",
+			Query = "error warning timeout latency backlog failure 500 recovered healthy",
+			StartTime = DateTimeOffset.UtcNow.AddMinutes(-Math.Clamp(_options.DetectionWindowMinutes, 1, 5_256_000)),
 			MaxResults = 20
 		}, cancellationToken).ConfigureAwait(false);
 
 		return result.Entries
 			.GroupBy(entry => entry.Source, StringComparer.OrdinalIgnoreCase)
+			.Where(group => !group.OrderByDescending(entry => entry.Timestamp).First().Message.Contains("recovered", StringComparison.OrdinalIgnoreCase))
+			.Where(group => !group.OrderByDescending(entry => entry.Timestamp).First().Message.Contains("dependencies are healthy", StringComparison.OrdinalIgnoreCase))
 			.Where(group => group.Count() >= _options.LogPatternCountThreshold)
 			.Select(group =>
 			{
@@ -120,7 +131,7 @@ public sealed class LocalOperationalSignalMonitor : IIncidentSignalMonitor
 	private static DetectedIncidentCandidate Merge(IReadOnlyList<DetectedIncidentCandidate> candidates)
 	{
 		var primary = candidates
-			.OrderByDescending(candidate => candidate.Severity)
+			.OrderBy(candidate => candidate.Severity)
 			.ThenByDescending(candidate => candidate.DetectedAtUtc)
 			.First();
 

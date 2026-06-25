@@ -28,12 +28,8 @@ function embeddingFor(text) {
 function responseFor(context) {
   const incident = context.incident;
   const evidence = context.evidence || {};
-  const refs = ['incident.description'];
-  const items = [{
-    summary: incident.description,
-    source: 'incident.description',
-    details: `User-provided details for ${incident.serviceName}.`
-  }];
+  const refs = [];
+  const items = [];
 
   const runbook = evidence.runbooks?.[0];
   if (runbook) {
@@ -62,9 +58,9 @@ function responseFor(context) {
     : poolEvidence
       ? [
           { description: 'Inspect connection-pool utilization and checkout wait time for the affected service.', priority: 'High', rationale: 'The supplied timeout evidence names pool checkout.', supportingSignals: refs },
-          { description: 'Compare p95 query latency with request error rate over the incident window.', priority: 'High', rationale: 'This validates whether query latency tracks impact.', supportingSignals: refs.filter(ref => ref === 'tool.metrics' || ref === 'incident.description') }
+          { description: 'Compare p95 query latency with request error rate over the incident window.', priority: 'High', rationale: 'This validates whether query latency tracks impact.', supportingSignals: refs.filter(ref => ref === 'tool.metrics') }
         ]
-      : [{ description: 'Inspect the request error-rate metric by endpoint and deployment version.', priority: 'High', rationale: 'The metric is the only observed operational signal.', supportingSignals: refs.filter(ref => ref === 'tool.metrics' || ref === 'incident.description') }];
+      : [{ description: 'Inspect the request error-rate metric by endpoint and deployment version.', priority: 'High', rationale: 'The metric is the only observed operational signal.', supportingSignals: refs.filter(ref => ref === 'tool.metrics') }];
 
   return {
     summary: `${incident.serviceName} incident analyzed from ${items.length} supplied evidence source(s).`,
@@ -132,6 +128,7 @@ const defaults = {
   'Runbooks__SemanticRetrieval__Endpoint': 'http://127.0.0.1:5199/embeddings',
   'Runbooks__SemanticRetrieval__Model': 'fixture-embedding',
   'Runbooks__SemanticRetrieval__KnowledgeBasePath': '.tmp/e2e-ai/knowledge',
+  'Runbooks__SemanticRetrieval__SourceRegistryPath': '.tmp/e2e-ai/runbook-sources.json',
   'Runbooks__SemanticRetrieval__VectorStoreProvider': 'SQLite',
   'Runbooks__SemanticRetrieval__DatabasePath': '.tmp/e2e-ai/rag.sqlite',
   'Runbooks__SemanticRetrieval__MinimumRelevanceScore': '0.95',

@@ -43,6 +43,8 @@ const elements = {
   ragForm: $("#ragForm"),
   ragSummary: $("#ragSummary"),
   ragResults: $("#ragResults"),
+  runbookSourceForm: $("#runbookSourceForm"),
+  runbookSources: $("#runbookSources"),
   evaluation: $("#evaluationOutput"),
   logSignalForm: $("#logSignalForm"),
   metricSignalForm: $("#metricSignalForm"),
@@ -100,7 +102,7 @@ let confirmationReturnFocus = null;
 let dashboardPage = 1;
 let historyPage = 1;
 const pageSize = 10;
-const incidentLifecycleStatuses = ["new", "active", "mitigated", "resolved"];
+const incidentLifecycleStatuses = ["new", "active", "mitigated", "resolved", "recovered"];
 
 document.querySelectorAll(".nav-tab").forEach((button) => button.addEventListener("click", () => activateTab(button.dataset.tab)));
 document.querySelectorAll(".filter-chip").forEach((button) => {
@@ -163,17 +165,12 @@ elements.metricSignalForm.addEventListener("submit", async (event) => {
   await sendMetricSignal();
 });
 document.querySelectorAll("[data-rescan]").forEach((button) => button.addEventListener("click", () => loadDetected(true)));
-$("#pauseScanButton").addEventListener("click", (event) => {
-  polling = !polling;
-  localStorage.setItem("incidentops.pollingEnabled", String(polling));
-  syncPollingButton();
-  if (polling) {
-    startPolling();
-  } else {
-    stopPolling();
-  }
-  elements.lastScan.innerHTML = renderMonitorSummary(detectedCandidates);
-  hydrateIcons(elements.lastScan);
+$("#pauseScanButton").addEventListener("click", async () => {
+  try {
+    const state = await requestJson(`/api/monitoring/${polling ? "pause" : "resume"}`, { method: "POST" });
+    applyServerMonitoringState(state);
+    showToast(polling ? "Monitoring resumed" : "Monitoring paused", polling ? "Server-side scans continue even when this page is closed." : "The persisted server-side schedule is paused.", "success");
+  } catch (error) { showToast("Monitoring update failed", error.message || String(error), "error"); }
 });
 elements.manualRefresh.addEventListener("click", () => loadDetected(true));
 elements.pollingSlider.addEventListener("input", () => {
@@ -182,13 +179,20 @@ elements.pollingSlider.addEventListener("input", () => {
   hydrateIcons(elements.lastScan);
 });
 elements.pollingSlider.addEventListener("change", () => {
-  localStorage.setItem("incidentops.pollingIntervalSeconds", elements.pollingSlider.value);
-  if (polling) startPolling();
-  showToast("Polling interval updated", `Automatic scans will run every ${elements.pollingSlider.value} seconds.`, "success");
+  void updateServerPollingInterval();
 });
 elements.historyModalClose.addEventListener("click", closeHistoryModal);
 elements.historyModal.addEventListener("click", (event) => {
   if (event.target === elements.historyModal) closeHistoryModal();
+});
+elements.runbookSourceForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  await connectRunbookSource();
+});
+elements.runbookSources.addEventListener("click", async (event) => {
+  const button = event.target.closest("button[data-runbook-source-action]");
+  if (!button) return;
+  await handleRunbookSourceAction(button);
 });
 elements.confirmModalCancel.addEventListener("click", () => closeConfirmation(false));
 elements.confirmModalAccept.addEventListener("click", () => closeConfirmation(true));
@@ -214,6 +218,14 @@ elements.historyDetail.addEventListener("click", async (event) => {
   const copySessionButton = event.target.closest("[data-copy-session]");
   if (copySessionButton) {
     await copyText(copySessionButton.dataset.copySession, "Session ID copied");
+    return;
+  }
+  const publishedKnowledgeButton = event.target.closest("[data-view-published-knowledge]");
+  if (publishedKnowledgeButton) {
+    elements.ragForm.query.value = publishedKnowledgeButton.dataset.viewPublishedKnowledge;
+    closeHistoryModal();
+    activateTab("rag");
+    showToast("Searching published knowledge", "The RAG view shows the indexed approved Markdown and its source path.", "info");
     return;
   }
   const button = event.target.closest("[data-ticket-status]");
@@ -380,7 +392,7 @@ function activateTab(tab) {
   }
   if (tab === "history") void loadRecent();
   if (tab === "sources") void loadSources();
-  if (tab === "rag") void searchRag();
+  if (tab === "rag") { void loadRunbookSources(); void searchRag(); }
   if (tab === "evaluation") void loadEvaluation();
   if (tab === "config") renderConfig();
 }
@@ -450,11 +462,16 @@ async function loadDetected(userInitiated = false, performScan = userInitiated) 
   }
   try {
     const result = performScan
-      ? await requestJson("/api/incidents/scan", { method: "POST" })
+      ? await requestJson("/api/monitoring/scan", { method: "POST" })
       : await requestJson("/api/incidents/detected");
-    detectedCandidates = normalizeArray(result?.candidates ?? result);
     if (performScan) {
-      const scan = result?.scan || {};
+      applyServerMonitoringState(result);
+      detectedCandidates = normalizeArray(await requestJson("/api/incidents/detected"));
+    } else {
+      detectedCandidates = normalizeArray(result?.candidates ?? result);
+    }
+    if (performScan) {
+      const scan = result?.lastScan || {};
       lastScanState = {
         scannedSources: Number(scan.scannedSourceCount) || 0,
         connectedSources: Math.max(0, (Number(scan.scannedSourceCount) || 0) - (Number(scan.errorCount) || 0)),
@@ -709,7 +726,7 @@ function renderAnalysis(result) {
             <span class="severity severity-${escapeHtml(header.severity.toLowerCase())}">${escapeHtml(formatSeverityLabel(header.severity))}</span>
             <span class="badge status-investigating">Investigating</span>
             <span class="badge badge-info">${result.sessionTurnNumber > 1 ? `Follow-up ${result.sessionTurnNumber - 1}` : "Original"}</span>
-            <span class="badge badge-info">${escapeHtml(mode.label)}</span>
+            <span class="badge ${mode.badgeClass}">${escapeHtml(mode.label)}</span>
           </div>
           <h2>${escapeHtml(header.title)}</h2>
           <p>${escapeHtml(header.description)}</p>
@@ -910,7 +927,8 @@ function renderTimeline(events = []) {
 function renderKnowledgeUpdate(incidentId, proposal) {
   if (!proposal) return "";
   const pending = proposal.status === "pending";
-  return `<section class="analysis-card knowledge-card"><div class="knowledge-heading"><div><p class="eyebrow">Resolution learning</p><h3><span data-icon="book"></span>Proposed runbook / postmortem update</h3></div><span class="badge knowledge-status knowledge-${escapeHtml(proposal.status)}">${escapeHtml(proposal.status)}</span></div><p>Review this draft before it can become reusable incident knowledge. Rejected drafts are excluded from RAG and similarity.</p><label>Edit proposed update<textarea data-knowledge-content ${pending ? "" : "readonly"}>${escapeHtml(proposal.content)}</textarea></label>${pending ? `<div class="knowledge-actions"><button type="button" data-knowledge-review="approved" data-incident-id="${escapeHtml(incidentId)}">Approve and publish</button><button class="secondary danger-outline" type="button" data-knowledge-review="rejected" data-incident-id="${escapeHtml(incidentId)}">Reject draft</button></div>` : `<p class="system-notice ${proposal.status === "approved" ? "notice-success" : "notice-neutral"}"><strong>${proposal.status === "approved" ? "Published" : "Not published"}</strong><span>${proposal.status === "approved" ? "This approved update is available to future retrieval." : "This rejected update will not be used by RAG or similarity."}</span></p>`}</section>`;
+  const publishedFile = `approved-${String(proposal.id || "").replaceAll("-", "")}.md`;
+  return `<section class="analysis-card knowledge-card"><div class="knowledge-heading"><div><p class="eyebrow">Resolution learning</p><h3><span data-icon="book"></span>Proposed runbook / postmortem update</h3></div><span class="badge knowledge-status knowledge-${escapeHtml(proposal.status)}">${escapeHtml(proposal.status)}</span></div><p>Review this draft before it can become reusable incident knowledge. Rejected drafts are excluded from RAG and similarity.</p><label>Edit proposed update<textarea data-knowledge-content ${pending ? "" : "readonly"}>${escapeHtml(proposal.content)}</textarea></label>${pending ? `<div class="knowledge-actions"><button type="button" data-knowledge-review="approved" data-incident-id="${escapeHtml(incidentId)}">Approve and publish</button><button class="secondary danger-outline" type="button" data-knowledge-review="rejected" data-incident-id="${escapeHtml(incidentId)}">Reject draft</button></div>` : `<p class="system-notice ${proposal.status === "approved" ? "notice-success" : "notice-neutral"}"><strong>${proposal.status === "approved" ? "Published to runbook knowledge" : "Not published"}</strong><span>${proposal.status === "approved" ? `${escapeHtml(publishedFile)} is stored in the configured runbook knowledge folder and indexed on the next RAG search.` : "This rejected update will not be used by RAG or similarity."}</span></p>${proposal.status === "approved" ? `<button class="secondary compact-button" type="button" data-view-published-knowledge="${escapeHtml(proposal.title)}"><span data-icon="search"></span>View published runbook in RAG</button>` : ""}`}</section>`;
 }
 
 async function reviewKnowledgeUpdate(incidentId, decision) {
@@ -1196,7 +1214,7 @@ function renderSourcesPage(items) {
 
 function renderSourceCard(item) {
   const modeClass = item.isDemoMode ? "badge-warning" : "status-connected";
-  const statusClass = item.status === "missing" ? "status-missing" : item.status === "pending" ? "status-warning" : "status-connected";
+  const statusClass = item.status === "missing" || item.status === "unavailable" ? "status-missing" : item.status === "pending" ? "status-warning" : "status-connected";
   return `<article class="source-card figma-source"><div><h3>${escapeHtml(item.name)} <span class="badge ${modeClass}">${escapeHtml(item.mode)}</span> <span class="badge ${statusClass}">${escapeHtml(item.status)}</span></h3><p>${escapeHtml(item.location)}</p><div class="badge-row">${(item.capabilities || []).map((cap) => `<span class="badge">${escapeHtml(cap)}</span>`).join("")}</div></div><span class="badge">${escapeHtml(item.type)}</span></article>`;
 }
 
@@ -1307,9 +1325,9 @@ function renderMonitorSummary(items) {
 function inferProviderMode(result) {
   const provider = String(result.analysisProvider || "");
   const reason = String(result.fallbackReason || "");
-  if (provider.includes("deterministic-structured-fallback") || reason.includes("deterministic structured")) return { label: "Structured fallback", className: "status-warning", description: "Model JSON was invalid; deterministic fields are displayed." };
-  if (result.usedFallbackAnalysis) return { label: "Local fallback", className: "status-warning", description: "The local evidence analyzer produced this result." };
-  return { label: "Model-backed", className: "status-connected", description: "Structured output came from the configured model." };
+  if (provider.includes("deterministic-structured-fallback") || reason.includes("deterministic structured")) return { label: "Structured fallback", className: "status-warning", badgeClass: "status-local", description: "Model JSON was invalid; deterministic fields are displayed." };
+  if (result.usedFallbackAnalysis) return { label: "Local fallback", className: "status-local", badgeClass: "status-local", description: "The local evidence analyzer produced this result." };
+  return { label: "Model-backed", className: "status-model", badgeClass: "status-model", description: "Structured output came from the configured model." };
 }
 
 function formatProviderMessage(result, mode) {
@@ -1321,6 +1339,50 @@ function formatProviderMessage(result, mode) {
   if (reason.includes("empty analysis response") || reason.includes("empty output") || reason.includes("empty message")) return "The model returned an empty response, so local analysis used the gathered evidence instead.";
   if (reason.includes("429") || reason.includes("Too Many Requests") || reason.includes("rate-limited")) return "The model provider is rate-limited, so local analysis used the gathered evidence instead.";
   return result.usedFallbackAnalysis ? `${mode.description}${ragNote}` : `${reason || mode.description}${ragNote}`;
+}
+
+async function loadRunbookSources() {
+  try {
+    const sources = normalizeArray(await requestJson("/api/runbooks/sources"));
+    elements.runbookSources.innerHTML = sources.map(renderRunbookSource).join("") || `<div class="empty-state">No runbook sources are connected.</div>`;
+    hydrateIcons(elements.runbookSources);
+  } catch (error) {
+    elements.runbookSources.innerHTML = `<div class="error-box">${escapeHtml(error.message || String(error))}</div>`;
+  }
+}
+
+function renderRunbookSource(source) {
+  const statusClass = source.reachable ? "status-connected" : "status-missing";
+  const enabledLabel = source.enabled ? "Enabled" : "Disabled";
+  return `<article class="runbook-source-card"><div><div class="badge-row"><strong>${escapeHtml(source.name)}</strong><span class="badge">${escapeHtml(source.type)}</span><span class="badge ${statusClass}">${source.reachable ? "Reachable" : "Unavailable"}</span><span class="badge">${enabledLabel}</span></div><p>${escapeHtml(source.path)}</p><small>${Number(source.documentCount) || 0} documents · ${Number(source.sectionCount) || 0} indexed sections · Last synchronized ${source.lastSynchronizedAtUtc ? escapeHtml(formatTimestamp(source.lastSynchronizedAtUtc)) : "not yet"}</small>${source.lastError ? `<div class="error-box compact-error">${escapeHtml(source.lastError)}</div>` : ""}</div><div class="runbook-source-actions"><button class="secondary compact-button" type="button" data-runbook-source-action="sync" data-source-id="${escapeHtml(source.id)}"><span data-icon="refresh"></span>Sync</button>${source.removable ? `<button class="secondary compact-button" type="button" data-runbook-source-action="toggle" data-enabled="${source.enabled}" data-source-id="${escapeHtml(source.id)}">${source.enabled ? "Disable" : "Enable"}</button><button class="secondary compact-button danger-outline" type="button" data-runbook-source-action="remove" data-source-id="${escapeHtml(source.id)}"><span data-icon="trash"></span>Remove</button>` : ""}</div></article>`;
+}
+
+async function connectRunbookSource() {
+  const payload = Object.fromEntries(new FormData(elements.runbookSourceForm).entries());
+  try {
+    await requestJson("/api/runbooks/sources", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+    elements.runbookSourceForm.reset();
+    await loadRunbookSources();
+    showToast("Runbook source connected", "Verify and synchronize it before relying on its knowledge.", "success");
+  } catch (error) { showToast("Source connection failed", error.message || String(error), "error"); }
+}
+
+async function handleRunbookSourceAction(button) {
+  const id = button.dataset.sourceId;
+  const action = button.dataset.runbookSourceAction;
+  if (action === "remove") {
+    const confirmed = await showConfirmation({ title: "Remove this runbook source?", message: "Its indexed sections will be removed during the next synchronization. Source files will not be deleted.", confirmLabel: "Remove source", destructive: true });
+    if (!confirmed) return;
+  }
+  button.disabled = true;
+  try {
+    if (action === "sync") await requestJson(`/api/runbooks/sources/${encodeURIComponent(id)}/synchronize`, { method: "POST" });
+    if (action === "toggle") await requestJson(`/api/runbooks/sources/${encodeURIComponent(id)}/enabled`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: button.dataset.enabled !== "true" }) });
+    if (action === "remove") await requestJson(`/api/runbooks/sources/${encodeURIComponent(id)}`, { method: "DELETE" });
+    await loadRunbookSources();
+    if (action === "sync") await searchRag();
+    showToast("Runbook sources updated", action === "sync" ? "Source content was re-indexed." : "Source configuration was saved.", "success");
+  } catch (error) { button.disabled = false; showToast("Runbook source update failed", error.message || String(error), "error"); }
 }
 
 function confidenceRows(result, similar) {
@@ -1379,6 +1441,7 @@ function splitTags(value) { return String(value || "").split(",").map((tag) => t
 function emptyToNull(value) { const text = String(value || "").trim(); return text ? text : null; }
 function escapeHtml(value) { return String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#039;"); }
 function formatTime(value) { return value ? new Date(value).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : ""; }
+function formatTimestamp(value) { return value ? new Date(value).toLocaleString() : ""; }
 function formatReadableTime(value) {
   if (!value) return "";
   return new Date(value).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" });
@@ -1418,7 +1481,7 @@ function scoreColor(percent) { return percent >= 90 ? "green" : percent >= 75 ? 
 function formatHistoryId(value, index) { const text = String(value || ""); return text ? `INC-${text.replace(/-/g, "").slice(0, 4).toUpperCase()}` : `INC-${2847 - index}`; }
 function inferSeverity(summary, parsed) { const text = `${summary || ""} ${JSON.stringify(parsed || {})}`.toLowerCase(); if (text.includes("critical")) return "sev1"; if (text.includes("5xx") || text.includes("latency")) return "sev2"; return "sev3"; }
 function formatSeverityLabel(value) { const key = String(value || "").toLowerCase().replace("-", ""); return ({ sev1: "SEV-1", sev2: "SEV-2", sev3: "SEV-3", sev4: "SEV-4", sev5: "SEV-5" })[key] || "SEV-3"; }
-function formatStatusLabel(value) { return ({ candidate: "Candidate", false_positive: "False positive", ignored: "Ignored", merged: "Merged", new: "Confirmed", active: "Active", mitigated: "Mitigated", resolved: "Resolved" })[String(value || "").toLowerCase()] || "Active"; }
+function formatStatusLabel(value) { return ({ candidate: "Candidate", false_positive: "False positive", ignored: "Ignored", merged: "Merged", recovered: "Recovered", new: "Confirmed", active: "Active", mitigated: "Mitigated", resolved: "Resolved" })[String(value || "").toLowerCase()] || "Active"; }
 function normalizeIncidentStatus(value) {
   const status = String(value || "active").toLowerCase();
   if (status === "ack") return "active";
@@ -1525,13 +1588,7 @@ function renderSidebarLastScan() {
 
 async function initialize() {
   document.documentElement.dataset.theme = localStorage.getItem("incidentops.theme") === "dark" ? "dark" : "light";
-  const savedInterval = Number(localStorage.getItem("incidentops.pollingIntervalSeconds"));
-  if (savedInterval >= Number(elements.pollingSlider.min) && savedInterval <= Number(elements.pollingSlider.max)) {
-    elements.pollingSlider.value = String(savedInterval);
-  }
   syncPollingControl();
-  const savedPolling = localStorage.getItem("incidentops.pollingEnabled");
-  polling = savedPolling === null ? true : savedPolling === "true";
   syncPollingButton();
   restoreLastScanState();
   hydrateIcons();
@@ -1549,18 +1606,19 @@ async function initialize() {
   if (initialTab && document.querySelector(`#${CSS.escape(initialTab)}View`)) {
     activateTab(initialTab);
   }
-  if (polling) startPolling();
+  startPolling();
 }
 
 async function loadPersistedMonitoringState() {
   try {
-    const result = await requestJson("/api/incidents/monitoring/last-scan");
-    const scan = result?.scan;
+    const result = await requestJson("/api/monitoring/state");
+    applyServerMonitoringState(result);
+    const scan = result?.lastScan;
     if (!scan?.completedAtUtc) return;
     const persistedAt = new Date(scan.completedAtUtc);
     if (!Number.isFinite(persistedAt.getTime()) || (lastScanState?.scannedAt && lastScanState.scannedAt >= persistedAt)) return;
     lastScanState = {
-      scannedSources: Number(scan.scannedSourceCount) || Number(result.monitoredSourceCount) || 0,
+      scannedSources: Number(scan.scannedSourceCount) || 0,
       connectedSources: Math.max(0, (Number(scan.scannedSourceCount) || 0) - (Number(scan.errorCount) || 0)),
       errors: Number(scan.errorCount) || 0,
       signalsFound: Number(scan.candidateCount) || 0,
@@ -1591,10 +1649,37 @@ function syncPollingControl() {
 
 function startPolling() {
   stopPolling();
-  const intervalMs = Math.max(10, Number(elements.pollingSlider.value) || 30) * 1000;
+  const intervalMs = 5000;
   pollingTimer = window.setInterval(() => {
-    if (polling) void loadDetected(false, true);
+    void refreshServerMonitoringView();
   }, intervalMs);
+}
+
+async function refreshServerMonitoringView() {
+  try { await loadPersistedMonitoringState(); await loadDetected(false, false); }
+  catch { /* keep the last verified server state */ }
+}
+
+function applyServerMonitoringState(state = {}) {
+  polling = Boolean(state.enabled);
+  if (Number(state.pollingIntervalSeconds) >= Number(elements.pollingSlider.min) && Number(state.pollingIntervalSeconds) <= Number(elements.pollingSlider.max)) elements.pollingSlider.value = String(state.pollingIntervalSeconds);
+  syncPollingControl();
+  syncPollingButton();
+  if (state.lastScan?.completedAtUtc) {
+    const scan = state.lastScan;
+    lastScanState = { scannedSources: Number(scan.scannedSourceCount) || 0, connectedSources: Math.max(0, Number(scan.scannedSourceCount || 0) - Number(scan.errorCount || 0)), errors: Number(scan.errorCount) || 0, signalsFound: Number(scan.candidateCount) || 0, durationSeconds: Math.max(0, Number(scan.durationMilliseconds || 0) / 1000), scannedAt: new Date(scan.completedAtUtc) };
+  }
+  elements.lastScan.innerHTML = renderMonitorSummary(detectedCandidates);
+  renderSidebarLastScan();
+  hydrateIcons(elements.lastScan);
+}
+
+async function updateServerPollingInterval() {
+  try {
+    const state = await requestJson("/api/monitoring/interval", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ seconds: Number(elements.pollingSlider.value) }) });
+    applyServerMonitoringState(state);
+    showToast("Polling interval updated", `The server will scan every ${state.pollingIntervalSeconds} seconds.`, "success");
+  } catch (error) { showToast("Polling update failed", error.message || String(error), "error"); }
 }
 
 function stopPolling() {
