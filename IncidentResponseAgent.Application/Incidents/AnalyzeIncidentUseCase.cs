@@ -148,6 +148,7 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 				IsDegraded = runbookResult.IsDegraded, DegradedReason = runbookResult.DegradedReason,
 				UsedStructuredOutputRetry = agentResult.UsedStructuredOutputRetry,
 				StructuredOutputRetryReason = agentResult.StructuredOutputRetryReason,
+				ModelResponseWarning = agentResult.ModelResponseWarning,
 				EvidenceGatheringDurationMilliseconds = evidenceStopwatch.ElapsedMilliseconds,
 				RagDurationMilliseconds = runbookResult.DurationMilliseconds,
 				ModelDurationMilliseconds = agentResult.ModelDurationMilliseconds,

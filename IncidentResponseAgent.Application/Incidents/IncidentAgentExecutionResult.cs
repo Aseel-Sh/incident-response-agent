@@ -20,6 +20,8 @@ public sealed record IncidentAgentExecutionResult
 
 	public string? StructuredOutputRetryReason { get; init; }
 
+	public string? ModelResponseWarning { get; init; }
+
 	public long ModelDurationMilliseconds { get; init; }
 
 	public string? FallbackStage { get; init; }

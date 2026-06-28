@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using System.ClientModel;
 using System.ClientModel.Primitives;
@@ -171,12 +172,14 @@ Return compact JSON only, without Markdown, using the requested schema.
 		var frameworkTools = _tools.CreateFrameworkTools();
 		var frameworkAgent = CreateFrameworkAgent(endpoint, apiKey, model, frameworkTools);
 		var prompt = BuildAgentPrompt(incident, sessionContext, context);
+		var expectedSeverity = FormatSeverity(incident.Severity);
 		string? content = null;
 		string retryReason;
+		string? modelResponseWarning = null;
 		try
 		{
 			content = await RunFrameworkAgentAsync(frameworkAgent, prompt, useStrictSchema: true, "strict-json-schema", cancellationToken).ConfigureAwait(false);
-			retryReason = ValidateStructuredResponse(content, out var validationFailure, FormatSeverity(incident.Severity)) ? string.Empty : validationFailure;
+			retryReason = ValidateStructuredResponse(content, out var validationFailure) ? string.Empty : validationFailure;
 		}
 		catch (HttpRequestException exception) when (exception.StatusCode is HttpStatusCode.BadRequest or HttpStatusCode.UnprocessableEntity)
 		{
@@ -193,7 +196,7 @@ Return compact JSON only, without Markdown, using the requested schema.
 			_logger.LogInformation("Structured output retry started. IncidentId={IncidentId} Mode={Mode} Reason={Reason}.", incident.Id, "prompt-only-json", retryReason);
 			content = await RunFrameworkAgentAsync(frameworkAgent, prompt, useStrictSchema: false, "prompt-only-json", cancellationToken).ConfigureAwait(false);
 
-			if (!ValidateStructuredResponse(content, out var retryFailure, FormatSeverity(incident.Severity)))
+			if (!ValidateStructuredResponse(content, out var retryFailure))
 			{
 				_logger.LogWarning("Structured output retry failed. IncidentId={IncidentId} Reason={Reason}.", incident.Id, retryFailure);
 				throw new InvalidOperationException($"Model structured response validation failed after retry: {retryFailure}");
@@ -204,6 +207,12 @@ Return compact JSON only, without Markdown, using the requested schema.
 		else
 		{
 			_logger.LogInformation("Model response validation passed. IncidentId={IncidentId} Attempt={Attempt}.", incident.Id, "strict-json-schema");
+		}
+
+		content = NormalizeSeverityIfNeeded(content, expectedSeverity, out modelResponseWarning);
+		if (!string.IsNullOrWhiteSpace(modelResponseWarning))
+		{
+			_logger.LogWarning("Model response severity was normalized. IncidentId={IncidentId} Warning={Warning}.", incident.Id, modelResponseWarning);
 		}
 
 		_logger.LogInformation(
@@ -219,7 +228,8 @@ Return compact JSON only, without Markdown, using the requested schema.
 			Model = model,
 			UsedFallback = false,
 			UsedStructuredOutputRetry = !string.IsNullOrWhiteSpace(retryReason),
-			StructuredOutputRetryReason = string.IsNullOrWhiteSpace(retryReason) ? null : retryReason
+			StructuredOutputRetryReason = string.IsNullOrWhiteSpace(retryReason) ? null : retryReason,
+			ModelResponseWarning = modelResponseWarning
 		};
 	}
 
@@ -283,6 +293,7 @@ Return compact JSON only, without Markdown, using the requested schema.
 
 	public static bool ValidateStructuredResponse(string? content, out string failureReason, string? expectedSeverity = null)
 	{
+		failureReason = string.Empty;
 		if (string.IsNullOrWhiteSpace(content))
 		{
 			failureReason = "Model returned empty content.";
@@ -303,7 +314,10 @@ Return compact JSON only, without Markdown, using the requested schema.
 
 			var severity = root.GetProperty("severity").GetString();
 			if (severity is not ("SEV-1" or "SEV-2" or "SEV-3" or "SEV-4" or "SEV-5")) return Fail($"Severity '{severity}' is invalid.", out failureReason);
-			if (expectedSeverity is not null && !string.Equals(severity, expectedSeverity, StringComparison.Ordinal)) return Fail($"Model severity '{severity}' does not match incident severity '{expectedSeverity}'.", out failureReason);
+			if (expectedSeverity is not null && !string.Equals(severity, expectedSeverity, StringComparison.Ordinal))
+			{
+				failureReason = $"Model severity '{severity}' differs from incident severity '{expectedSeverity}' and will be normalized.";
+			}
 			var confidence = root.GetProperty("confidence").GetString();
 			if (confidence is not ("High" or "Medium" or "Low")) return Fail($"Confidence '{confidence}' is invalid.", out failureReason);
 			if (root.GetProperty("summary").ValueKind != JsonValueKind.String || root.GetProperty("notes").ValueKind != JsonValueKind.String) return Fail("Summary and notes must be strings.", out failureReason);
@@ -323,7 +337,10 @@ Return compact JSON only, without Markdown, using the requested schema.
 				if (!HasExactProperties(item, "description", "priority", "rationale", "supportingSignals")) return Fail("A recommended action is schema-invalid.", out failureReason);
 				if (item.GetProperty("priority").GetString() is not ("Critical" or "High" or "Medium" or "Low")) return Fail("A recommended action has invalid priority.", out failureReason);
 			}
-			failureReason = string.Empty;
+			if (string.IsNullOrWhiteSpace(failureReason))
+			{
+				failureReason = string.Empty;
+			}
 			return true;
 		}
 		catch (JsonException exception)
@@ -336,6 +353,38 @@ Return compact JSON only, without Markdown, using the requested schema.
 			failureReason = $"Response has an invalid value type: {exception.Message}";
 			return false;
 		}
+	}
+
+	public static string NormalizeSeverityIfNeeded(string? content, string expectedSeverity, out string? warning)
+	{
+		warning = null;
+		if (string.IsNullOrWhiteSpace(content))
+		{
+			return content ?? string.Empty;
+		}
+
+		var root = JsonNode.Parse(content)?.AsObject();
+		if (root is null || !root.TryGetPropertyValue("severity", out var severityNode))
+		{
+			return content;
+		}
+
+		var modelSeverity = severityNode?.GetValue<string>();
+		if (string.IsNullOrWhiteSpace(modelSeverity) || string.Equals(modelSeverity, expectedSeverity, StringComparison.Ordinal))
+		{
+			return content;
+		}
+
+		root["severity"] = expectedSeverity;
+		if (root.TryGetPropertyValue("notes", out var notesNode))
+		{
+			var notes = notesNode?.GetValue<string>() ?? string.Empty;
+			var addition = $"Submitted severity {expectedSeverity} was preserved; the model suggested {modelSeverity} but severity changes require responder confirmation.";
+			root["notes"] = string.IsNullOrWhiteSpace(notes) ? addition : $"{notes} {addition}";
+		}
+
+		warning = $"Model suggested {modelSeverity}; preserved submitted severity {expectedSeverity}. Severity changes require responder confirmation.";
+		return root.ToJsonString(SerializerOptions);
 	}
 
 	private static bool Fail(string reason, out string failureReason)

@@ -793,6 +793,7 @@ function renderProviderTransparency(provider = {}) {
   const degradedReason = cleanStatusMessage(provider.degradedReason);
   const fallbackReason = cleanStatusMessage(provider.fallbackReason);
   const retryReason = cleanStatusMessage(provider.structuredOutputRetryReason);
+  const modelWarning = cleanStatusMessage(provider.modelResponseWarning);
   const modelTimedOut = /timed out|timeout/i.test(fallbackReason);
   const ragDegraded = Boolean(provider.isDegraded);
   const embeddingDegraded = /embedding/i.test(degradedReason);
@@ -813,6 +814,7 @@ function renderProviderTransparency(provider = {}) {
     ${degradedReason ? `<p class="system-notice notice-warning"><strong>RAG degraded</strong><span>${escapeHtml(degradedReason)}</span></p>` : ""}
     ${fallbackReason ? `<p class="system-notice notice-error"><strong>${modelTimedOut ? "Model timeout" : "Model fallback"}</strong><span>${escapeHtml(fallbackReason)}</span></p>` : ""}
     ${retryReason ? `<p class="system-notice notice-info"><strong>Structured-output retry</strong><span>${escapeHtml(retryReason)}</span></p>` : ""}
+    ${modelWarning ? `<p class="system-notice notice-info"><strong>Model response adjusted</strong><span>${escapeHtml(modelWarning)}</span></p>` : ""}
   </div>${renderProviderDiagnostics(provider)}</section>`;
 }
 

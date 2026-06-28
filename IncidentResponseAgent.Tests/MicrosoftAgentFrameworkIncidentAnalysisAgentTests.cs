@@ -71,6 +71,23 @@ public sealed class MicrosoftAgentFrameworkIncidentAnalysisAgentTests
 	}
 
 	[Fact]
+	public async Task ValidButDifferentModelSeverityIsNormalizedWithoutFallback()
+	{
+		var handler = new QueueHttpHandler(Response(ValidAnalysis("SEV-2")));
+		var incident = CreateIncident(IncidentSeverity.Sev3);
+
+		var result = await CreateAgent(handler).AnalyzeAsync(incident, agentContext: CreateContext());
+
+		Assert.False(result.UsedFallback);
+		Assert.False(result.UsedStructuredOutputRetry);
+		Assert.Contains("Model suggested SEV-2", result.ModelResponseWarning);
+		Assert.Single(handler.Requests);
+		using var json = JsonDocument.Parse(result.AnalysisText);
+		Assert.Equal("SEV-3", json.RootElement.GetProperty("severity").GetString());
+		Assert.Contains("severity changes require responder confirmation", json.RootElement.GetProperty("notes").GetString(), StringComparison.OrdinalIgnoreCase);
+	}
+
+	[Fact]
 	public async Task StrictSchemaHttpRejectionRetries()
 	{
 		var handler = new QueueHttpHandler(
@@ -111,7 +128,7 @@ public sealed class MicrosoftAgentFrameworkIncidentAnalysisAgentTests
 		NullLogger<MicrosoftAgentFrameworkIncidentAnalysisAgent>.Instance,
 		new HttpClient(handler));
 
-	private static Incident CreateIncident() => new(Guid.NewGuid(), "Checkout errors", "Checkout requests are failing.", IncidentSeverity.Sev2, "checkout-api", "test");
+	private static Incident CreateIncident(IncidentSeverity severity = IncidentSeverity.Sev2) => new(Guid.NewGuid(), "Checkout errors", "Checkout requests are failing.", severity, "checkout-api", "test");
 
 	private static IncidentAnalysisAgentContext CreateContext() => new()
 	{

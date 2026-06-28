@@ -38,6 +38,7 @@ public sealed record AnalysisProviderTransparency
 	public string? DegradedReason { get; init; }
 	public bool UsedStructuredOutputRetry { get; init; }
 	public string? StructuredOutputRetryReason { get; init; }
+	public string? ModelResponseWarning { get; init; }
 	public long EvidenceGatheringDurationMilliseconds { get; init; }
 	public long RagDurationMilliseconds { get; init; }
 	public long ModelDurationMilliseconds { get; init; }

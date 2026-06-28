@@ -327,8 +327,8 @@ public sealed class IncidentsController : ControllerBase
 
     private static ProviderTransparencyResponse ToProviderResponse(AnalysisProviderTransparency provider) => new(
         provider.ModelProvider, provider.Model, provider.EmbeddingProvider, provider.VectorStore, provider.RagStatus,
-        provider.UsedModelFallback, provider.FallbackReason, provider.IsDegraded, provider.DegradedReason,
-        provider.UsedStructuredOutputRetry, provider.StructuredOutputRetryReason, provider.AttemptedModelProvider,
-        provider.AttemptedModel, provider.EvidenceGatheringDurationMilliseconds, provider.RagDurationMilliseconds,
-        provider.ModelDurationMilliseconds, provider.FallbackStage, provider.TimeoutSource);
+		provider.UsedModelFallback, provider.FallbackReason, provider.IsDegraded, provider.DegradedReason,
+		provider.UsedStructuredOutputRetry, provider.StructuredOutputRetryReason, provider.AttemptedModelProvider,
+		provider.AttemptedModel, provider.EvidenceGatheringDurationMilliseconds, provider.RagDurationMilliseconds,
+		provider.ModelDurationMilliseconds, provider.FallbackStage, provider.TimeoutSource, provider.ModelResponseWarning);
 }
