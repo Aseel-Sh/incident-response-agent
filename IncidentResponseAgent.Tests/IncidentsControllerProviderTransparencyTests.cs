@@ -18,6 +18,7 @@ public sealed class IncidentsControllerProviderTransparencyTests : IDisposable
 		var expected = new IncidentAnalysisResult
 		{
 			IncidentId = Guid.NewGuid(), IncidentSummary = "Local evidence analysis", AnalysisText = "{}", AnalysisProvider = "local-prompt", AnalysisModel = "local",
+			Severity = "SEV-3",
 			UsedFallbackAnalysis = true, FallbackReason = "Model returned 503 Service Unavailable.", SessionId = "session", SessionTurnNumber = 1,
 			ProviderTransparency = new AnalysisProviderTransparency { ModelProvider = "local-prompt", Model = "local", AttemptedModelProvider = "OpenRouter", AttemptedModel = "test/model", UsedModelFallback = true, FallbackReason = "Model returned 503 Service Unavailable.", RagStatus = "available", EvidenceGatheringDurationMilliseconds = 12, RagDurationMilliseconds = 7, ModelDurationMilliseconds = 45_000, FallbackStage = "during_model_execution", TimeoutSource = "ResilientIncidentAnalysisAgent.CancelAfter(45s)" }
 		};
@@ -28,6 +29,7 @@ public sealed class IncidentsControllerProviderTransparencyTests : IDisposable
 		var response = Assert.IsType<IncidentAnalysisResponse>(Assert.IsType<OkObjectResult>(action.Result).Value);
 
 		Assert.Equal("local-prompt", response.AnalysisProvider);
+		Assert.Equal("SEV-3", response.Severity);
 		Assert.True(response.UsedFallbackAnalysis);
 		Assert.Equal("local-prompt", response.ProviderTransparency.ModelProvider);
 		Assert.True(response.ProviderTransparency.UsedModelFallback);

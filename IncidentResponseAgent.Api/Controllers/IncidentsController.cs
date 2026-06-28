@@ -310,7 +310,7 @@ public sealed class IncidentsController : ControllerBase
     private static IncidentAnalysisResponse ToAnalysisResponse(IncidentAnalysisResult result) => new()
     {
         IncidentId = result.IncidentId, SessionId = result.SessionId, SessionTurnNumber = result.SessionTurnNumber, SessionContextSummary = result.SessionContextSummary,
-        IncidentSummary = result.IncidentSummary, AnalysisText = result.AnalysisText, AnalysisProvider = result.AnalysisProvider, AnalysisModel = result.AnalysisModel,
+        IncidentSummary = result.IncidentSummary, Severity = result.Severity, AnalysisText = result.AnalysisText, AnalysisProvider = result.AnalysisProvider, AnalysisModel = result.AnalysisModel,
         UsedFallbackAnalysis = result.UsedFallbackAnalysis, FallbackReason = result.FallbackReason,
         RetrievedEvidence = result.Evidence.Select(item => new IncidentResponseAgent.Api.Contracts.Incidents.IncidentAnalysisEvidenceItem { Summary = item.Summary, Source = item.Source, Details = item.Details }).ToArray(),
         KnownFacts = result.KnownFacts.Select(item => new GroundedClaimResponse(item.Claim, item.EvidenceReferences)).ToArray(),

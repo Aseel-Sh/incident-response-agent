@@ -12,6 +12,8 @@ public sealed record IncidentAnalysisResponse
 
     public string IncidentSummary { get; init; } = string.Empty;
 
+    public string Severity { get; init; } = string.Empty;
+
     public string AnalysisText { get; init; } = string.Empty;
 
     public string AnalysisProvider { get; init; } = string.Empty;

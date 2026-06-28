@@ -115,6 +115,7 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 			SessionContextSummary = BuildSessionSummary(nextSessionContext),
 			IncidentId = incident.Id,
 			IncidentSummary = BuildSummary(incident),
+			Severity = FormatSeverity(incident.Severity),
 			AnalysisText = analysisText,
 			AnalysisProvider = usedDeterministicStructuredFallback
 				? $"{agentResult.Provider}/deterministic-structured-fallback"
@@ -445,6 +446,19 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 			: incident.Environment;
 
 		return $"{incident.Severity} incident reported for {servicePart} in {environmentPart}: {incident.Title}.";
+	}
+
+	private static string FormatSeverity(IncidentSeverity severity)
+	{
+		return severity switch
+		{
+			IncidentSeverity.Sev1 => "SEV-1",
+			IncidentSeverity.Sev2 => "SEV-2",
+			IncidentSeverity.Sev3 => "SEV-3",
+			IncidentSeverity.Sev4 => "SEV-4",
+			IncidentSeverity.Sev5 => "SEV-5",
+			_ => "SEV-3"
+		};
 	}
 
 	private static IReadOnlyList<IncidentAnalysisEvidenceItem> BuildEvidence(

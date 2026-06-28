@@ -227,7 +227,7 @@ If the configured model provider is slow, unavailable, or rejects the request, t
 }
 ```
 
-Only approved proposed knowledge updates are written into the Markdown knowledge corpus and reindexed for later retrieval. Rejected proposals and deleted incidents remove their generated knowledge document.
+Only approved proposed knowledge updates are written into the Markdown knowledge corpus and reindexed for later retrieval. Rejected proposals and deleted incidents remove their generated knowledge document. In the UI, proposed runbook/postmortem updates appear from History after an incident is resolved. After approval, the approved Markdown file is visible from the Runbooks/RAG source view and becomes searchable through runbook retrieval.
 
 Verification commands:
 
@@ -236,6 +236,14 @@ dotnet test IncidentResponseAgent.Tests/IncidentResponseAgent.Tests.csproj
 npm.cmd run test:e2e:ai
 npm.cmd run test:e2e:learning
 ```
+
+Run the 12-scenario evaluator against a running API:
+
+```powershell
+node evaluation/run-evaluation.mjs http://127.0.0.1:5155
+```
+
+For offline/local validation without real model or telemetry credentials, run the API with `Tools__OperationalData__UseDeterministicFallbacks=true`. The evaluator reports candidate-classification and prior-outcome reuse as `not measured` unless those campaigns are exercised separately; it does not fabricate those metrics.
 
 During live testing on June 20, 2026, `nvidia/nemotron-3-super-120b-a12b:free` returned valid structured JSON in about 1.2 seconds. The previous `nex-agi/nex-n2-pro:free` route took about 31.5 seconds for a minimal request and repeatedly exceeded the incident-analysis timeout. Free model availability changes over time, so the model id remains configurable.
 
@@ -455,7 +463,7 @@ Content-Type: application/json
 {
   "title": "Checkout 5xx spike",
   "description": "Customers are seeing intermittent 500 responses during checkout.",
-  "severity": "High",
+  "severity": "sev2",
   "serviceName": "checkout-api",
   "environment": "production",
   "tags": ["checkout", "5xx", "latency"]
@@ -472,7 +480,7 @@ Content-Type: application/json
   "sessionId": "existing-session-id",
   "title": "Checkout 5xx spike still active",
   "description": "Errors continue after rollback.",
-  "severity": "High",
+  "severity": "sev2",
   "serviceName": "checkout-api",
   "environment": "production",
   "tags": ["checkout", "rollback"]
