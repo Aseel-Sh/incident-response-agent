@@ -21,6 +21,9 @@ public sealed record IngestMetricSampleRequest : IValidatableObject
 	[Range(typeof(decimal), "-1000000000", "1000000000")]
 	public required decimal Value { get; init; }
 
+	[MaxLength(120)]
+	public string? ProjectId { get; init; }
+
 	public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
 	{
 		if (string.IsNullOrWhiteSpace(MetricName))

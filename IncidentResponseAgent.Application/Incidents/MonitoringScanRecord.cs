@@ -4,6 +4,8 @@ public sealed record MonitoringScanRecord
 {
 	public Guid Id { get; init; } = Guid.NewGuid();
 
+	public string ProjectId { get; init; } = "default";
+
 	public required DateTimeOffset StartedAtUtc { get; init; }
 
 	public required DateTimeOffset CompletedAtUtc { get; init; }

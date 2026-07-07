@@ -256,9 +256,11 @@ test.describe.serial('incident response core flows', () => {
     await expect(page.locator(`tr[data-history-id="${resolvedPrevious.incidentId}"]`)).toBeVisible();
     await page.getByLabel('Search history').fill('');
     await page.getByLabel('Status filter').selectOption('new');
-    await page.getByLabel('Confidence filter').selectOption({ index: 1 });
+    await page.getByLabel('Severity filter').selectOption({ index: 1 });
     await expect(page.locator('#historyResultCount')).not.toHaveText('0 results');
 
+    await page.getByLabel('Severity filter').selectOption('all');
+    await page.getByLabel('Status filter').selectOption('all');
     await page.getByLabel('Search history').fill('Deleted SEV-4 checkout latency fixture');
     await page.locator(`tr[data-history-id="${deleted.incidentId}"] .link-button`).click();
     const deleteButton = page.getByRole('button', { name: 'Delete incident' });

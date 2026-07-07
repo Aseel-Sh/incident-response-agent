@@ -45,6 +45,10 @@
           <h1 id="workspaceTitle">Dashboard</h1>
         </div>
         <div class="topbar-actions">
+          <label class="project-selector" aria-label="Project workspace">
+            <span data-icon="database">Project</span>
+            <select id="projectSelector"></select>
+          </label>
           <span id="healthStatus" class="status-pill status-pending">Checking</span>
           <span id="demoModePill" class="status-pill status-warning">Demo Mode</span>
           <button id="scanButton" class="top-icon" type="button" data-icon="moon" aria-label="Toggle theme"></button>
@@ -123,7 +127,6 @@
           <select id="historyStatusFilter" aria-label="Status filter"><option value="all">All statuses</option></select>
           <select id="historySessionFilter" aria-label="Session filter"><option value="all">All sessions</option></select>
           <select id="historySeverityFilter" aria-label="Severity filter"><option value="all">All severities</option></select>
-          <select id="historyConfidenceFilter" aria-label="Confidence filter"><option value="all">All confidence</option></select>
         </div>
         <section class="panel">
           <div class="history-layout">

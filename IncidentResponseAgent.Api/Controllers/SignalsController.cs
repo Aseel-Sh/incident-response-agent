@@ -31,7 +31,8 @@ public sealed class SignalsController : ControllerBase
 		[FromBody] IngestLogEntryRequest request,
 		CancellationToken cancellationToken)
 	{
-		var path = ResolvePath(_options.LogEntriesPath, Path.Combine("Tools", "SampleData", "logs.json"));
+		var project = ResolveProject(request.ProjectId);
+		var path = ResolvePath(project?.LogEntriesPath ?? _options.LogEntriesPath, Path.Combine("Tools", "SampleData", "logs.json"));
 		var entry = new LogSearchEntry
 		{
 			Timestamp = request.Timestamp ?? DateTimeOffset.UtcNow,
@@ -62,7 +63,8 @@ public sealed class SignalsController : ControllerBase
 		[FromBody] IngestMetricSampleRequest request,
 		CancellationToken cancellationToken)
 	{
-		var path = ResolvePath(_options.MetricSamplesPath, Path.Combine("Tools", "SampleData", "metrics.json"));
+		var project = ResolveProject(request.ProjectId);
+		var path = ResolvePath(project?.MetricSamplesPath ?? _options.MetricSamplesPath, Path.Combine("Tools", "SampleData", "metrics.json"));
 		var metricName = request.MetricName.Trim();
 		var serviceName = request.ServiceName.Trim();
 		var environment = request.Environment.Trim();
@@ -138,6 +140,16 @@ public sealed class SignalsController : ControllerBase
 		}
 
 		return Path.Combine(AppContext.BaseDirectory, defaultRelativePath);
+	}
+
+	private OperationalProjectOptions? ResolveProject(string? projectId)
+	{
+		if (string.IsNullOrWhiteSpace(projectId) || projectId.Equals("all", StringComparison.OrdinalIgnoreCase))
+		{
+			return null;
+		}
+
+		return _options.Projects.FirstOrDefault(project => project.Id.Equals(projectId.Trim(), StringComparison.OrdinalIgnoreCase));
 	}
 
 	private sealed class MetricSeriesDocument

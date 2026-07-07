@@ -8,7 +8,7 @@ public interface IIncidentRecordStore
 
 	Task SaveCandidatesAsync(IReadOnlyList<DetectedIncidentCandidate> candidates, MonitoringScanRecord scan, CancellationToken cancellationToken = default);
 
-	Task<IReadOnlyList<DetectedIncidentCandidate>> GetCandidatesAsync(CancellationToken cancellationToken = default);
+	Task<IReadOnlyList<DetectedIncidentCandidate>> GetCandidatesAsync(string? projectId = null, CancellationToken cancellationToken = default);
 
 	Task<Incident> ConfirmCandidateAsync(string candidateId, CancellationToken cancellationToken = default);
 
@@ -18,7 +18,7 @@ public interface IIncidentRecordStore
 
 	Task<ProposedKnowledgeUpdate> ReviewKnowledgeUpdateAsync(Guid incidentId, string decision, string? content, string? notes, CancellationToken cancellationToken = default);
 
-	Task<MonitoringScanRecord?> GetLastScanAsync(CancellationToken cancellationToken = default);
+	Task<MonitoringScanRecord?> GetLastScanAsync(string? projectId = null, CancellationToken cancellationToken = default);
 
 	Task<IncidentAnalysisRecord?> GetByIncidentIdAsync(Guid incidentId, CancellationToken cancellationToken = default);
 
@@ -30,7 +30,7 @@ public interface IIncidentRecordStore
 
 	Task<IncidentAnalysisFeedback> AddFeedbackAsync(Guid incidentId, IncidentAnalysisFeedback feedback, CancellationToken cancellationToken = default);
 
-	Task<IReadOnlyList<IncidentAnalysisRecord>> GetRecentAsync(int maxResults, CancellationToken cancellationToken = default);
+	Task<IReadOnlyList<IncidentAnalysisRecord>> GetRecentAsync(int maxResults, string? projectId = null, CancellationToken cancellationToken = default);
 
-	Task<IReadOnlyList<SimilarIncidentMatch>> FindSimilarAsync(Incident incident, int maxResults, CancellationToken cancellationToken = default);
+	Task<IReadOnlyList<SimilarIncidentMatch>> FindSimilarAsync(Incident incident, int maxResults, string? projectId = null, CancellationToken cancellationToken = default);
 }

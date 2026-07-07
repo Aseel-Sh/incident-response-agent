@@ -21,6 +21,9 @@ public sealed record IngestLogEntryRequest : IValidatableObject
 	[MaxLength(120)]
 	public string? CorrelationId { get; init; }
 
+	[MaxLength(120)]
+	public string? ProjectId { get; init; }
+
 	public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
 	{
 		if (string.IsNullOrWhiteSpace(Source))

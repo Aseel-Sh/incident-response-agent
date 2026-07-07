@@ -51,10 +51,10 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 		var runbookResultTask = RetrieveRunbooksSafelyAsync(incident, cancellationToken);
 		var logResultTask = _logSearchProvider.SearchAsync(BuildLogSearchRequest(incident), cancellationToken);
 		var metricsResultTask = _metricsProvider.QueryAsync(BuildMetricsQueryRequest(incident), cancellationToken);
-		var similarIncidentsTask = _incidentRecordStore.FindSimilarAsync(incident, 3, cancellationToken);
+		var similarIncidentsTask = _incidentRecordStore.FindSimilarAsync(incident, 3, incident.ProjectId, cancellationToken);
 		var linkedSessionRecordsTask = string.IsNullOrWhiteSpace(sessionId)
 			? Task.FromResult<IReadOnlyList<IncidentAnalysisRecord>>(Array.Empty<IncidentAnalysisRecord>())
-			: _incidentRecordStore.GetRecentAsync(100, cancellationToken);
+			: _incidentRecordStore.GetRecentAsync(100, incident.ProjectId, cancellationToken);
 
 		await Task.WhenAll(sessionContextTask, runbookResultTask, logResultTask, metricsResultTask, similarIncidentsTask, linkedSessionRecordsTask);
 		evidenceStopwatch.Stop();
@@ -114,6 +114,7 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 			SessionTurnNumber = nextSessionContext.TurnNumber,
 			SessionContextSummary = BuildSessionSummary(nextSessionContext),
 			IncidentId = incident.Id,
+			ProjectId = incident.ProjectId,
 			IncidentSummary = BuildSummary(incident),
 			Severity = FormatSeverity(incident.Severity),
 			AnalysisText = analysisText,
@@ -830,6 +831,7 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 	{
 		var normalized = NormalizeAction(description);
 		return normalized is "confirm blast radius review recent changes and follow the most relevant runbook"
+			or "check recent changes"
 			or "confirm system is stable"
 			or "prioritize investigation of the most affected service path first"
 			|| normalized.StartsWith("compare against previous similar incident", StringComparison.Ordinal)

@@ -60,6 +60,7 @@ public sealed class FileIncidentRecordStore : IIncidentRecordStore
 			{
 				Incident = incident,
 				AnalysisResult = analysisResult,
+				ProjectId = incident.ProjectId,
 				Status = isExisting ? existing!.Status : "new",
 				CreatedAtUtc = isExisting ? existing!.CreatedAtUtc : now,
 				UpdatedAtUtc = now,
@@ -96,7 +97,7 @@ public sealed class FileIncidentRecordStore : IIncidentRecordStore
 		}
 	}
 
-	public async Task<IReadOnlyList<IncidentAnalysisRecord>> GetRecentAsync(int maxResults, CancellationToken cancellationToken = default)
+	public async Task<IReadOnlyList<IncidentAnalysisRecord>> GetRecentAsync(int maxResults, string? projectId = null, CancellationToken cancellationToken = default)
 	{
 		cancellationToken.ThrowIfCancellationRequested();
 
@@ -105,6 +106,7 @@ public sealed class FileIncidentRecordStore : IIncidentRecordStore
 		{
 			var count = maxResults <= 0 ? 1 : maxResults;
 			var records = (await ReadRecordsAsync(cancellationToken)).Values
+				.Where(record => ProjectMatches(RecordProjectId(record), projectId))
 				.OrderByDescending(record => record.CreatedAtUtc)
 				.Take(count)
 				.ToArray();
@@ -127,8 +129,10 @@ public sealed class FileIncidentRecordStore : IIncidentRecordStore
 			foreach (var candidate in candidates)
 			{
 				if (state.Candidates.Any(item => item.Id == candidate.Id)) continue;
+				var candidateProject = CandidateProjectId(candidate);
 				var existingCandidateIndex = state.Candidates.FindIndex(item =>
 					item.Status == "candidate" &&
+					string.Equals(CandidateProjectId(item), candidateProject, StringComparison.OrdinalIgnoreCase) &&
 					!item.Source.Contains("manual", StringComparison.OrdinalIgnoreCase) &&
 					string.Equals(item.ServiceName, candidate.ServiceName, StringComparison.OrdinalIgnoreCase) &&
 					string.Equals(item.Environment, candidate.Environment, StringComparison.OrdinalIgnoreCase));
@@ -149,7 +153,7 @@ public sealed class FileIncidentRecordStore : IIncidentRecordStore
 					continue;
 				}
 				var probe = ToIncident(candidate);
-				var active = records.Values.Where(record => record.Status is "new" or "active" or "mitigated").ToArray();
+				var active = records.Values.Where(record => ProjectMatches(RecordProjectId(record), candidateProject) && record.Status is "new" or "active" or "mitigated").ToArray();
 				var duplicate = active.FirstOrDefault(record => SameScope(probe, record.Incident));
 				var similar = active.Select(record => ToSimilarMatch(probe, Tokenize(BuildIncidentText(probe)), record)).Where(match => match.Score >= 0.45).OrderByDescending(match => match.Score).Take(3).ToArray();
 				state.Candidates.Add(candidate with
@@ -165,10 +169,11 @@ public sealed class FileIncidentRecordStore : IIncidentRecordStore
 			}
 			if (scan.Status == "completed" && scan.ErrorCount == 0)
 			{
-				var activeScopes = candidates.Select(item => $"{item.ServiceName}|{item.Environment}").ToHashSet(StringComparer.OrdinalIgnoreCase);
+				var scanProject = ScanProjectId(scan);
+				var activeScopes = candidates.Select(item => $"{CandidateProjectId(item)}|{item.ServiceName}|{item.Environment}").ToHashSet(StringComparer.OrdinalIgnoreCase);
 				state.Candidates = state.Candidates.Select(existing =>
 				{
-					if (existing.Status != "candidate" || existing.Source.Contains("manual", StringComparison.OrdinalIgnoreCase) || activeScopes.Contains($"{existing.ServiceName}|{existing.Environment}")) return existing;
+					if (existing.Status != "candidate" || !ProjectMatches(CandidateProjectId(existing), scanProject) || existing.Source.Contains("manual", StringComparison.OrdinalIgnoreCase) || activeScopes.Contains($"{CandidateProjectId(existing)}|{existing.ServiceName}|{existing.Environment}")) return existing;
 					return existing with { Status = "recovered", Timeline = existing.Timeline.Append(Event("recovered", "Observable signals returned below detection thresholds on a successful monitoring scan.", scan.CompletedAtUtc)).ToArray() };
 				}).ToList();
 			}
@@ -179,17 +184,29 @@ public sealed class FileIncidentRecordStore : IIncidentRecordStore
 		finally { _fileLock.Release(); }
 	}
 
-	public async Task<IReadOnlyList<DetectedIncidentCandidate>> GetCandidatesAsync(CancellationToken cancellationToken = default)
+	public async Task<IReadOnlyList<DetectedIncidentCandidate>> GetCandidatesAsync(string? projectId = null, CancellationToken cancellationToken = default)
 	{
 		await _fileLock.WaitAsync(cancellationToken);
-		try { return (await ReadWorkflowStateAsync(cancellationToken)).Candidates.OrderByDescending(item => item.DetectedAtUtc).ToArray(); }
+		try
+		{
+			return (await ReadWorkflowStateAsync(cancellationToken)).Candidates
+				.Where(item => ProjectMatches(CandidateProjectId(item), projectId))
+				.OrderByDescending(item => item.DetectedAtUtc)
+				.ToArray();
+		}
 		finally { _fileLock.Release(); }
 	}
 
-	public async Task<MonitoringScanRecord?> GetLastScanAsync(CancellationToken cancellationToken = default)
+	public async Task<MonitoringScanRecord?> GetLastScanAsync(string? projectId = null, CancellationToken cancellationToken = default)
 	{
 		await _fileLock.WaitAsync(cancellationToken);
-		try { return (await ReadWorkflowStateAsync(cancellationToken)).Scans.OrderByDescending(item => item.CompletedAtUtc).FirstOrDefault(); }
+		try
+		{
+			return (await ReadWorkflowStateAsync(cancellationToken)).Scans
+				.Where(item => ProjectMatches(ScanProjectId(item), projectId))
+				.OrderByDescending(item => item.CompletedAtUtc)
+				.FirstOrDefault();
+		}
 		finally { _fileLock.Release(); }
 	}
 
@@ -209,7 +226,7 @@ public sealed class FileIncidentRecordStore : IIncidentRecordStore
 			var records = await ReadRecordsAsync(cancellationToken);
 			records[incident.Id] = new IncidentAnalysisRecord
 			{
-				Incident = incident, AnalysisResult = placeholder, Status = "new", CreatedAtUtc = now, UpdatedAtUtc = now, CandidateId = candidate.Id,
+				Incident = incident, AnalysisResult = placeholder, ProjectId = incident.ProjectId, Status = "new", CreatedAtUtc = now, UpdatedAtUtc = now, CandidateId = candidate.Id,
 				Timeline = candidate.Timeline.Concat([Event("incident created", "Incident created from candidate.", now), Event("incident confirmed", "Candidate confirmed by a human.", now, actor: "user"), Event("analysis started", "Evidence collection and analysis started.", now)]).ToArray()
 			};
 			state.Candidates[index] = candidate with { Status = "confirmed", Timeline = candidate.Timeline.Append(Event("incident confirmed", $"Confirmed as incident {incident.Id}.", now, actor: "user")).ToArray() };
@@ -433,6 +450,7 @@ public sealed class FileIncidentRecordStore : IIncidentRecordStore
 	public async Task<IReadOnlyList<SimilarIncidentMatch>> FindSimilarAsync(
 		Incident incident,
 		int maxResults,
+		string? projectId = null,
 		CancellationToken cancellationToken = default)
 	{
 		ArgumentNullException.ThrowIfNull(incident);
@@ -445,6 +463,7 @@ public sealed class FileIncidentRecordStore : IIncidentRecordStore
 			var queryTokens = Tokenize(BuildIncidentText(incident));
 			var records = (await ReadRecordsAsync(cancellationToken)).Values
 				.Where(record => record.Incident.Id != incident.Id)
+				.Where(record => ProjectMatches(RecordProjectId(record), projectId ?? incident.ProjectId))
 				.Where(IsReusableKnowledge)
 				.Select(record => ToSimilarMatch(incident, queryTokens, record))
 				.Where(match => match.Score >= 0.18)
@@ -477,7 +496,12 @@ public sealed class FileIncidentRecordStore : IIncidentRecordStore
 
 	private static IncidentAnalysisRecord MigrateLegacyRecord(IncidentAnalysisRecord record)
 	{
-		if (record.UpdatedAtUtc != default) return record;
+		if (record.UpdatedAtUtc != default)
+		{
+			return string.IsNullOrWhiteSpace(record.ProjectId)
+				? record with { ProjectId = record.Incident.ProjectId }
+				: record;
+		}
 		var severity = record.Incident.Severity switch
 		{
 			(IncidentSeverity)4 => IncidentSeverity.Sev1,
@@ -486,8 +510,8 @@ public sealed class FileIncidentRecordStore : IIncidentRecordStore
 			(IncidentSeverity)1 => IncidentSeverity.Sev4,
 			_ => IncidentSeverity.Sev5
 		};
-		var incident = new Incident(record.Incident.Id, record.Incident.Title, record.Incident.Description, severity, record.Incident.ServiceName, record.Incident.Environment, record.Incident.Timestamp, record.Incident.Tags);
-		return record with { Incident = incident, UpdatedAtUtc = record.CreatedAtUtc, Timeline = [Event("incident created", "Migrated legacy analyzed incident.", record.CreatedAtUtc)] };
+		var incident = new Incident(record.Incident.Id, record.Incident.Title, record.Incident.Description, severity, record.Incident.ServiceName, record.Incident.Environment, record.Incident.Timestamp, record.Incident.Tags, record.Incident.ProjectId);
+		return record with { Incident = incident, ProjectId = incident.ProjectId, UpdatedAtUtc = record.CreatedAtUtc, Timeline = [Event("incident created", "Migrated legacy analyzed incident.", record.CreatedAtUtc)] };
 	}
 
 	private async Task WriteRecordsAsync(IEnumerable<IncidentAnalysisRecord> records, CancellationToken cancellationToken)
@@ -596,12 +620,32 @@ public sealed class FileIncidentRecordStore : IIncidentRecordStore
 		record.Status == "resolved" && record.ProposedKnowledgeUpdate?.Status == "approved";
 
 	private static bool SameScope(Incident left, Incident right) =>
+		string.Equals(left.ProjectId, right.ProjectId, StringComparison.OrdinalIgnoreCase) &&
 		string.Equals(left.ServiceName, right.ServiceName, StringComparison.OrdinalIgnoreCase) &&
 		string.Equals(left.Environment, right.Environment, StringComparison.OrdinalIgnoreCase) &&
 		Tokenize(BuildIncidentText(left)).Intersect(Tokenize(BuildIncidentText(right)), StringComparer.OrdinalIgnoreCase).Count() >= 2;
 
 	private static Incident ToIncident(DetectedIncidentCandidate candidate) => new(
-		Guid.NewGuid(), candidate.Title, candidate.Description, candidate.Severity, candidate.ServiceName, candidate.Environment, candidate.DetectedAtUtc, candidate.SuggestedTags);
+		Guid.NewGuid(), candidate.Title, candidate.Description, candidate.Severity, candidate.ServiceName, candidate.Environment, candidate.DetectedAtUtc, candidate.SuggestedTags, CandidateProjectId(candidate));
+
+	private static string CandidateProjectId(DetectedIncidentCandidate candidate) =>
+		string.IsNullOrWhiteSpace(candidate.ProjectId) ? "default" : candidate.ProjectId;
+
+	private static string RecordProjectId(IncidentAnalysisRecord record) =>
+		!string.IsNullOrWhiteSpace(record.ProjectId) ? record.ProjectId : record.Incident.ProjectId;
+
+	private static string ScanProjectId(MonitoringScanRecord scan) =>
+		string.IsNullOrWhiteSpace(scan.ProjectId) ? "default" : scan.ProjectId;
+
+	private static bool ProjectMatches(string actualProjectId, string? requestedProjectId)
+	{
+		if (string.IsNullOrWhiteSpace(requestedProjectId) || requestedProjectId.Equals("all", StringComparison.OrdinalIgnoreCase))
+		{
+			return true;
+		}
+
+		return actualProjectId.Equals(requestedProjectId, StringComparison.OrdinalIgnoreCase);
+	}
 
 	private static IncidentTimelineEvent Event(string type, string summary, DateTimeOffset occurredAtUtc, string actor = "system", string? evidenceReference = null) => new()
 	{

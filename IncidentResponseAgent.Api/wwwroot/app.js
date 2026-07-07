@@ -6,6 +6,7 @@ const $ = (selector) => {
 
 const elements = {
   health: $("#healthStatus"),
+  projectSelector: $("#projectSelector"),
   appVersion: $("#appVersion"),
   sidebarLastScan: $("#sidebarLastScan"),
   demoPill: $("#demoModePill"),
@@ -27,7 +28,6 @@ const elements = {
   historyStatusFilter: $("#historyStatusFilter"),
   historySessionFilter: $("#historySessionFilter"),
   historySeverityFilter: $("#historySeverityFilter"),
-  historyConfidenceFilter: $("#historyConfidenceFilter"),
   historyTotal: $("#historyTotal"),
   historyResultCount: $("#historyResultCount"),
   recentOutput: $("#recentOutput"),
@@ -101,6 +101,8 @@ let confirmationResolver = null;
 let confirmationReturnFocus = null;
 let dashboardPage = 1;
 let historyPage = 1;
+let projects = [];
+let activeProjectId = localStorage.getItem("incidentops.projectId") || "default";
 const pageSize = 10;
 const incidentLifecycleStatuses = ["new", "active", "mitigated", "resolved", "recovered"];
 
@@ -120,6 +122,20 @@ elements.incidentSearch.addEventListener("input", () => {
   renderDetected();
 });
 elements.manualIncident.addEventListener("click", showManualIncidentForm);
+elements.projectSelector.addEventListener("change", async () => {
+  activeProjectId = elements.projectSelector.value || "default";
+  localStorage.setItem("incidentops.projectId", activeProjectId);
+  dashboardPage = 1;
+  historyPage = 1;
+  lastScanState = null;
+  localStorage.removeItem("incidentops.lastScan");
+  await loadPersistedMonitoringState();
+  await Promise.allSettled([loadRecent(), loadDetected(false, false), loadSources()]);
+  elements.lastScan.innerHTML = renderMonitorSummary(detectedCandidates);
+  renderSidebarLastScan();
+  hydrateIcons(elements.lastScan);
+  showToast("Project changed", activeProjectId === "all" ? "Showing incidents across all projects." : `Scoped to ${projectName(activeProjectId)}.`, "info");
+});
 elements.sample.addEventListener("click", loadSampleIncident);
 elements.historyReload.addEventListener("click", async () => {
   if (elements.historyReload.disabled) return;
@@ -138,7 +154,7 @@ elements.historyReload.addEventListener("click", async () => {
     hydrateIcons(elements.historyReload);
   }
 });
-[elements.historyServiceFilter, elements.historyStatusFilter, elements.historySessionFilter, elements.historySeverityFilter, elements.historyConfidenceFilter].forEach((select) => {
+[elements.historyServiceFilter, elements.historyStatusFilter, elements.historySessionFilter, elements.historySeverityFilter].forEach((select) => {
   select.addEventListener("change", () => {
     historyPage = 1;
     renderHistory();
@@ -431,6 +447,32 @@ async function checkHealth() {
   }
 }
 
+async function loadProjects() {
+  try {
+    projects = normalizeArray(await requestJson("/api/projects"));
+  } catch {
+    projects = [{ id: "default", name: "Default project" }];
+  }
+  if (!projects.some((project) => project.id === activeProjectId) && activeProjectId !== "all") {
+    activeProjectId = projects[0]?.id || "default";
+  }
+  elements.projectSelector.innerHTML = `<option value="all">Global view</option>${projects.map((project) => `<option value="${escapeHtml(project.id)}">${escapeHtml(project.name || project.id)}</option>`).join("")}`;
+  elements.projectSelector.value = activeProjectId;
+}
+
+function projectQuery(prefix = "?") {
+  return activeProjectId && activeProjectId !== "all" ? `${prefix}projectId=${encodeURIComponent(activeProjectId)}` : "";
+}
+
+function projectName(projectId) {
+  return projects.find((project) => project.id === projectId)?.name || projectId || "Default project";
+}
+
+function projectBadge(projectId) {
+  if (!projectId || activeProjectId !== "all") return "";
+  return `<span class="badge project-badge">${escapeHtml(projectName(projectId))}</span>`;
+}
+
 async function loadSources() {
   sourceRows = normalizeArray(await requestJson("/api/operations/sources"));
   elements.sources.innerHTML = renderSourcesPage(sourceRows);
@@ -462,11 +504,11 @@ async function loadDetected(userInitiated = false, performScan = userInitiated) 
   }
   try {
     const result = performScan
-      ? await requestJson("/api/monitoring/scan", { method: "POST" })
-      : await requestJson("/api/incidents/detected");
+      ? await requestJson(`/api/monitoring/scan${projectQuery()}`, { method: "POST" })
+      : await requestJson(`/api/incidents/detected${projectQuery()}`);
     if (performScan) {
       applyServerMonitoringState(result);
-      detectedCandidates = normalizeArray(await requestJson("/api/incidents/detected"));
+      detectedCandidates = normalizeArray(await requestJson(`/api/incidents/detected${projectQuery()}`));
     } else {
       detectedCandidates = normalizeArray(result?.candidates ?? result);
     }
@@ -526,9 +568,20 @@ function renderDetected() {
     .filter((item) => !query || [item.title, item.serviceName, item.environment, item.source, item.provider, ...(item.signals || []), ...(item.tags || [])].join(" ").toLowerCase().includes(query));
   const page = paginateRows(rows, dashboardPage);
   dashboardPage = page.page;
-  elements.detected.innerHTML = page.items.map(renderBacklogRow).join("") || `<div class="empty-state">No incidents match the current filter.</div>`;
+  elements.detected.innerHTML = renderBacklogRows(page.items) || `<div class="empty-state">No incidents match the current filter.</div>`;
   elements.detected.insertAdjacentHTML("beforeend", renderPagination("dashboard", page, "data-dashboard-page"));
   hydrateIcons(elements.detected);
+}
+
+function renderBacklogRows(items) {
+  if (activeProjectId !== "all") return items.map(renderBacklogRow).join("");
+  const groups = items.reduce((map, item) => {
+    const key = item.projectId || "default";
+    if (!map.has(key)) map.set(key, []);
+    map.get(key).push(item);
+    return map;
+  }, new Map());
+  return [...groups.entries()].map(([projectId, rows]) => `<section class="project-backlog-group"><h3>${escapeHtml(projectName(projectId))}<span>${rows.length}</span></h3>${rows.map(renderBacklogRow).join("")}</section>`).join("");
 }
 
 function buildDashboardRows() {
@@ -545,6 +598,7 @@ function buildDashboardRows() {
     statusLabel: formatStatusLabel(row.status),
     confidence: row.confidence,
     provider: row.provider,
+    projectId: row.projectId,
     tags: row.tags
   }));
   const ticketTitles = new Set(tickets.map((ticket) => normalizeAction(ticket.title)));
@@ -563,7 +617,8 @@ function enrichCandidate(item, index) {
     statusKey: item.status || "candidate",
     statusLabel: item.status === "candidate" ? "Candidate" : formatStatusLabel(item.status),
     confidence: "low",
-    provider: "rule"
+    provider: "rule",
+    projectId: item.projectId || "default"
   };
 }
 
@@ -579,6 +634,7 @@ function renderBacklogRow(item) {
           <span class="severity severity-${escapeHtml(severityKey)}">${escapeHtml(formatSeverityLabel(item.severity))}</span>
           <span class="badge status-${escapeHtml(item.statusKey)}">${escapeHtml(item.statusLabel)}</span>
           <span class="badge badge-info">${escapeHtml(item.provider)}</span>
+          ${projectBadge(item.projectId)}
         </div>
         <h3>${escapeHtml(formatIncidentTitle(item.title))}</h3>
         <p><span>${escapeHtml(item.serviceName || "unknown")}</span><span class="badge meta-badge">${escapeHtml(item.environment || "unknown")}</span><span class="conf-label confidence-${escapeHtml(confidence)}">${escapeHtml(confidence)} conf.</span></p>
@@ -643,7 +699,8 @@ async function analyzeCurrentIncident() {
     environment: emptyToNull(form.get("environment")),
     timestamp: activeIncidentMeta?.detectedAtUtc || currentAnalysisAt,
     sessionId: emptyToNull(form.get("sessionId")),
-    tags: splitTags(form.get("tags"))
+    tags: splitTags(form.get("tags")),
+    projectId: activeProjectId === "all" ? "default" : activeProjectId
   };
   try {
     const candidate = await requestJson("/api/incidents/candidates/manual", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
@@ -969,7 +1026,8 @@ function renderIncidentCompare(incidentId) {
 }
 
 async function loadRecent() {
-  recentAnalyses = normalizeArray(await requestJson("/api/incidents/recent?maxResults=12"));
+  const separator = projectQuery("&");
+  recentAnalyses = normalizeArray(await requestJson(`/api/incidents/recent?maxResults=12${separator}`));
   historyRows = recentAnalyses.map(toHistoryRow);
   populateHistoryFilters(historyRows);
   renderHistory();
@@ -982,7 +1040,6 @@ function populateHistoryFilters(rows) {
   setSelectOptions(elements.historyStatusFilter, "All statuses", incidentLifecycleStatuses, formatStatusLabel);
   setSessionFilterOptions(rows);
   setSelectOptions(elements.historySeverityFilter, "All severities", uniqueValues(rows.map((row) => row.severity)));
-  setSelectOptions(elements.historyConfidenceFilter, "All confidence", uniqueValues(rows.map((row) => row.confidence)));
 }
 
 function renderHistory() {
@@ -1001,7 +1058,6 @@ function filterHistoryRows(rows) {
   const status = elements.historyStatusFilter.value;
   const session = elements.historySessionFilter.value;
   const severity = elements.historySeverityFilter.value;
-  const confidence = elements.historyConfidenceFilter.value;
   return rows.filter((row) =>
     (!query || [row.incidentId, row.summary, row.description, row.service, row.environment, row.severity, row.status, row.sessionId, ...(row.tags || [])]
       .filter(Boolean)
@@ -1009,8 +1065,7 @@ function filterHistoryRows(rows) {
     (service === "all" || row.service === service) &&
     (status === "all" || row.status === status) &&
     matchesSessionFilter(row, session) &&
-    (severity === "all" || row.severity === severity) &&
-    (confidence === "all" || row.confidence === confidence));
+    (severity === "all" || row.severity === severity));
 }
 
 function renderHistoryTable(rows, totalRows = rows.length) {
@@ -1211,7 +1266,8 @@ function getModalFocusableElements(modal = elements.historyModal) {
 
 function renderSourcesPage(items) {
   const warning = items.some((item) => item.isDemoMode) ? `<div class="warning-banner"><span data-icon="alert"></span>Sample data active - logs and metrics are bundled sample files. Connect real sources for production use.</div>` : "";
-  return `${warning}${items.map(renderSourceCard).join("")}<section class="setup-section"><div class="setup-heading"><div><h3><span data-icon="plug"></span>Source configuration</h3><p>Source locations are read-only here because configuration is managed in appsettings or environment variables. Configured means a path is set; connected means the API verified it.</p></div></div><div class="setup-steps"><span><strong>1</strong> Configure paths</span><span><strong>2</strong> Refresh monitor</span><span><strong>3</strong> Verify RAG diagnostics</span></div></section>`;
+  const projectCards = projects.map((project) => `<article class="source-card project-source-card"><div><h3>${escapeHtml(project.name || project.id)} <span class="badge project-badge">${escapeHtml(project.id)}</span></h3><p>${escapeHtml(project.sourceHealthEndpoint || "No health endpoint configured")}</p><div class="badge-row"><span class="badge">logs: ${escapeHtml(project.logEntriesPath ? "configured" : "default")}</span><span class="badge">metrics: ${escapeHtml(project.metricSamplesPath ? "configured" : "default")}</span><span class="badge">threshold: errors ${escapeHtml(project.thresholds?.highErrorRateThreshold ?? "?")}</span></div></div></article>`).join("");
+  return `${warning}<section class="project-source-grid">${projectCards}</section>${items.map(renderSourceCard).join("")}<section class="setup-section"><div class="setup-heading"><div><h3><span data-icon="plug"></span>Source configuration</h3><p>Source locations are read-only here because configuration is managed in appsettings or environment variables. Configured means a path is set; connected means the API verified it.</p></div></div><div class="setup-steps"><span><strong>1</strong> Configure paths</span><span><strong>2</strong> Refresh monitor</span><span><strong>3</strong> Verify RAG diagnostics</span></div></section>`;
 }
 
 function renderSourceCard(item) {
@@ -1222,7 +1278,9 @@ function renderSourceCard(item) {
 
 async function sendLogSignal() {
   const form = new FormData(elements.logSignalForm);
-  await requestJson("/api/signals/logs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(Object.fromEntries(form.entries())) });
+  const payload = Object.fromEntries(form.entries());
+  payload.projectId = activeProjectId === "all" ? "default" : activeProjectId;
+  await requestJson("/api/signals/logs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
   setFeedback(elements.ingestionFeedback, "Log accepted", "Signal written. Rescanning backlog.", "connected");
   await loadDetected(false, true);
 }
@@ -1232,6 +1290,7 @@ async function sendMetricSignal() {
   const payload = Object.fromEntries(form.entries());
   delete payload.unit;
   payload.value = Number(payload.value);
+  payload.projectId = activeProjectId === "all" ? "default" : activeProjectId;
   await requestJson("/api/signals/metrics", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
   setFeedback(elements.ingestionFeedback, "Metric accepted", "Sample written. Rescanning backlog.", "connected");
   await loadDetected(false, true);
@@ -1519,7 +1578,8 @@ function toHistoryRow(item, index) {
     actionOutcomes: item.actionOutcomes || [],
     sessionId: item.sessionId,
     sessionTurnNumber: item.sessionTurnNumber,
-    createdAtUtc: item.createdAtUtc
+    createdAtUtc: item.createdAtUtc,
+    projectId: item.projectId || "default"
   };
 }
 function uniqueValues(values) { return [...new Set(values.filter(Boolean))].sort((a, b) => a.localeCompare(b)); }
@@ -1595,6 +1655,7 @@ async function initialize() {
   restoreLastScanState();
   hydrateIcons();
   await checkHealth();
+  await loadProjects();
   await loadSources();
   await loadPersistedMonitoringState();
   elements.lastScan.innerHTML = renderMonitorSummary(detectedCandidates);
@@ -1613,7 +1674,7 @@ async function initialize() {
 
 async function loadPersistedMonitoringState() {
   try {
-    const result = await requestJson("/api/monitoring/state");
+    const result = await requestJson(`/api/monitoring/state${projectQuery()}`);
     applyServerMonitoringState(result);
     const scan = result?.lastScan;
     if (!scan?.completedAtUtc) return;

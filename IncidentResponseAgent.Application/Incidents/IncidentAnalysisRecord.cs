@@ -6,6 +6,8 @@ public sealed record IncidentAnalysisRecord
 {
 	public required Incident Incident { get; init; }
 
+	public string ProjectId { get; init; } = "default";
+
 	public required IncidentAnalysisResult AnalysisResult { get; init; }
 
 	public string Status { get; init; } = "new";

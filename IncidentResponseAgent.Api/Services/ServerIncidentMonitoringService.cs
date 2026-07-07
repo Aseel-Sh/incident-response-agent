@@ -31,53 +31,67 @@ public sealed class ServerIncidentMonitoringService : BackgroundService, IIncide
 		_intervalSeconds = Math.Clamp(persisted?.PollingIntervalSeconds ?? _options.PollingIntervalSeconds, 5, 3600);
 	}
 
-	public async Task<IncidentMonitoringState> GetStateAsync(CancellationToken cancellationToken = default) =>
-		new() { Enabled = _enabled, PollingIntervalSeconds = IntervalSeconds, ScanInProgress = _scanInProgress, LastScan = await _store.GetLastScanAsync(cancellationToken), LastError = _lastError };
+	public async Task<IncidentMonitoringState> GetStateAsync(string? projectId = null, CancellationToken cancellationToken = default) =>
+		new() { Enabled = _enabled, PollingIntervalSeconds = IntervalSeconds, ScanInProgress = _scanInProgress, LastScan = await _store.GetLastScanAsync(projectId, cancellationToken), LastError = _lastError };
 
 	public async Task<IncidentMonitoringState> PauseAsync(CancellationToken cancellationToken = default)
 	{
 		_enabled = false;
 		await SaveEnabledStateAsync(cancellationToken);
-		return await GetStateAsync(cancellationToken);
+		return await GetStateAsync(cancellationToken: cancellationToken);
 	}
 
 	public async Task<IncidentMonitoringState> ResumeAsync(CancellationToken cancellationToken = default)
 	{
 		_enabled = true;
 		await SaveEnabledStateAsync(cancellationToken);
-		return await GetStateAsync(cancellationToken);
+		return await GetStateAsync(cancellationToken: cancellationToken);
 	}
 
 	public async Task<IncidentMonitoringState> SetPollingIntervalAsync(int seconds, CancellationToken cancellationToken = default)
 	{
 		_intervalSeconds = Math.Clamp(seconds, 5, 3600);
 		await SaveEnabledStateAsync(cancellationToken);
-		return await GetStateAsync(cancellationToken);
+		return await GetStateAsync(cancellationToken: cancellationToken);
 	}
 
-	public async Task<IncidentMonitoringState> ScanNowAsync(CancellationToken cancellationToken = default)
+	public async Task<IncidentMonitoringState> ScanNowAsync(string? projectId = null, CancellationToken cancellationToken = default)
 	{
-		if (!await _scanLock.WaitAsync(0, cancellationToken)) return await GetStateAsync(cancellationToken);
+		if (!await _scanLock.WaitAsync(0, cancellationToken)) return await GetStateAsync(projectId, cancellationToken);
 		var started = DateTimeOffset.UtcNow;
+		var scopedProjectId = ProjectId(projectId);
+		var scopedScan = !string.IsNullOrWhiteSpace(projectId) && !projectId.Equals("all", StringComparison.OrdinalIgnoreCase);
 		_scanInProgress = true;
 		try
 		{
 			var candidates = await _monitor.DetectAsync(cancellationToken);
 			var completed = DateTimeOffset.UtcNow;
-			var scan = new MonitoringScanRecord { StartedAtUtc = started, CompletedAtUtc = completed, CandidateCount = candidates.Count, ScannedSourceCount = 2, ErrorCount = CountUnavailableFileSources(), DurationMilliseconds = (completed - started).TotalMilliseconds, Status = "completed" };
-			await _store.SaveCandidatesAsync(candidates, scan, cancellationToken);
+			var projectIds = scopedScan ? [scopedProjectId] : ProjectIds(candidates);
+			foreach (var id in projectIds)
+			{
+				var projectCandidates = candidates.Where(candidate => string.Equals(ProjectId(candidate.ProjectId), id, StringComparison.OrdinalIgnoreCase)).ToArray();
+				var scan = new MonitoringScanRecord { ProjectId = id, StartedAtUtc = started, CompletedAtUtc = completed, CandidateCount = projectCandidates.Length, ScannedSourceCount = 2, ErrorCount = CountUnavailableFileSources(id), DurationMilliseconds = (completed - started).TotalMilliseconds, Status = "completed" };
+				await _store.SaveCandidatesAsync(projectCandidates, scan, cancellationToken);
+			}
 			_lastError = null;
 		}
 		catch (Exception exception) when (exception is not OperationCanceledException)
 		{
 			_lastError = exception.Message;
 			var completed = DateTimeOffset.UtcNow;
-			try { await _store.SaveCandidatesAsync([], new MonitoringScanRecord { StartedAtUtc = started, CompletedAtUtc = completed, ScannedSourceCount = 2, ErrorCount = 1, DurationMilliseconds = (completed - started).TotalMilliseconds, Status = "failed" }, cancellationToken); }
+			try
+			{
+				var projectIds = scopedScan ? [scopedProjectId] : ConfiguredProjectIds();
+				foreach (var id in projectIds)
+				{
+					await _store.SaveCandidatesAsync([], new MonitoringScanRecord { ProjectId = id, StartedAtUtc = started, CompletedAtUtc = completed, ScannedSourceCount = 2, ErrorCount = 1, DurationMilliseconds = (completed - started).TotalMilliseconds, Status = "failed" }, cancellationToken);
+				}
+			}
 			catch (Exception persistenceException) when (persistenceException is not OperationCanceledException) { _logger.LogError(persistenceException, "Could not persist the failed monitoring scan."); }
 			_logger.LogError(exception, "Server monitoring scan failed.");
 		}
 		finally { _scanInProgress = false; _scanLock.Release(); }
-		return await GetStateAsync(cancellationToken);
+		return await GetStateAsync(projectId, cancellationToken);
 	}
 
 	protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -87,7 +101,7 @@ public sealed class ServerIncidentMonitoringService : BackgroundService, IIncide
 		{
 			if (_enabled)
 			{
-				try { await ScanNowAsync(stoppingToken); }
+				try { await ScanNowAsync(cancellationToken: stoppingToken); }
 				catch (Exception exception) when (exception is not OperationCanceledException) { _lastError = exception.Message; _logger.LogError(exception, "Unexpected monitoring loop failure; the schedule will continue."); }
 			}
 			await Task.Delay(TimeSpan.FromSeconds(IntervalSeconds), stoppingToken);
@@ -95,11 +109,30 @@ public sealed class ServerIncidentMonitoringService : BackgroundService, IIncide
 	}
 
 	private int IntervalSeconds => _intervalSeconds;
-	private int CountUnavailableFileSources() => new[]
+	private int CountUnavailableFileSources(string projectId)
 	{
-		ResolveSourcePath(_operationalOptions.LogEntriesPath, "Data", "logs.json"),
-		ResolveSourcePath(_operationalOptions.MetricSamplesPath, "Data", "metrics.json")
-	}.Count(path => !File.Exists(path));
+		var project = _operationalOptions.Projects.FirstOrDefault(item => string.Equals(item.Id, projectId, StringComparison.OrdinalIgnoreCase));
+		var logsPath = project?.LogEntriesPath ?? _operationalOptions.LogEntriesPath;
+		var metricsPath = project?.MetricSamplesPath ?? _operationalOptions.MetricSamplesPath;
+		return new[]
+		{
+			ResolveSourcePath(logsPath, "Data", "logs.json"),
+			ResolveSourcePath(metricsPath, "Data", "metrics.json")
+		}.Count(path => !File.Exists(path));
+	}
+
+	private IReadOnlyList<string> ProjectIds(IReadOnlyList<DetectedIncidentCandidate> candidates)
+	{
+		var ids = ConfiguredProjectIds().Concat(candidates.Select(candidate => ProjectId(candidate.ProjectId))).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+		return ids.Length == 0 ? ["default"] : ids;
+	}
+
+	private IReadOnlyList<string> ConfiguredProjectIds() =>
+		_operationalOptions.Projects.Count > 0
+			? _operationalOptions.Projects.Select(project => ProjectId(project.Id)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray()
+			: [ProjectId(_operationalOptions.ProjectId)];
+
+	private static string ProjectId(string? projectId) => string.IsNullOrWhiteSpace(projectId) ? "default" : projectId.Trim();
 
 	private static string ResolveSourcePath(string? configuredPath, params string[] fallbackSegments) =>
 		!string.IsNullOrWhiteSpace(configuredPath)

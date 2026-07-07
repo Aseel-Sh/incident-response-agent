@@ -4,6 +4,7 @@ using IncidentResponseAgent.Application.Incidents;
 using IncidentResponseAgent.Application.Tools;
 using IncidentResponseAgent.Domain.Incidents;
 using IncidentResponseAgent.Infrastructure.Tools;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
 namespace IncidentResponseAgent.Infrastructure.Incidents;
@@ -29,6 +30,28 @@ public sealed class LocalOperationalSignalMonitor : IIncidentSignalMonitor
 
 	public async Task<IReadOnlyList<DetectedIncidentCandidate>> DetectAsync(CancellationToken cancellationToken = default)
 	{
+		if (_options.Projects.Count > 0)
+		{
+			var allCandidates = new List<DetectedIncidentCandidate>();
+			foreach (var project in _options.Projects.Where(project => !string.IsNullOrWhiteSpace(project.Id)))
+			{
+				var projectOptions = BuildProjectOptions(project);
+				await CheckProjectHealthAsync(projectOptions, cancellationToken).ConfigureAwait(false);
+				var logProvider = new LocalJsonLogSearchProvider(Options.Create(projectOptions), NullLogger<LocalJsonLogSearchProvider>.Instance);
+				var metricsProvider = new LocalJsonMetricsProvider(Options.Create(projectOptions), NullLogger<LocalJsonMetricsProvider>.Instance);
+				var projectMonitor = new LocalOperationalSignalMonitor(logProvider, metricsProvider, Options.Create(projectOptions));
+				allCandidates.AddRange(await projectMonitor.DetectAsync(cancellationToken).ConfigureAwait(false));
+			}
+
+			return allCandidates
+				.GroupBy(candidate => BuildMergeKey(candidate), StringComparer.OrdinalIgnoreCase)
+				.Select(group => Merge(group.ToArray()))
+				.OrderBy(candidate => candidate.Severity)
+				.ThenByDescending(candidate => candidate.DetectedAtUtc)
+				.Take(Math.Clamp(_options.MaxDetectedIncidents, 1, 25))
+				.ToArray();
+		}
+
 		if (_healthProbe is not null)
 		{
 			var health = await _healthProbe.CheckAsync(cancellationToken).ConfigureAwait(false);
@@ -69,7 +92,8 @@ public sealed class LocalOperationalSignalMonitor : IIncidentSignalMonitor
 			var readableMetric = item.MetricName.Replace('_', ' ');
 			candidates.Add(new DetectedIncidentCandidate
 			{
-				Id = StableId($"{item.MetricName}:{item.ServiceName}:{item.Environment}:{latest.Timestamp:O}:{latest.Value}"),
+				Id = StableId($"{_options.ProjectId}:{item.MetricName}:{item.ServiceName}:{item.Environment}:{latest.Timestamp:O}:{latest.Value}"),
+				ProjectId = ProjectId(),
 				Title = $"{item.ServiceName} {readableMetric} threshold breached",
 				Description = $"{item.ServiceName} in {item.Environment} has {readableMetric} at {latest.Value}, above the configured threshold of {check.WarningThreshold}.",
 				Severity = severity,
@@ -113,7 +137,8 @@ public sealed class LocalOperationalSignalMonitor : IIncidentSignalMonitor
 
 				return new DetectedIncidentCandidate
 				{
-					Id = StableId($"logs:{group.Key}:{latest.Timestamp:O}:{string.Join('|', signals)}"),
+					Id = StableId($"{ProjectId()}:logs:{group.Key}:{latest.Timestamp:O}:{string.Join('|', signals)}"),
+					ProjectId = ProjectId(),
 					Title = $"{group.Key} suspicious log pattern",
 					Description = $"{group.Key} emitted {entries.Length} matching operational log signal(s). Latest: {latest.Message}",
 					Severity = severity,
@@ -148,7 +173,49 @@ public sealed class LocalOperationalSignalMonitor : IIncidentSignalMonitor
 	{
 		var service = string.IsNullOrWhiteSpace(candidate.ServiceName) ? candidate.Title : candidate.ServiceName;
 		var environment = string.IsNullOrWhiteSpace(candidate.Environment) ? "unknown" : candidate.Environment;
-		return $"{service}|{environment}";
+		return $"{candidate.ProjectId}|{service}|{environment}";
+	}
+
+	private string ProjectId() => string.IsNullOrWhiteSpace(_options.ProjectId) ? "default" : _options.ProjectId;
+
+	private OperationalDataOptions BuildProjectOptions(OperationalProjectOptions project) => new()
+	{
+		ProjectId = string.IsNullOrWhiteSpace(project.Id) ? "default" : project.Id,
+		ProjectName = string.IsNullOrWhiteSpace(project.Name) ? project.Id : project.Name,
+		LogEntriesPath = string.IsNullOrWhiteSpace(project.LogEntriesPath) ? _options.LogEntriesPath : project.LogEntriesPath,
+		MetricSamplesPath = string.IsNullOrWhiteSpace(project.MetricSamplesPath) ? _options.MetricSamplesPath : project.MetricSamplesPath,
+		SourceHealthEndpoint = string.IsNullOrWhiteSpace(project.SourceHealthEndpoint) ? null : project.SourceHealthEndpoint,
+		SourceHealthTimeoutSeconds = _options.SourceHealthTimeoutSeconds,
+		HighErrorRateThreshold = project.HighErrorRateThreshold ?? _options.HighErrorRateThreshold,
+		CriticalErrorRateThreshold = project.CriticalErrorRateThreshold ?? _options.CriticalErrorRateThreshold,
+		QueueDepthWarningThreshold = project.QueueDepthWarningThreshold ?? _options.QueueDepthWarningThreshold,
+		LatencyWarningThresholdMs = project.LatencyWarningThresholdMs ?? _options.LatencyWarningThresholdMs,
+		LatencyCriticalThresholdMs = project.LatencyCriticalThresholdMs ?? _options.LatencyCriticalThresholdMs,
+		HealthCheckFailureThreshold = project.HealthCheckFailureThreshold ?? _options.HealthCheckFailureThreshold,
+		HealthCheckCriticalFailureThreshold = project.HealthCheckCriticalFailureThreshold ?? _options.HealthCheckCriticalFailureThreshold,
+		LogPatternCountThreshold = project.LogPatternCountThreshold ?? _options.LogPatternCountThreshold,
+		DetectionWindowMinutes = project.DetectionWindowMinutes ?? _options.DetectionWindowMinutes,
+		MaxDetectedIncidents = project.MaxDetectedIncidents ?? _options.MaxDetectedIncidents,
+		UseDeterministicFallbacks = _options.UseDeterministicFallbacks
+	};
+
+	private static async Task CheckProjectHealthAsync(OperationalDataOptions projectOptions, CancellationToken cancellationToken)
+	{
+		if (string.IsNullOrWhiteSpace(projectOptions.SourceHealthEndpoint))
+		{
+			return;
+		}
+
+		using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(Math.Clamp(projectOptions.SourceHealthTimeoutSeconds, 1, 30)) };
+		try
+		{
+			using var response = await client.GetAsync(projectOptions.SourceHealthEndpoint, cancellationToken).ConfigureAwait(false);
+			_ = response.StatusCode;
+		}
+		catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException)
+		{
+			throw new HttpRequestException($"Telemetry health check failed for project {projectOptions.ProjectId}: {exception.GetType().Name}: {exception.Message}", exception);
+		}
 	}
 
 	private static string InferEnvironment(IEnumerable<LogSearchEntry> entries)

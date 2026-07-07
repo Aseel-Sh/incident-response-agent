@@ -118,6 +118,38 @@ public sealed class LocalJsonOperationalDataProviderTests : IDisposable
 		Assert.Empty(result.Samples);
 	}
 
+	[Fact]
+	public async Task MetricQueryTreatsProdAsProduction()
+	{
+		var metricsPath = Path.Combine(_rootPath, "metrics-prod-alias.json");
+		Directory.CreateDirectory(_rootPath);
+		await File.WriteAllTextAsync(
+			metricsPath,
+			"""
+			[
+			  {
+			    "metricName": "queue_depth",
+			    "serviceName": "orders-worker",
+			    "environment": "production",
+			    "samples": [
+			      { "timestamp": "2026-06-28T12:00:00+00:00", "value": 950 }
+			    ]
+			  }
+			]
+			""");
+		var provider = CreateMetricsProvider(metricsPath);
+
+		var result = await provider.QueryAsync(new MetricsQueryRequest
+		{
+			MetricName = "queue_depth",
+			ServiceName = "orders-worker",
+			Environment = "prod"
+		});
+
+		var sample = Assert.Single(result.Samples);
+		Assert.Equal(950, sample.Value);
+	}
+
 	public void Dispose()
 	{
 		if (Directory.Exists(_rootPath))

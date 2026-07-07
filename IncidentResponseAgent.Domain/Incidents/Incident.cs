@@ -10,7 +10,8 @@ public sealed class Incident
         string? serviceName = null,
         string? environment = null,
         DateTimeOffset? timestamp = null,
-        IReadOnlyCollection<string>? tags = null)
+        IReadOnlyCollection<string>? tags = null,
+        string? projectId = null)
     {
         if (id == Guid.Empty)
         {
@@ -35,6 +36,7 @@ public sealed class Incident
         ServiceName = string.IsNullOrWhiteSpace(serviceName) ? null : serviceName.Trim();
         Environment = string.IsNullOrWhiteSpace(environment) ? null : environment.Trim();
         Timestamp = timestamp;
+        ProjectId = string.IsNullOrWhiteSpace(projectId) ? "default" : projectId.Trim();
         Tags = tags is null
             ? Array.Empty<string>()
             : tags.Where(tag => !string.IsNullOrWhiteSpace(tag)).Select(tag => tag.Trim()).ToArray();
@@ -53,6 +55,8 @@ public sealed class Incident
     public string? Environment { get; }
 
     public DateTimeOffset? Timestamp { get; }
+
+    public string ProjectId { get; }
 
     public IReadOnlyCollection<string> Tags { get; }
 }

@@ -116,7 +116,7 @@ public sealed class IncidentAnalysisAgentTools
 		if (_incidentRecordStore is null) return Array.Empty<TrustedPriorIncident>();
 		return await TimeToolAsync<IReadOnlyList<TrustedPriorIncident>>("RetrievePriorIncidents", async () =>
 		{
-			var records = await _incidentRecordStore.GetRecentAsync(Math.Clamp(maxResults * 4, 5, 100), cancellationToken);
+			var records = await _incidentRecordStore.GetRecentAsync(Math.Clamp(maxResults * 4, 5, 100), projectId: null, cancellationToken);
 			return records
 				.Where(record => record.Status == "resolved" && record.ProposedKnowledgeUpdate?.Status == "approved")
 				.Where(record => string.IsNullOrWhiteSpace(serviceName) || string.Equals(record.Incident.ServiceName, serviceName, StringComparison.OrdinalIgnoreCase))
@@ -136,7 +136,7 @@ public sealed class IncidentAnalysisAgentTools
 		if (_incidentRecordStore is null) return Array.Empty<TrustedActionOutcome>();
 		return await TimeToolAsync<IReadOnlyList<TrustedActionOutcome>>("RetrievePriorActionOutcomes", async () =>
 		{
-			var records = await _incidentRecordStore.GetRecentAsync(100, cancellationToken);
+			var records = await _incidentRecordStore.GetRecentAsync(100, projectId: null, cancellationToken);
 			return records
 				.Where(record => record.Status == "resolved" && record.ProposedKnowledgeUpdate?.Status == "approved")
 				.Where(record => string.IsNullOrWhiteSpace(serviceName) || string.Equals(record.Incident.ServiceName, serviceName, StringComparison.OrdinalIgnoreCase))
@@ -160,7 +160,7 @@ public sealed class IncidentAnalysisAgentTools
 		if (_incidentRecordStore is null) return Task.FromResult<IReadOnlyList<SimilarIncidentMatch>>(Array.Empty<SimilarIncidentMatch>());
 		if (!Enum.TryParse<IncidentSeverity>(severity.Replace("-", string.Empty), true, out var parsedSeverity)) parsedSeverity = IncidentSeverity.Sev3;
 		var incident = new Incident(Guid.NewGuid(), title, description, parsedSeverity, serviceName, environment, DateTimeOffset.UtcNow, tags ?? Array.Empty<string>());
-		return TimeToolAsync("CheckSimilarIncidents", () => _incidentRecordStore.FindSimilarAsync(incident, maxResults, cancellationToken));
+		return TimeToolAsync("CheckSimilarIncidents", () => _incidentRecordStore.FindSimilarAsync(incident, maxResults, incident.ProjectId, cancellationToken));
 	}
 
 	[Description("Draft a proposed runbook or postmortem update. The result is a proposal only and requires human approval before reuse.")]

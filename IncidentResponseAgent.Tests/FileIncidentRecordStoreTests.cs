@@ -41,6 +41,40 @@ public sealed class FileIncidentRecordStoreTests : IDisposable
 	}
 
 	[Fact]
+	public async Task ProjectScopedHistoryAndSimilarityDoNotLeakAcrossProjects()
+	{
+		var recordsPath = Path.Combine(_rootPath, "project-records.json");
+		var store = new FileIncidentRecordStore(Options.Create(new IncidentStorageOptions { IncidentRecordsPath = recordsPath }));
+		var projectA = new Incident(Guid.NewGuid(), "Checkout 5xx spike", "Checkout failed after deploy.", IncidentSeverity.Sev2, "checkout-api", "production", tags: ["checkout", "5xx"], projectId: "project-a");
+		var projectB = new Incident(Guid.NewGuid(), "Checkout 5xx spike", "Checkout failed after deploy.", IncidentSeverity.Sev2, "checkout-api", "production", tags: ["checkout", "5xx"], projectId: "project-b");
+
+		foreach (var incident in new[] { projectA, projectB })
+		{
+			await store.SaveAsync(incident, new IncidentAnalysisResult
+			{
+				IncidentId = incident.Id,
+				IncidentSummary = incident.Title,
+				AnalysisText = "{}",
+				AnalysisProvider = "local-prompt",
+				SessionId = $"session-{incident.ProjectId}",
+				RecommendedActions = [new IncidentActionRecommendation { Description = $"Rollback for {incident.ProjectId}", Priority = "High" }]
+			});
+			await store.UpdateStatusAsync(incident.Id, "resolved");
+			await store.ReviewKnowledgeUpdateAsync(incident.Id, "approved", null, "Approved in test.");
+		}
+
+		var recentA = await store.GetRecentAsync(10, "project-a");
+		var query = new Incident(Guid.NewGuid(), "Checkout 500s after deploy", "Customers see checkout HTTP 500 responses.", IncidentSeverity.Sev2, "checkout-api", "production", tags: ["checkout"], projectId: "project-a");
+		var similarA = await store.FindSimilarAsync(query, 5, "project-a");
+
+		Assert.Single(recentA);
+		Assert.Equal(projectA.Id, recentA[0].Incident.Id);
+		Assert.Single(similarA);
+		Assert.Equal(projectA.Id, similarA[0].IncidentId);
+		Assert.DoesNotContain(similarA, item => item.IncidentId == projectB.Id);
+	}
+
+	[Fact]
 	public async Task FindSimilarAsyncReturnsRelatedPriorIncident()
 	{
 		var recordsPath = Path.Combine(_rootPath, "incident-records.json");

@@ -4,6 +4,8 @@ public sealed record RecentIncidentAnalysisResponse
 {
 	public required Guid IncidentId { get; init; }
 
+	public string ProjectId { get; init; } = "default";
+
 	public required string IncidentTitle { get; init; }
 
 	public required string IncidentSummary { get; init; }

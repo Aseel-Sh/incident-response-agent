@@ -39,7 +39,7 @@ public sealed class LocalJsonMetricsProvider : IMetricsProvider, IMetricSeriesCa
 		var matchedSeries = series.FirstOrDefault(item =>
 			item.MetricName.Equals(request.MetricName, StringComparison.OrdinalIgnoreCase) &&
 			(string.IsNullOrWhiteSpace(request.ServiceName) || item.ServiceName.Equals(request.ServiceName, StringComparison.OrdinalIgnoreCase)) &&
-			(string.IsNullOrWhiteSpace(request.Environment) || item.Environment.Equals(request.Environment, StringComparison.OrdinalIgnoreCase)));
+			(string.IsNullOrWhiteSpace(request.Environment) || EnvironmentsMatch(item.Environment, request.Environment)));
 
 		if (matchedSeries is null)
 		{
@@ -114,5 +114,26 @@ public sealed class LocalJsonMetricsProvider : IMetricsProvider, IMetricSeriesCa
 
 		return Path.Combine(AppContext.BaseDirectory, "Tools", "SampleData", "metrics.json");
 	}
+
+	private static bool EnvironmentsMatch(string configuredEnvironment, string requestedEnvironment)
+	{
+		if (configuredEnvironment.Equals(requestedEnvironment, StringComparison.OrdinalIgnoreCase))
+		{
+			return true;
+		}
+
+		return NormalizeEnvironment(configuredEnvironment).Equals(NormalizeEnvironment(requestedEnvironment), StringComparison.OrdinalIgnoreCase);
+	}
+
+	private static string NormalizeEnvironment(string environment) =>
+		environment.Trim().ToLowerInvariant() switch
+		{
+			"prod" => "production",
+			"prd" => "production",
+			"stage" => "staging",
+			"stg" => "staging",
+			"dev" => "development",
+			_ => environment.Trim().ToLowerInvariant()
+		};
 
 }

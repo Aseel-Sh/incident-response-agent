@@ -34,6 +34,9 @@ public sealed record IncidentSubmissionRequest : IValidatableObject
     [StringLength(100)]
     public string? SessionId { get; init; }
 
+    [StringLength(100)]
+    public string? ProjectId { get; init; }
+
     public DateTimeOffset? Timestamp { get; init; }
 
     public IReadOnlyList<string>? Tags { get; init; }

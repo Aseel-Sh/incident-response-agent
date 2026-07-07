@@ -10,6 +10,8 @@ public sealed record IncidentAnalysisResult
 
 	public Guid IncidentId { get; init; }
 
+	public string ProjectId { get; init; } = "default";
+
 	public string IncidentSummary { get; init; } = string.Empty;
 
 	public string Severity { get; init; } = string.Empty;

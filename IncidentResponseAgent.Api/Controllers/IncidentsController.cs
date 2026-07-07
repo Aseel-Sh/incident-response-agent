@@ -116,13 +116,15 @@ public sealed class IncidentsController : ControllerBase
     [ProducesResponseType(typeof(IReadOnlyList<RecentIncidentAnalysisResponse>), StatusCodes.Status200OK)]
     public async Task<ActionResult<IReadOnlyList<RecentIncidentAnalysisResponse>>> GetRecentAsync(
         [FromQuery] int maxResults = 10,
+        [FromQuery] string? projectId = null,
         CancellationToken cancellationToken = default)
     {
-        var results = await _getRecentIncidentAnalysesUseCase.ExecuteAsync(maxResults, cancellationToken);
+        var results = await _getRecentIncidentAnalysesUseCase.ExecuteAsync(maxResults, projectId, cancellationToken);
 
         return Ok(results.Select(result => new RecentIncidentAnalysisResponse
         {
             IncidentId = result.IncidentId,
+            ProjectId = result.ProjectId,
             IncidentTitle = result.IncidentTitle,
             IncidentSummary = result.IncidentSummary,
             IncidentDescription = result.IncidentDescription,
@@ -160,9 +162,10 @@ public sealed class IncidentsController : ControllerBase
     [HttpGet("detected")]
     [ProducesResponseType(typeof(IReadOnlyList<DetectedIncidentResponse>), StatusCodes.Status200OK)]
     public async Task<ActionResult<IReadOnlyList<DetectedIncidentResponse>>> GetDetectedAsync(
+        [FromQuery] string? projectId,
         CancellationToken cancellationToken)
     {
-        return Ok((await _incidentRecordStore.GetCandidatesAsync(cancellationToken)).Select(ToCandidateResponse).ToArray());
+        return Ok((await _incidentRecordStore.GetCandidatesAsync(projectId, cancellationToken)).Select(ToCandidateResponse).ToArray());
     }
 
     [HttpPost("scan")]
@@ -181,14 +184,14 @@ public sealed class IncidentsController : ControllerBase
             DurationMilliseconds = Math.Max(0, (completed - started).TotalMilliseconds)
         };
         await _incidentRecordStore.SaveCandidatesAsync(results, scan, cancellationToken);
-        var candidates = await _incidentRecordStore.GetCandidatesAsync(cancellationToken);
+        var candidates = await _incidentRecordStore.GetCandidatesAsync(projectId: null, cancellationToken);
         return Ok(new { scan, candidates = candidates.Select(ToCandidateResponse).ToArray() });
     }
 
     [HttpGet("monitoring/last-scan")]
-    public async Task<ActionResult<object>> GetLastScanAsync(CancellationToken cancellationToken)
+    public async Task<ActionResult<object>> GetLastScanAsync([FromQuery] string? projectId, CancellationToken cancellationToken)
     {
-        var scan = await _incidentRecordStore.GetLastScanAsync(cancellationToken);
+        var scan = await _incidentRecordStore.GetLastScanAsync(projectId, cancellationToken);
         return Ok(new { scan, monitoredSourceCount = 2 });
     }
 
@@ -198,7 +201,7 @@ public sealed class IncidentsController : ControllerBase
         var now = request.Timestamp ?? DateTimeOffset.UtcNow;
         var candidate = BuildManualCandidate(request, now);
         await _incidentRecordStore.SaveCandidatesAsync([candidate], new MonitoringScanRecord { StartedAtUtc = now, CompletedAtUtc = now, CandidateCount = 1, Status = "manual" }, cancellationToken);
-        var saved = (await _incidentRecordStore.GetCandidatesAsync(cancellationToken)).First(item => item.Id == candidate.Id);
+        var saved = (await _incidentRecordStore.GetCandidatesAsync(request.ProjectId, cancellationToken)).First(item => item.Id == candidate.Id);
         return Ok(ToCandidateResponse(saved));
     }
 
@@ -273,7 +276,7 @@ public sealed class IncidentsController : ControllerBase
 
     private static DetectedIncidentCandidate BuildManualCandidate(IncidentSubmissionRequest request, DateTimeOffset detectedAt) => new()
     {
-        Id = $"manual-{Guid.NewGuid():N}", Title = request.Title, Description = request.Description, Severity = ParseSeverity(request.Severity),
+        Id = $"manual-{Guid.NewGuid():N}", ProjectId = NormalizeProjectId(request.ProjectId), Title = request.Title, Description = request.Description, Severity = ParseSeverity(request.Severity),
         ServiceName = request.ServiceName, Environment = request.Environment, DetectedAtUtc = detectedAt, Source = "manual trigger",
         Signals = ["user-entered incident details"], SuggestedTags = request.Tags ?? Array.Empty<string>()
     };
@@ -292,7 +295,7 @@ public sealed class IncidentsController : ControllerBase
 
     private static DetectedIncidentResponse ToCandidateResponse(DetectedIncidentCandidate result) => new()
     {
-        Id = result.Id, Title = result.Title, Description = result.Description, Severity = result.Severity.ToString().ToLowerInvariant(),
+        Id = result.Id, ProjectId = NormalizeProjectId(result.ProjectId), Title = result.Title, Description = result.Description, Severity = result.Severity.ToString().ToLowerInvariant(),
         ServiceName = result.ServiceName, Environment = result.Environment, DetectedAtUtc = result.DetectedAtUtc, Source = result.Source,
         Signals = result.Signals, SuggestedTags = result.SuggestedTags, Status = result.Status, DuplicateIncidentId = result.DuplicateIncidentId,
         SimilarIncidents = result.SimilarIncidents.Select(ToSimilarResponse).ToArray(),
@@ -309,7 +312,7 @@ public sealed class IncidentsController : ControllerBase
 
     private static IncidentAnalysisResponse ToAnalysisResponse(IncidentAnalysisResult result) => new()
     {
-        IncidentId = result.IncidentId, SessionId = result.SessionId, SessionTurnNumber = result.SessionTurnNumber, SessionContextSummary = result.SessionContextSummary,
+        IncidentId = result.IncidentId, ProjectId = result.ProjectId, SessionId = result.SessionId, SessionTurnNumber = result.SessionTurnNumber, SessionContextSummary = result.SessionContextSummary,
         IncidentSummary = result.IncidentSummary, Severity = result.Severity, AnalysisText = result.AnalysisText, AnalysisProvider = result.AnalysisProvider, AnalysisModel = result.AnalysisModel,
         UsedFallbackAnalysis = result.UsedFallbackAnalysis, FallbackReason = result.FallbackReason,
         RetrievedEvidence = result.Evidence.Select(item => new IncidentResponseAgent.Api.Contracts.Incidents.IncidentAnalysisEvidenceItem { Summary = item.Summary, Source = item.Source, Details = item.Details }).ToArray(),
@@ -324,6 +327,8 @@ public sealed class IncidentsController : ControllerBase
         ProviderTransparency = ToProviderResponse(result.ProviderTransparency),
         Confidence = result.Confidence, Notes = result.Notes
     };
+
+    private static string NormalizeProjectId(string? projectId) => string.IsNullOrWhiteSpace(projectId) ? "default" : projectId.Trim();
 
     private static ProviderTransparencyResponse ToProviderResponse(AnalysisProviderTransparency provider) => new(
         provider.ModelProvider, provider.Model, provider.EmbeddingProvider, provider.VectorStore, provider.RagStatus,

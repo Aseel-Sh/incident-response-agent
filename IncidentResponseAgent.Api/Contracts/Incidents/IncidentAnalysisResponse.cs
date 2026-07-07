@@ -4,6 +4,8 @@ public sealed record IncidentAnalysisResponse
 {
     public Guid IncidentId { get; init; }
 
+    public string ProjectId { get; init; } = "default";
+
     public string SessionId { get; init; } = string.Empty;
 
     public int SessionTurnNumber { get; init; }

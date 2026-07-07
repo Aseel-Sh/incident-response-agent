@@ -4,6 +4,8 @@ public sealed record DetectedIncidentResponse
 {
 	public required string Id { get; init; }
 
+	public string ProjectId { get; init; } = "default";
+
 	public required string Title { get; init; }
 
 	public required string Description { get; init; }

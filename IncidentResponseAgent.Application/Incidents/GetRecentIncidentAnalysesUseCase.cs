@@ -9,13 +9,14 @@ public sealed class GetRecentIncidentAnalysesUseCase : IGetRecentIncidentAnalyse
 		_incidentRecordStore = incidentRecordStore;
 	}
 
-	public async Task<IReadOnlyList<GetRecentIncidentAnalysesResult>> ExecuteAsync(int maxResults = 10, CancellationToken cancellationToken = default)
+	public async Task<IReadOnlyList<GetRecentIncidentAnalysesResult>> ExecuteAsync(int maxResults = 10, string? projectId = null, CancellationToken cancellationToken = default)
 	{
-		var records = await _incidentRecordStore.GetRecentAsync(maxResults, cancellationToken);
+		var records = await _incidentRecordStore.GetRecentAsync(maxResults, projectId, cancellationToken);
 
 		return records.Select(record => new GetRecentIncidentAnalysesResult
 		{
 			IncidentId = record.Incident.Id,
+			ProjectId = string.IsNullOrWhiteSpace(record.ProjectId) ? record.Incident.ProjectId : record.ProjectId,
 			IncidentTitle = record.Incident.Title,
 			IncidentSummary = record.AnalysisResult.IncidentSummary,
 			IncidentDescription = record.Incident.Description,

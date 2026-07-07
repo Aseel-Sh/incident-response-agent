@@ -192,7 +192,7 @@ public sealed class IncidentAnalysisEvaluationUseCaseTests
 
 		public Task SaveCandidatesAsync(IReadOnlyList<DetectedIncidentCandidate> candidates, MonitoringScanRecord scan, CancellationToken cancellationToken = default) => Task.CompletedTask;
 
-		public Task<IReadOnlyList<DetectedIncidentCandidate>> GetCandidatesAsync(CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<DetectedIncidentCandidate>>(Array.Empty<DetectedIncidentCandidate>());
+		public Task<IReadOnlyList<DetectedIncidentCandidate>> GetCandidatesAsync(string? projectId = null, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<DetectedIncidentCandidate>>(Array.Empty<DetectedIncidentCandidate>());
 
 		public Task<Incident> ConfirmCandidateAsync(string candidateId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
 
@@ -202,7 +202,7 @@ public sealed class IncidentAnalysisEvaluationUseCaseTests
 
 		public Task<ProposedKnowledgeUpdate> ReviewKnowledgeUpdateAsync(Guid incidentId, string decision, string? content, string? notes, CancellationToken cancellationToken = default) => throw new NotSupportedException();
 
-		public Task<MonitoringScanRecord?> GetLastScanAsync(CancellationToken cancellationToken = default) => Task.FromResult<MonitoringScanRecord?>(null);
+		public Task<MonitoringScanRecord?> GetLastScanAsync(string? projectId = null, CancellationToken cancellationToken = default) => Task.FromResult<MonitoringScanRecord?>(null);
 
 		public Task<IncidentAnalysisRecord?> GetByIncidentIdAsync(Guid incidentId, CancellationToken cancellationToken = default)
 		{
@@ -232,12 +232,16 @@ public sealed class IncidentAnalysisEvaluationUseCaseTests
 
 		public Task<IncidentAnalysisFeedback> AddFeedbackAsync(Guid incidentId, IncidentAnalysisFeedback feedback, CancellationToken cancellationToken = default) => Task.FromResult(feedback);
 
-		public Task<IReadOnlyList<IncidentAnalysisRecord>> GetRecentAsync(int maxResults, CancellationToken cancellationToken = default)
+		public Task<IReadOnlyList<IncidentAnalysisRecord>> GetRecentAsync(int maxResults, string? projectId = null, CancellationToken cancellationToken = default)
 		{
-			return Task.FromResult<IReadOnlyList<IncidentAnalysisRecord>>(_records.Take(maxResults).ToArray());
+			var rows = _records
+				.Where(record => string.IsNullOrWhiteSpace(projectId) || projectId == "all" || string.Equals(record.Incident.ProjectId, projectId, StringComparison.OrdinalIgnoreCase))
+				.Take(maxResults)
+				.ToArray();
+			return Task.FromResult<IReadOnlyList<IncidentAnalysisRecord>>(rows);
 		}
 
-		public Task<IReadOnlyList<SimilarIncidentMatch>> FindSimilarAsync(Incident incident, int maxResults, CancellationToken cancellationToken = default)
+		public Task<IReadOnlyList<SimilarIncidentMatch>> FindSimilarAsync(Incident incident, int maxResults, string? projectId = null, CancellationToken cancellationToken = default)
 		{
 			return Task.FromResult<IReadOnlyList<SimilarIncidentMatch>>(Array.Empty<SimilarIncidentMatch>());
 		}

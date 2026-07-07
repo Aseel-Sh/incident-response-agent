@@ -50,7 +50,7 @@ public sealed class IncidentsControllerProviderTransparencyTests : IDisposable
 	}
 	private sealed class StubRecentUseCase : IGetRecentIncidentAnalysesUseCase
 	{
-		public Task<IReadOnlyList<GetRecentIncidentAnalysesResult>> ExecuteAsync(int maxResults = 10, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<GetRecentIncidentAnalysesResult>>(Array.Empty<GetRecentIncidentAnalysesResult>());
+		public Task<IReadOnlyList<GetRecentIncidentAnalysesResult>> ExecuteAsync(int maxResults = 10, string? projectId = null, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<GetRecentIncidentAnalysesResult>>(Array.Empty<GetRecentIncidentAnalysesResult>());
 	}
 	private sealed class StubMonitor : IIncidentSignalMonitor
 	{
