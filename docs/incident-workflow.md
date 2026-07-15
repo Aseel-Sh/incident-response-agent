@@ -60,7 +60,8 @@ Back up the incident JSON before first production rollout. Existing incidents ar
 - The JSON aggregate uses a process-local lock and is appropriate for one API instance, not horizontally scaled writers.
 - Authentication, roles, reviewer identity, audit signatures, retention policy, and tenant isolation are not implemented.
 - Generated approved proposals remain incident knowledge records; promoting them into the curated Markdown runbook index is an explicit future publishing step.
-- Threshold configuration is global; per-service rule management and anomaly baselines remain future work.
+- Thresholds can be scoped per project, but per-service rule management and anomaly baselines remain future work.
+- Responder assignment, on-call escalation, incident roles, stakeholder communications, and postmortem task tracking are not implemented. Until they are, this is an investigation/workflow assistant rather than a complete incident-management platform.
 
 ## Analysis trust and feedback additions
 

@@ -45,6 +45,19 @@ public sealed class ResilientIncidentAnalysisAgentTests
 	}
 
 	[Fact]
+	public async Task ModelUnavailableFailsClosedWhenLocalFallbackIsDisabled()
+	{
+		var model = new StubModelAgent(new HttpRequestException("provider returned 503 Service Unavailable", null, HttpStatusCode.ServiceUnavailable));
+		var fallback = new StubFallbackAgent(Result("local-prompt", true));
+		var agent = CreateAgent(model, fallback, allowLocalFallback: false);
+
+		var exception = await Assert.ThrowsAsync<IncidentAnalysisUnavailableException>(() => agent.AnalyzeAsync(CreateIncident()));
+
+		Assert.Contains("Local analysis fallback is disabled", exception.Message);
+		Assert.Equal(0, fallback.CallCount);
+	}
+
+	[Fact]
 	public async Task LocalFallbackRejectsAnalysisWithoutOperationalEvidence()
 	{
 		var fallback = new PromptBasedIncidentAnalysisAgent(
@@ -59,10 +72,10 @@ public sealed class ResilientIncidentAnalysisAgentTests
 		Assert.Contains("insufficient operational evidence", exception.Message);
 	}
 
-	private static ResilientIncidentAnalysisAgent CreateAgent(IModelIncidentAnalysisAgent model, ILocalFallbackIncidentAnalysisAgent fallback) => new(
+	private static ResilientIncidentAnalysisAgent CreateAgent(IModelIncidentAnalysisAgent model, ILocalFallbackIncidentAnalysisAgent fallback, bool allowLocalFallback = true) => new(
 		model,
 		fallback,
-		Options.Create(new IncidentAnalysisAgentOptions { Provider = "OpenRouter", Model = "test/model", Endpoint = "https://openrouter.ai/api/v1", ApiKey = "configured", AnalysisTimeoutSeconds = 5 }),
+		Options.Create(new IncidentAnalysisAgentOptions { Provider = "OpenRouter", Model = "test/model", Endpoint = "https://openrouter.ai/api/v1", ApiKey = "configured", AnalysisTimeoutSeconds = 5, AllowLocalAnalysisFallback = allowLocalFallback }),
 		NullLogger<ResilientIncidentAnalysisAgent>.Instance);
 
 	private static Incident CreateIncident() => new(Guid.NewGuid(), "Provider test", "Provider test incident.", IncidentSeverity.Sev3);

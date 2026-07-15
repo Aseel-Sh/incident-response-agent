@@ -9,7 +9,7 @@ public sealed class ResilientRunbookEmbeddingProviderTests
 	public async Task HealthyPrimaryIsReportedWithoutFallbackLabel()
 	{
 		var primary = new NamedEmbeddingProvider("huggingface", "BAAI/bge-small-en-v1.5");
-		var provider = new ResilientRunbookEmbeddingProvider(primary, new TestEmbeddingProvider(), NullLogger<ResilientRunbookEmbeddingProvider>.Instance);
+		var provider = new ResilientRunbookEmbeddingProvider(primary, new TestEmbeddingProvider(), allowFallback: false, NullLogger<ResilientRunbookEmbeddingProvider>.Instance);
 
 		var vector = await provider.GenerateEmbeddingAsync("checkout failure");
 
@@ -21,11 +21,11 @@ public sealed class ResilientRunbookEmbeddingProviderTests
 	}
 
 	[Fact]
-	public async Task GenerateEmbeddingAsyncFallsBackWhenPrimaryFails()
+	public async Task GenerateEmbeddingAsyncFallsBackWhenPrimaryFailsAndFallbackIsEnabled()
 	{
 		var primary = new ThrowingEmbeddingProvider();
 		var fallback = new TestEmbeddingProvider();
-		var provider = new ResilientRunbookEmbeddingProvider(primary, fallback, NullLogger<ResilientRunbookEmbeddingProvider>.Instance);
+		var provider = new ResilientRunbookEmbeddingProvider(primary, fallback, allowFallback: true, NullLogger<ResilientRunbookEmbeddingProvider>.Instance);
 
 		var vector = await provider.GenerateEmbeddingAsync("checkout failure");
 
@@ -39,13 +39,25 @@ public sealed class ResilientRunbookEmbeddingProviderTests
 	[Fact]
 	public async Task EmptyPrimaryVectorIsReportedAsDegradedFallback()
 	{
-		var provider = new ResilientRunbookEmbeddingProvider(new EmptyEmbeddingProvider(), new TestEmbeddingProvider(), NullLogger<ResilientRunbookEmbeddingProvider>.Instance);
+		var provider = new ResilientRunbookEmbeddingProvider(new EmptyEmbeddingProvider(), new TestEmbeddingProvider(), allowFallback: true, NullLogger<ResilientRunbookEmbeddingProvider>.Instance);
 
 		var vector = await provider.GenerateEmbeddingAsync("checkout failure");
 
 		Assert.Equal([1f, 0f, 0f], vector);
 		Assert.True(provider.IsDegraded);
 		Assert.Contains("empty embedding vector", provider.DegradedReason);
+	}
+
+	[Fact]
+	public async Task GenerateEmbeddingAsyncThrowsWhenPrimaryFailsAndLocalFallbackIsDisabled()
+	{
+		var provider = new ResilientRunbookEmbeddingProvider(new ThrowingEmbeddingProvider(), new TestEmbeddingProvider(), allowFallback: false, NullLogger<ResilientRunbookEmbeddingProvider>.Instance);
+
+		var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => provider.GenerateEmbeddingAsync("checkout failure"));
+
+		Assert.Contains("local embedding fallback is disabled", exception.Message);
+		Assert.True(provider.IsDegraded);
+		Assert.Equal("throwing", provider.ProviderName);
 	}
 
 	private sealed class ThrowingEmbeddingProvider : IRunbookEmbeddingProvider

@@ -18,6 +18,8 @@ public sealed record IncidentAnalysisAgentOptions
 
 	public int AnalysisTimeoutSeconds { get; init; } = 75;
 
+	public bool AllowLocalAnalysisFallback { get; init; }
+
 	public int MaxOutputTokens { get; init; } = 1200;
 
 	public double Temperature { get; init; } = 0.1;

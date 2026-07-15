@@ -13,18 +13,20 @@ public sealed class ServerIncidentMonitoringService : BackgroundService, IIncide
 	private readonly ILogger<ServerIncidentMonitoringService> _logger;
 	private readonly MonitoringRuntimeOptions _options;
 	private readonly OperationalDataOptions _operationalOptions;
+	private readonly IOperationalProjectRegistry _projectRegistry;
 	private readonly SemaphoreSlim _scanLock = new(1, 1);
 	private bool _enabled;
 	private bool _scanInProgress;
 	private int _intervalSeconds;
 	private string? _lastError;
 
-	public ServerIncidentMonitoringService(IIncidentSignalMonitor monitor, IIncidentRecordStore store, IOptions<MonitoringRuntimeOptions> options, IOptions<OperationalDataOptions> operationalOptions, ILogger<ServerIncidentMonitoringService> logger)
+	public ServerIncidentMonitoringService(IIncidentSignalMonitor monitor, IIncidentRecordStore store, IOptions<MonitoringRuntimeOptions> options, IOptions<OperationalDataOptions> operationalOptions, IOperationalProjectRegistry projectRegistry, ILogger<ServerIncidentMonitoringService> logger)
 	{
 		_monitor = monitor;
 		_store = store;
 		_options = options.Value ?? new MonitoringRuntimeOptions();
 		_operationalOptions = operationalOptions.Value ?? new OperationalDataOptions();
+		_projectRegistry = projectRegistry;
 		_logger = logger;
 		var persisted = LoadState();
 		_enabled = persisted?.Enabled ?? _options.Enabled;
@@ -111,7 +113,7 @@ public sealed class ServerIncidentMonitoringService : BackgroundService, IIncide
 	private int IntervalSeconds => _intervalSeconds;
 	private int CountUnavailableFileSources(string projectId)
 	{
-		var project = _operationalOptions.Projects.FirstOrDefault(item => string.Equals(item.Id, projectId, StringComparison.OrdinalIgnoreCase));
+		var project = _projectRegistry.GetProjects().FirstOrDefault(item => string.Equals(item.Id, projectId, StringComparison.OrdinalIgnoreCase));
 		var logsPath = project?.LogEntriesPath ?? _operationalOptions.LogEntriesPath;
 		var metricsPath = project?.MetricSamplesPath ?? _operationalOptions.MetricSamplesPath;
 		return new[]
@@ -128,8 +130,8 @@ public sealed class ServerIncidentMonitoringService : BackgroundService, IIncide
 	}
 
 	private IReadOnlyList<string> ConfiguredProjectIds() =>
-		_operationalOptions.Projects.Count > 0
-			? _operationalOptions.Projects.Select(project => ProjectId(project.Id)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray()
+		_projectRegistry.GetProjects().Count > 0
+			? _projectRegistry.GetProjects().Select(project => ProjectId(project.Id)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray()
 			: [ProjectId(_operationalOptions.ProjectId)];
 
 	private static string ProjectId(string? projectId) => string.IsNullOrWhiteSpace(projectId) ? "default" : projectId.Trim();

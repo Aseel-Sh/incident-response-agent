@@ -12,7 +12,7 @@
     })();
   </script>
   <title>incidentOps</title>
-  <link rel="stylesheet" href="/styles.css?v=20260620-runbook-sources-7">
+  <link rel="stylesheet" href="/styles.css?v=20260707-project-ui-1">
 </head>
 <body>
   <div class="app-shell">
@@ -140,6 +140,26 @@
           <h2><span data-icon="database"></span>Sources</h2>
           <p>Configured data sources and their capabilities</p>
         </div>
+        <section class="panel project-manager-panel">
+          <div class="section-title">
+            <div>
+              <h3><span data-icon="database"></span>Project workspaces</h3>
+              <p>Add a service/project without editing appsettings. The monitor will scan its logs, metrics, health endpoint, and thresholds.</p>
+            </div>
+          </div>
+          <form id="projectForm" class="form-grid project-form">
+            <label>Project ID<input name="id" required placeholder="project-a"></label>
+            <label>Name<input name="name" required placeholder="Project A"></label>
+            <label class="wide">Log file path<input name="logEntriesPath" placeholder="C:\path\to\logs.json"></label>
+            <label class="wide">Metric file path<input name="metricSamplesPath" placeholder="C:\path\to\metrics.json"></label>
+            <label class="wide">Health endpoint<input name="sourceHealthEndpoint" placeholder="http://127.0.0.1:5268/health"></label>
+            <label>Error threshold<input name="highErrorRateThreshold" type="number" step="0.1" placeholder="25"></label>
+            <label>Latency threshold ms<input name="latencyWarningThresholdMs" type="number" step="1" placeholder="1000"></label>
+            <div class="actions wide">
+              <button type="submit" data-icon="plug">Add project</button>
+            </div>
+          </form>
+        </section>
         <section class="panel">
           <div id="sourcesOutput" class="source-list"></div>
         </section>
@@ -267,6 +287,6 @@
       </div>
     </section>
   </div>
-  <script src="/app.js?v=20260620-runbook-sources-7"></script>
+  <script src="/app.js?v=20260707-project-ui-1"></script>
 </body>
 </html>

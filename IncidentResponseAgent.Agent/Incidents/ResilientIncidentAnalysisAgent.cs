@@ -36,9 +36,7 @@ public sealed class ResilientIncidentAnalysisAgent : IIncidentAnalysisAgent
 			incident.Id, _options.Provider, _options.Model, !string.IsNullOrWhiteSpace(_options.Endpoint), HasConfiguredApiKey());
 		if (!HasConfiguredApiKey())
 		{
-			_logger.LogWarning("Fallback triggered. IncidentId={IncidentId} Reason={Reason}.", incident.Id, "Agent API key is not configured.");
-			var fallbackResult = await _fallbackAgent.AnalyzeAsync(incident, sessionContext, agentContext, cancellationToken).ConfigureAwait(false);
-			return WithAttempt(fallbackResult, "Agent API key is not configured.", 0, "before_model_execution");
+			return await FallbackOrThrowAsync(incident, sessionContext, agentContext, "Agent API key is not configured.", 0, "before_model_execution", cancellationToken).ConfigureAwait(false);
 		}
 
 		var timeout = TimeSpan.FromSeconds(ResolveTimeoutSeconds());
@@ -56,20 +54,35 @@ public sealed class ResilientIncidentAnalysisAgent : IIncidentAnalysisAgent
 		catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
 		{
 			modelStopwatch.Stop();
-			_logger.LogWarning("OpenRouter Microsoft Agent Framework analysis timed out after {TimeoutSeconds} seconds. Falling back to local analysis.", timeout.TotalSeconds);
-			_logger.LogWarning("Fallback triggered after model execution started. IncidentId={IncidentId} DurationMs={DurationMs} TimeoutSource={TimeoutSource} Reason={Reason}.", incident.Id, modelStopwatch.ElapsedMilliseconds, "ResilientIncidentAnalysisAgent.CancelAfter", $"Model timed out after {timeout.TotalSeconds:0} seconds.");
-			var fallbackResult = await _fallbackAgent.AnalyzeAsync(incident, sessionContext, agentContext, cancellationToken).ConfigureAwait(false);
-			return WithAttempt(fallbackResult, $"OpenRouter model analysis timed out after {timeout.TotalSeconds:0} seconds.", modelStopwatch.ElapsedMilliseconds, "during_model_execution", $"ResilientIncidentAnalysisAgent.CancelAfter({timeout.TotalSeconds:0}s)");
+			return await FallbackOrThrowAsync(incident, sessionContext, agentContext, $"OpenRouter model analysis timed out after {timeout.TotalSeconds:0} seconds.", modelStopwatch.ElapsedMilliseconds, "during_model_execution", cancellationToken, $"ResilientIncidentAnalysisAgent.CancelAfter({timeout.TotalSeconds:0}s)").ConfigureAwait(false);
 		}
 		catch (Exception exception) when (IsProviderFailure(exception))
 		{
 			modelStopwatch.Stop();
-			_logger.LogWarning(exception, "OpenRouter Microsoft Agent Framework analysis failed. Falling back to local analysis.");
 			var stage = exception is InvalidOperationException ? "after_model_response_validation" : "during_model_execution";
-			_logger.LogWarning("Fallback triggered. IncidentId={IncidentId} DurationMs={DurationMs} Stage={Stage} Reason={Reason}.", incident.Id, modelStopwatch.ElapsedMilliseconds, stage, BuildFailureReason(exception));
-			var fallbackResult = await _fallbackAgent.AnalyzeAsync(incident, sessionContext, agentContext, cancellationToken).ConfigureAwait(false);
-			return WithAttempt(fallbackResult, $"OpenRouter model analysis failed: {BuildFailureReason(exception)}", modelStopwatch.ElapsedMilliseconds, stage);
+			return await FallbackOrThrowAsync(incident, sessionContext, agentContext, $"OpenRouter model analysis failed: {BuildFailureReason(exception)}", modelStopwatch.ElapsedMilliseconds, stage, cancellationToken).ConfigureAwait(false);
 		}
+	}
+
+	private async Task<IncidentAgentExecutionResult> FallbackOrThrowAsync(
+		Incident incident,
+		IncidentAnalysisSessionContext? sessionContext,
+		IncidentAnalysisAgentContext? agentContext,
+		string reason,
+		long durationMilliseconds,
+		string stage,
+		CancellationToken cancellationToken,
+		string? timeoutSource = null)
+	{
+		if (!_options.AllowLocalAnalysisFallback)
+		{
+			_logger.LogWarning("Model analysis unavailable and local fallback is disabled. IncidentId={IncidentId} Stage={Stage} Reason={Reason}.", incident.Id, stage, reason);
+			throw new IncidentAnalysisUnavailableException($"{reason} Local analysis fallback is disabled; restore the configured external model provider and retry.");
+		}
+
+		_logger.LogWarning("Local analysis fallback explicitly enabled. IncidentId={IncidentId} Stage={Stage} Reason={Reason}.", incident.Id, stage, reason);
+		var fallbackResult = await _fallbackAgent.AnalyzeAsync(incident, sessionContext, agentContext, cancellationToken).ConfigureAwait(false);
+		return WithAttempt(fallbackResult, reason, durationMilliseconds, stage, timeoutSource);
 	}
 
 	private IncidentAgentExecutionResult WithAttempt(IncidentAgentExecutionResult result, string reason, long durationMilliseconds, string stage, string? timeoutSource = null) => result with

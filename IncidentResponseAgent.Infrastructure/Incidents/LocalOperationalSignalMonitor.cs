@@ -15,25 +15,29 @@ public sealed class LocalOperationalSignalMonitor : IIncidentSignalMonitor
 	private readonly IMetricSeriesCatalog _metricSeriesCatalog;
 	private readonly OperationalDataOptions _options;
 	private readonly IOperationalSourceHealthProbe? _healthProbe;
+	private readonly IOperationalProjectRegistry? _projectRegistry;
 
 	public LocalOperationalSignalMonitor(
 		ILogSearchProvider logSearchProvider,
 		IMetricSeriesCatalog metricSeriesCatalog,
 		IOptions<OperationalDataOptions> options,
-		IOperationalSourceHealthProbe? healthProbe = null)
+		IOperationalSourceHealthProbe? healthProbe = null,
+		IOperationalProjectRegistry? projectRegistry = null)
 	{
 		_logSearchProvider = logSearchProvider;
 		_metricSeriesCatalog = metricSeriesCatalog;
 		_options = options.Value ?? new OperationalDataOptions();
 		_healthProbe = healthProbe;
+		_projectRegistry = projectRegistry;
 	}
 
 	public async Task<IReadOnlyList<DetectedIncidentCandidate>> DetectAsync(CancellationToken cancellationToken = default)
 	{
-		if (_options.Projects.Count > 0)
+		var projects = _projectRegistry?.GetProjects() ?? _options.Projects;
+		if (projects.Count > 0 && (projects.Count > 1 || !string.Equals(projects[0].Id, _options.ProjectId, StringComparison.OrdinalIgnoreCase)))
 		{
 			var allCandidates = new List<DetectedIncidentCandidate>();
-			foreach (var project in _options.Projects.Where(project => !string.IsNullOrWhiteSpace(project.Id)))
+			foreach (var project in projects.Where(project => !string.IsNullOrWhiteSpace(project.Id)))
 			{
 				var projectOptions = BuildProjectOptions(project);
 				await CheckProjectHealthAsync(projectOptions, cancellationToken).ConfigureAwait(false);

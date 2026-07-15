@@ -220,13 +220,15 @@ svg { width: 13px; height: 13px; stroke-width: 2; flex: 0 0 auto; }
 .project-selector {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  min-height: 28px;
-  padding: 3px 8px;
+  gap: 5px;
+  height: 22px;
+  max-height: 22px;
+  padding: 0 6px;
   color: var(--text);
   background: var(--surface);
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: 7px;
+  line-height: 1;
 }
 
 .project-selector span {
@@ -234,25 +236,31 @@ svg { width: 13px; height: 13px; stroke-width: 2; flex: 0 0 auto; }
   align-items: center;
   gap: 4px;
   color: var(--muted);
-  font-size: 0.72rem;
+  font-size: 0.64rem;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.04em;
+  line-height: 1;
 }
 
 .project-selector svg {
-  width: 13px;
-  height: 13px;
+  width: 12px;
+  height: 12px;
 }
 
 .project-selector select {
-  min-width: 140px;
-  padding: 2px 22px 2px 6px;
+  appearance: none;
+  min-width: 118px;
+  height: 18px;
+  max-height: 18px;
+  padding: 0 14px 0 3px;
   color: var(--text);
   background: transparent;
   border: 0;
   outline: 0;
   font-weight: 700;
+  font-size: 0.72rem;
+  line-height: 1;
 }
 
 .top-icon {
@@ -784,6 +792,14 @@ textarea {
   border-color: color-mix(in srgb, var(--purple) 22%, var(--line));
 }
 
+.project-manager-panel {
+  margin-bottom: 14px;
+}
+
+.project-form {
+  margin-top: 12px;
+}
+
 .status-new { color: var(--confirmed); background: var(--confirmed-soft); border-color: color-mix(in srgb, var(--confirmed) 45%, transparent); }
 
 .muted { color: var(--muted); }
@@ -1108,6 +1124,7 @@ code {
 
 .step-line,
 .similar-line,
+.project-source-card,
 .source-card,
 .evaluation-card,
 .result-item {
@@ -1601,6 +1618,7 @@ label {
 .analysis-card h3 svg { width: 14px; height: 14px; }
 .analysis-card button[data-hydrated] { gap: 7px; }
 
+.project-source-card h3,
 .source-card h3,
 .evaluation-card h3,
 .result-item h3 {
@@ -1609,12 +1627,14 @@ label {
   font-weight: 600;
 }
 
+.project-source-card,
 .source-card,
 .evaluation-card,
 .result-item {
   min-height: 86px;
 }
 
+.project-source-card p,
 .source-card p,
 .evaluation-card p,
 .result-item p {

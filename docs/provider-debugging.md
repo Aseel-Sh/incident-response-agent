@@ -53,7 +53,7 @@ The implementation defect was incomplete retry coverage. Only an empty successfu
 
 ## Corrected behavior
 
-Strict output is validated for JSON shape, required fields, enum fields, and numeric SEV. Empty, invalid JSON, schema-invalid, wrong-SEV, and HTTP 400/422 strict-mode rejection trigger one prompt-only JSON retry. A successful retry remains model analysis and records/displays the retry reason. Failure of both attempts reaches the resilient local fallback. Local fallback refuses to synthesize analysis when no log, metric, runbook, or approved prior incident exists.
+Strict output is validated for JSON shape, required fields, enum fields, and numeric SEV. Empty, invalid JSON, schema-invalid, wrong-SEV, and HTTP 400/422 strict-mode rejection trigger one prompt-only JSON retry. A successful retry remains model analysis and records/displays the retry reason. Failure of both attempts now fails closed by default. Local analysis is available only when `AllowLocalAnalysisFallback` is explicitly enabled for an offline/demo run, and it still refuses to synthesize analysis without log, metric, runbook, or approved prior-incident evidence.
 
 ## June 20 provider investigation
 

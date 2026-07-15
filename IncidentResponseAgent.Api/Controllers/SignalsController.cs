@@ -19,10 +19,12 @@ public sealed class SignalsController : ControllerBase
 
 	private static readonly SemaphoreSlim FileLock = new(1, 1);
 	private readonly OperationalDataOptions _options;
+	private readonly IOperationalProjectRegistry _projectRegistry;
 
-	public SignalsController(IOptions<OperationalDataOptions> options)
+	public SignalsController(IOptions<OperationalDataOptions> options, IOperationalProjectRegistry projectRegistry)
 	{
 		_options = options.Value ?? new OperationalDataOptions();
+		_projectRegistry = projectRegistry;
 	}
 
 	[HttpPost("logs")]
@@ -149,7 +151,7 @@ public sealed class SignalsController : ControllerBase
 			return null;
 		}
 
-		return _options.Projects.FirstOrDefault(project => project.Id.Equals(projectId.Trim(), StringComparison.OrdinalIgnoreCase));
+		return _projectRegistry.GetProjects().FirstOrDefault(project => project.Id.Equals(projectId.Trim(), StringComparison.OrdinalIgnoreCase));
 	}
 
 	private sealed class MetricSeriesDocument

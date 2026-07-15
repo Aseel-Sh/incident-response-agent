@@ -22,6 +22,15 @@ export async function createIncident(
   overrides: Partial<typeof manualLatencyIncident> & { sessionId?: string } = {}
 ): Promise<CreatedIncident> {
   const payload = { ...manualLatencyIncident, ...overrides };
+  await request.post('/api/signals/metrics', {
+    data: {
+      metricName: payload.tags?.includes('request_error_rate') ? 'request_error_rate' : 'p95_latency',
+      serviceName: payload.serviceName,
+      environment: payload.environment,
+      timestamp: payload.timestamp,
+      value: payload.tags?.includes('request_error_rate') ? 42 : 2600
+    }
+  });
   const response = await request.post('/api/incidents/analyze', { data: payload });
   if (!response.ok()) throw new Error(`Fixture incident creation failed: ${response.status()} ${await response.text()}`);
   return response.json();

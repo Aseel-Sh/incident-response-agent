@@ -6,6 +6,12 @@
     "samples": [{ "timestamp": "2026-06-19T12:00:00Z", "value": 32 }]
   },
   {
+    "metricName": "p95_latency",
+    "serviceName": "database-api",
+    "environment": "production",
+    "samples": [{ "timestamp": "2026-06-19T12:00:00Z", "value": 3200 }]
+  },
+  {
     "metricName": "request_error_rate",
     "serviceName": "blackhole-metrics-api",
     "environment": "production",
@@ -22,6 +28,12 @@
     "serviceName": "model-unavailable-api",
     "environment": "production",
     "samples": [{ "timestamp": "2026-06-19T12:00:00Z", "value": 30 }]
+  },
+  {
+    "metricName": "p95_latency",
+    "serviceName": "model-unavailable-api",
+    "environment": "production",
+    "samples": [{ "timestamp": "2026-06-19T12:00:00Z", "value": 2800 }]
   },
   {
     "metricName": "request_error_rate",

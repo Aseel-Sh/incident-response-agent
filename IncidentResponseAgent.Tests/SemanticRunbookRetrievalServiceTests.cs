@@ -10,6 +10,35 @@ public sealed class SemanticRunbookRetrievalServiceTests : IDisposable
 	private readonly string _rootPath = Path.Combine(Path.GetTempPath(), "ira-rag-tests", Guid.NewGuid().ToString("N"));
 
 	[Fact]
+	public async Task RetrieveAsyncReportsUnavailableWhenExternalEmbeddingsAreMissingAndLocalFallbackIsDisabled()
+	{
+		var knowledgeBasePath = Path.Combine(_rootPath, "strict-external-knowledge-base");
+		Directory.CreateDirectory(knowledgeBasePath);
+		await File.WriteAllTextAsync(Path.Combine(knowledgeBasePath, "checkout.md"), "# Checkout\n\n## Mitigation\n\nCheck checkout dependencies.");
+		var service = new SemanticRunbookRetrievalService(
+			Options.Create(new RunbookRetrievalOptions
+			{
+				VectorStoreProvider = "SQLite",
+				DatabasePath = Path.Combine(_rootPath, "strict-external-rag.sqlite"),
+				KnowledgeBasePath = knowledgeBasePath,
+				AllowLocalEmbeddingFallback = false
+			}),
+			new EmptyHttpClientFactory(),
+			NullLoggerFactory.Instance,
+			NullLogger<SemanticRunbookRetrievalService>.Instance);
+
+		var result = await service.RetrieveAsync(new RunbookRetrievalRequest { Query = "checkout dependencies", ServiceName = "checkout-api" });
+		var diagnostics = await service.SearchAsync(new RunbookRetrievalDiagnosticsRequest { Query = "checkout dependencies", ServiceName = "checkout-api" });
+
+		Assert.Empty(result.Runbooks);
+		Assert.True(result.IsDegraded);
+		Assert.Equal("unavailable", result.RagStatus);
+		Assert.Contains("fallback is disabled", result.DegradedReason);
+		Assert.True(diagnostics.IsDegraded);
+		Assert.Equal("unavailable", diagnostics.RagStatus);
+	}
+
+	[Fact]
 	public async Task RetrieveAsyncIndexesMarkdownIntoSqliteAndReturnsRelevantChunks()
 	{
 		var knowledgeBasePath = Path.Combine(_rootPath, "knowledge-base");
@@ -36,9 +65,11 @@ Check recent deployments, review downstream payment dependencies, and confirm bl
 		var service = new SemanticRunbookRetrievalService(
 			Options.Create(new RunbookRetrievalOptions
 			{
+				VectorStoreProvider = "SQLite",
 				DatabasePath = databasePath,
 				KnowledgeBasePath = knowledgeBasePath,
-				MinimumRelevanceScore = 0.05
+				MinimumRelevanceScore = 0.05,
+				AllowLocalEmbeddingFallback = true
 			}),
 			new EmptyHttpClientFactory(),
 			NullLoggerFactory.Instance,
@@ -153,9 +184,11 @@ Use this runbook when order processing queues grow faster than consumers can dra
 		Directory.CreateDirectory(knowledgeBasePath);
 		var options = Options.Create(new RunbookRetrievalOptions
 		{
+			VectorStoreProvider = "SQLite",
 			DatabasePath = Path.Combine(_rootPath, "dynamic-rag.sqlite"),
 			KnowledgeBasePath = knowledgeBasePath,
-			MinimumRelevanceScore = 0.05
+			MinimumRelevanceScore = 0.05,
+			AllowLocalEmbeddingFallback = true
 		});
 		var service = new SemanticRunbookRetrievalService(options, new EmptyHttpClientFactory(), NullLoggerFactory.Instance, NullLogger<SemanticRunbookRetrievalService>.Instance);
 		var publisher = new MarkdownApprovedKnowledgePublisher(options);
@@ -191,10 +224,12 @@ Use this runbook when order processing queues grow faster than consumers can dra
 		var service = new SemanticRunbookRetrievalService(
 			Options.Create(new RunbookRetrievalOptions
 			{
+				VectorStoreProvider = "SQLite",
 				DatabasePath = Path.Combine(_rootPath, "source-rag.sqlite"),
 				KnowledgeBasePath = primary,
 				SourceRegistryPath = Path.Combine(_rootPath, "runbook-sources.json"),
-				MinimumRelevanceScore = 0.05
+				MinimumRelevanceScore = 0.05,
+				AllowLocalEmbeddingFallback = true
 			}),
 			new EmptyHttpClientFactory(), NullLoggerFactory.Instance, NullLogger<SemanticRunbookRetrievalService>.Instance);
 
@@ -230,9 +265,11 @@ Use this runbook when order processing queues grow faster than consumers can dra
 		return new SemanticRunbookRetrievalService(
 			Options.Create(new RunbookRetrievalOptions
 			{
+				VectorStoreProvider = "SQLite",
 				DatabasePath = databasePath,
 				KnowledgeBasePath = knowledgeBasePath,
-				MinimumRelevanceScore = 0.05
+				MinimumRelevanceScore = 0.05,
+				AllowLocalEmbeddingFallback = true
 			}),
 			new EmptyHttpClientFactory(),
 			NullLoggerFactory.Instance,

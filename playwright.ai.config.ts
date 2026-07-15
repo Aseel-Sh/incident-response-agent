@@ -35,6 +35,7 @@ export default defineConfig({
       'Agent__IncidentAnalysis__Model': 'fixture/model-v1',
       'Agent__IncidentAnalysis__Endpoint': 'http://127.0.0.1:5199/v1',
       'Agent__IncidentAnalysis__ApiKey': 'fixture-key-not-a-real-secret',
+      'Agent__IncidentAnalysis__AllowLocalAnalysisFallback': 'true',
       'Agent__IncidentAnalysis__AnalysisTimeoutSeconds': '10',
       'Runbooks__SemanticRetrieval__ApiKey': 'fixture-key-not-a-real-secret',
       'Runbooks__SemanticRetrieval__Endpoint': 'http://127.0.0.1:5199/embeddings',

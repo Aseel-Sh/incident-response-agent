@@ -35,6 +35,7 @@ export default defineConfig({
       'Logging__EventLog__LogLevel__Default': 'None',
       'Agent__IncidentAnalysis__ApiKey': '',
       'Agent__IncidentAnalysis__AnalysisTimeoutSeconds': '2',
+      'Agent__IncidentAnalysis__AllowLocalAnalysisFallback': 'true',
       OPENROUTER_API_KEY: '',
       IRA_AGENT_API_KEY: '',
       'Runbooks__SemanticRetrieval__ApiKey': '',

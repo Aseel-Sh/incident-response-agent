@@ -4,6 +4,8 @@ public sealed class OperationalDataOptions
 {
 	public IReadOnlyList<OperationalProjectOptions> Projects { get; init; } = Array.Empty<OperationalProjectOptions>();
 
+	public string? ProjectRegistryPath { get; init; }
+
 	public string ProjectId { get; init; } = "default";
 
 	public string ProjectName { get; init; } = "Default project";

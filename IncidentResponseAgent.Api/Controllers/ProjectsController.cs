@@ -9,38 +9,55 @@ namespace IncidentResponseAgent.Api.Controllers;
 public sealed class ProjectsController : ControllerBase
 {
 	private readonly OperationalDataOptions _options;
+	private readonly IOperationalProjectRegistry _registry;
 
-	public ProjectsController(IOptions<OperationalDataOptions> options)
+	public ProjectsController(IOptions<OperationalDataOptions> options, IOperationalProjectRegistry registry)
 	{
 		_options = options.Value ?? new OperationalDataOptions();
+		_registry = registry;
 	}
 
 	[HttpGet]
 	[ProducesResponseType(typeof(IReadOnlyList<ProjectWorkspaceResponse>), StatusCodes.Status200OK)]
 	public ActionResult<IReadOnlyList<ProjectWorkspaceResponse>> GetProjects()
 	{
-		var projects = _options.Projects.Count > 0
-			? _options.Projects.Select(ToResponse).ToArray()
-			: [new ProjectWorkspaceResponse(
-				NormalizeProjectId(_options.ProjectId),
-				string.IsNullOrWhiteSpace(_options.ProjectName) ? "Default project" : _options.ProjectName.Trim(),
-				_options.LogEntriesPath ?? string.Empty,
-				_options.MetricSamplesPath ?? string.Empty,
-				_options.SourceHealthEndpoint ?? string.Empty,
-				new ProjectThresholdResponse(
-					_options.HighErrorRateThreshold,
-					_options.CriticalErrorRateThreshold,
-					_options.QueueDepthWarningThreshold,
-					_options.LatencyWarningThresholdMs,
-					_options.LatencyCriticalThresholdMs,
-					_options.LogPatternCountThreshold,
-					_options.DetectionWindowMinutes,
-					_options.MaxDetectedIncidents))];
+		var configuredIds = _options.Projects.Count > 0
+			? _options.Projects.Select(item => NormalizeProjectId(item.Id)).ToHashSet(StringComparer.OrdinalIgnoreCase)
+			: new[] { NormalizeProjectId(_options.ProjectId) }.ToHashSet(StringComparer.OrdinalIgnoreCase);
+		var projects = _registry.GetProjects().Select(project => ToResponse(project, !configuredIds.Contains(NormalizeProjectId(project.Id)))).ToArray();
 
 		return Ok(projects);
 	}
 
-	private ProjectWorkspaceResponse ToResponse(OperationalProjectOptions project) => new(
+	[HttpPost]
+	[ProducesResponseType(typeof(ProjectWorkspaceResponse), StatusCodes.Status201Created)]
+	public async Task<ActionResult<ProjectWorkspaceResponse>> AddProjectAsync([FromBody] ProjectWorkspaceInput input, CancellationToken cancellationToken)
+	{
+		var project = await _registry.AddProjectAsync(new OperationalProjectOptions
+		{
+			Id = input.Id,
+			Name = input.Name,
+			LogEntriesPath = input.LogEntriesPath,
+			MetricSamplesPath = input.MetricSamplesPath,
+			SourceHealthEndpoint = input.SourceHealthEndpoint,
+			HighErrorRateThreshold = input.HighErrorRateThreshold,
+			CriticalErrorRateThreshold = input.CriticalErrorRateThreshold,
+			QueueDepthWarningThreshold = input.QueueDepthWarningThreshold,
+			LatencyWarningThresholdMs = input.LatencyWarningThresholdMs,
+			LatencyCriticalThresholdMs = input.LatencyCriticalThresholdMs,
+			LogPatternCountThreshold = input.LogPatternCountThreshold,
+			DetectionWindowMinutes = input.DetectionWindowMinutes,
+			MaxDetectedIncidents = input.MaxDetectedIncidents
+		}, cancellationToken);
+
+		return Created($"/api/projects/{project.Id}", ToResponse(project, removable: true));
+	}
+
+	[HttpDelete("{projectId}")]
+	public async Task<IActionResult> RemoveProjectAsync(string projectId, CancellationToken cancellationToken) =>
+		await _registry.RemoveProjectAsync(projectId, cancellationToken) ? NoContent() : NotFound();
+
+	private ProjectWorkspaceResponse ToResponse(OperationalProjectOptions project, bool removable) => new(
 		NormalizeProjectId(project.Id),
 		string.IsNullOrWhiteSpace(project.Name) ? NormalizeProjectId(project.Id) : project.Name.Trim(),
 		project.LogEntriesPath ?? string.Empty,
@@ -54,7 +71,8 @@ public sealed class ProjectsController : ControllerBase
 			project.LatencyCriticalThresholdMs ?? _options.LatencyCriticalThresholdMs,
 			project.LogPatternCountThreshold ?? _options.LogPatternCountThreshold,
 			project.DetectionWindowMinutes ?? _options.DetectionWindowMinutes,
-			project.MaxDetectedIncidents ?? _options.MaxDetectedIncidents));
+			project.MaxDetectedIncidents ?? _options.MaxDetectedIncidents),
+		removable);
 
 	private static string NormalizeProjectId(string? projectId) =>
 		string.IsNullOrWhiteSpace(projectId) ? "default" : projectId.Trim();
@@ -66,7 +84,25 @@ public sealed record ProjectWorkspaceResponse(
 	string LogEntriesPath,
 	string MetricSamplesPath,
 	string SourceHealthEndpoint,
-	ProjectThresholdResponse Thresholds);
+	ProjectThresholdResponse Thresholds,
+	bool Removable = false);
+
+public sealed record ProjectWorkspaceInput
+{
+	public required string Id { get; init; }
+	public required string Name { get; init; }
+	public string? LogEntriesPath { get; init; }
+	public string? MetricSamplesPath { get; init; }
+	public string? SourceHealthEndpoint { get; init; }
+	public decimal? HighErrorRateThreshold { get; init; }
+	public decimal? CriticalErrorRateThreshold { get; init; }
+	public decimal? QueueDepthWarningThreshold { get; init; }
+	public decimal? LatencyWarningThresholdMs { get; init; }
+	public decimal? LatencyCriticalThresholdMs { get; init; }
+	public int? LogPatternCountThreshold { get; init; }
+	public int? DetectionWindowMinutes { get; init; }
+	public int? MaxDetectedIncidents { get; init; }
+}
 
 public sealed record ProjectThresholdResponse(
 	decimal HighErrorRateThreshold,

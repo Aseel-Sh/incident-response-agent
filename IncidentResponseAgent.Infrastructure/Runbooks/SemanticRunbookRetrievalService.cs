@@ -40,6 +40,7 @@ public sealed class SemanticRunbookRetrievalService : IRunbookRetrievalService, 
 		_embeddingProvider = new ResilientRunbookEmbeddingProvider(
 			primary,
 			fallback,
+			_options.AllowLocalEmbeddingFallback,
 			loggerFactory.CreateLogger<ResilientRunbookEmbeddingProvider>());
 		_qdrantVectorStore = IsQdrantEnabled(_options)
 			? new QdrantRunbookVectorStore(
@@ -59,17 +60,36 @@ public sealed class SemanticRunbookRetrievalService : IRunbookRetrievalService, 
 			throw new ArgumentException("Runbook query cannot be empty.", nameof(request));
 		}
 
-		await EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
+		ScoredRetrieval retrieval;
+		try
+		{
+			await EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
 
-		var queryVector = await _embeddingProvider.GenerateEmbeddingAsync(BuildQueryText(request.Query, request.ServiceName, request.Environment), cancellationToken).ConfigureAwait(false);
-		var limit = Math.Clamp(request.MaxResults <= 0 ? _options.MaxResults : request.MaxResults, 1, 8);
-		var retrieval = await GetScoredMatchesAsync(
-			request.Query,
-			request.ServiceName,
-			request.Environment,
-			queryVector,
-			limit,
-			cancellationToken).ConfigureAwait(false);
+			var queryVector = await _embeddingProvider.GenerateEmbeddingAsync(BuildQueryText(request.Query, request.ServiceName, request.Environment), cancellationToken).ConfigureAwait(false);
+			var limit = Math.Clamp(request.MaxResults <= 0 ? _options.MaxResults : request.MaxResults, 1, 8);
+			retrieval = await GetScoredMatchesAsync(
+				request.Query,
+				request.ServiceName,
+				request.Environment,
+				queryVector,
+				limit,
+				cancellationToken).ConfigureAwait(false);
+		}
+		catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+		{
+			throw;
+		}
+		catch (Exception exception)
+		{
+			return new RunbookRetrievalResult
+			{
+				EmbeddingProvider = _embeddingProvider.ProviderName,
+				VectorStoreProvider = _qdrantVectorStore?.ProviderName ?? "sqlite",
+				RagStatus = "unavailable",
+				IsDegraded = true,
+				DegradedReason = BuildUnavailableReason(exception)
+			};
+		}
 
 		return new RunbookRetrievalResult
 		{
@@ -94,19 +114,43 @@ public sealed class SemanticRunbookRetrievalService : IRunbookRetrievalService, 
 			throw new ArgumentException("Runbook query cannot be empty.", nameof(request));
 		}
 
-		await EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
+		ScoredRetrieval retrieval;
+		try
+		{
+			await EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
 
-		var queryVector = await _embeddingProvider.GenerateEmbeddingAsync(
-			BuildQueryText(request.Query, request.ServiceName, request.Environment),
-			cancellationToken).ConfigureAwait(false);
-		var limit = Math.Clamp(request.MaxResults <= 0 ? _options.MaxResults : request.MaxResults, 1, 20);
-		var retrieval = await GetScoredMatchesAsync(
-			request.Query,
-			request.ServiceName,
-			request.Environment,
-			queryVector,
-			limit,
-			cancellationToken).ConfigureAwait(false);
+			var queryVector = await _embeddingProvider.GenerateEmbeddingAsync(
+				BuildQueryText(request.Query, request.ServiceName, request.Environment),
+				cancellationToken).ConfigureAwait(false);
+			var limit = Math.Clamp(request.MaxResults <= 0 ? _options.MaxResults : request.MaxResults, 1, 20);
+			retrieval = await GetScoredMatchesAsync(
+				request.Query,
+				request.ServiceName,
+				request.Environment,
+				queryVector,
+				limit,
+				cancellationToken).ConfigureAwait(false);
+		}
+		catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+		{
+			throw;
+		}
+		catch (Exception exception)
+		{
+			return new RunbookRetrievalDiagnosticsResult
+			{
+				EmbeddingProvider = _embeddingProvider.ProviderName,
+				EmbeddingModel = _embeddingProvider.ModelName,
+				VectorStoreProvider = _qdrantVectorStore?.ProviderName ?? "sqlite",
+				VectorStoreEndpoint = _qdrantVectorStore?.Endpoint,
+				VectorStoreCollection = _qdrantVectorStore?.CollectionName,
+				DatabasePath = ResolveDatabasePath(),
+				KnowledgeBasePath = ResolveKnowledgeBasePath(),
+				RagStatus = "unavailable",
+				IsDegraded = true,
+				DegradedReason = BuildUnavailableReason(exception)
+			};
+		}
 
 		return new RunbookRetrievalDiagnosticsResult
 		{
@@ -233,6 +277,13 @@ public sealed class SemanticRunbookRetrievalService : IRunbookRetrievalService, 
 			return new ScoredRetrieval(DiversifyBySection(matches).Take(limit).ToArray(), "qdrant", false, null);
 		}
 
+		if (_qdrantVectorStore is not null
+			&& _qdrantVectorStore.ProviderName.Contains("unavailable", StringComparison.OrdinalIgnoreCase)
+			&& !_options.AllowLocalVectorStoreFallback)
+		{
+			throw new InvalidOperationException("Qdrant vector store is unavailable and local SQLite vector-store fallback is disabled.");
+		}
+
 		var chunks = await LoadChunksAsync(cancellationToken).ConfigureAwait(false);
 
 		var scored = chunks
@@ -248,7 +299,7 @@ public sealed class SemanticRunbookRetrievalService : IRunbookRetrievalService, 
 			DiversifyBySection(scored).Take(limit).ToArray(),
 			qdrantDegraded ? "qdrant-unavailable/sqlite" : "sqlite",
 			qdrantDegraded,
-			qdrantDegraded ? "Qdrant is unavailable; SQLite vector search served this query." : null);
+			qdrantDegraded ? "Qdrant is unavailable; SQLite vector search served this query because local vector-store fallback is explicitly enabled." : null);
 	}
 
 	private async Task EnsureInitializedAsync(CancellationToken cancellationToken)
@@ -944,6 +995,25 @@ create index if not exists ix_runbook_documents_content_hash on runbook_document
 	{
 		var normalized = type?.Trim().ToLowerInvariant();
 		return normalized is "directory" or "git" ? normalized : throw new ArgumentException("Runbook source type must be directory or git.", nameof(type));
+	}
+
+	private static string BuildUnavailableReason(Exception exception)
+	{
+		var message = string.IsNullOrWhiteSpace(exception.Message)
+			? exception.GetType().Name
+			: exception.Message.ReplaceLineEndings(" ").Trim();
+		if (message.Contains("External embedding provider is not configured", StringComparison.OrdinalIgnoreCase))
+		{
+			return "Runbook retrieval unavailable: external embedding provider is not configured and local embedding fallback is disabled.";
+		}
+
+		if (message.Contains("local embedding fallback is disabled", StringComparison.OrdinalIgnoreCase))
+		{
+			return "Runbook retrieval unavailable: primary embedding provider failed and local embedding fallback is disabled.";
+		}
+
+		if (message.Length > 260) message = string.Concat(message.AsSpan(0, 257), "...");
+		return $"Runbook retrieval unavailable: {exception.GetType().Name}: {message}";
 	}
 
 	private static string ResolveSourceDirectory(string? path)

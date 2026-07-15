@@ -14,6 +14,7 @@ public static class DependencyInjection
 	{
 		services.AddSingleton<ILogSearchProvider, LocalJsonLogSearchProvider>();
 		services.AddSingleton<LocalJsonMetricsProvider>();
+		services.AddSingleton<IOperationalProjectRegistry, OperationalProjectRegistry>();
 		services.AddSingleton<IMetricsProvider>(provider => provider.GetRequiredService<LocalJsonMetricsProvider>());
 		services.AddSingleton<IMetricSeriesCatalog>(provider => provider.GetRequiredService<LocalJsonMetricsProvider>());
 		services.AddSingleton<IOperationalSourceHealthProbe, HttpOperationalSourceHealthProbe>();

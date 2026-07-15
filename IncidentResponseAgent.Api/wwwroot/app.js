@@ -39,6 +39,7 @@ const elements = {
   confirmModalMessage: $("#confirmModalMessage"),
   confirmModalCancel: $("#confirmModalCancel"),
   confirmModalAccept: $("#confirmModalAccept"),
+  projectForm: $("#projectForm"),
   sources: $("#sourcesOutput"),
   ragForm: $("#ragForm"),
   ragSummary: $("#ragSummary"),
@@ -105,6 +106,7 @@ let projects = [];
 let activeProjectId = localStorage.getItem("incidentops.projectId") || "default";
 const pageSize = 10;
 const incidentLifecycleStatuses = ["new", "active", "mitigated", "resolved", "recovered"];
+const severityFilterValues = ["sev1", "sev2", "sev3", "sev4", "sev5"];
 
 document.querySelectorAll(".nav-tab").forEach((button) => button.addEventListener("click", () => activateTab(button.dataset.tab)));
 document.querySelectorAll(".filter-chip").forEach((button) => {
@@ -122,6 +124,10 @@ elements.incidentSearch.addEventListener("input", () => {
   renderDetected();
 });
 elements.manualIncident.addEventListener("click", showManualIncidentForm);
+elements.projectForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  await addProjectFromForm();
+});
 elements.projectSelector.addEventListener("change", async () => {
   activeProjectId = elements.projectSelector.value || "default";
   localStorage.setItem("incidentops.projectId", activeProjectId);
@@ -129,11 +135,7 @@ elements.projectSelector.addEventListener("change", async () => {
   historyPage = 1;
   lastScanState = null;
   localStorage.removeItem("incidentops.lastScan");
-  await loadPersistedMonitoringState();
-  await Promise.allSettled([loadRecent(), loadDetected(false, false), loadSources()]);
-  elements.lastScan.innerHTML = renderMonitorSummary(detectedCandidates);
-  renderSidebarLastScan();
-  hydrateIcons(elements.lastScan);
+  await refreshProjectScopedViews();
   showToast("Project changed", activeProjectId === "all" ? "Showing incidents across all projects." : `Scoped to ${projectName(activeProjectId)}.`, "info");
 });
 elements.sample.addEventListener("click", loadSampleIncident);
@@ -209,6 +211,11 @@ elements.runbookSources.addEventListener("click", async (event) => {
   const button = event.target.closest("button[data-runbook-source-action]");
   if (!button) return;
   await handleRunbookSourceAction(button);
+});
+elements.sources.addEventListener("click", async (event) => {
+  const button = event.target.closest("[data-remove-project]");
+  if (!button) return;
+  await removeProject(button.dataset.removeProject);
 });
 elements.confirmModalCancel.addEventListener("click", () => closeConfirmation(false));
 elements.confirmModalAccept.addEventListener("click", () => closeConfirmation(true));
@@ -458,6 +465,49 @@ async function loadProjects() {
   }
   elements.projectSelector.innerHTML = `<option value="all">Global view</option>${projects.map((project) => `<option value="${escapeHtml(project.id)}">${escapeHtml(project.name || project.id)}</option>`).join("")}`;
   elements.projectSelector.value = activeProjectId;
+}
+
+async function refreshProjectScopedViews() {
+  await loadProjects();
+  await Promise.allSettled([loadSources(), loadPersistedMonitoringState(), loadRecent(), loadDetected(false, false)]);
+  elements.lastScan.innerHTML = renderMonitorSummary(detectedCandidates);
+  renderSidebarLastScan();
+  hydrateIcons(elements.lastScan);
+}
+
+async function addProjectFromForm() {
+  const form = new FormData(elements.projectForm);
+  const payload = Object.fromEntries(form.entries());
+  for (const key of ["highErrorRateThreshold", "latencyWarningThresholdMs"]) {
+    if (payload[key] === "") delete payload[key];
+    else payload[key] = Number(payload[key]);
+  }
+  try {
+    const project = await requestJson("/api/projects", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+    elements.projectForm.reset();
+    activeProjectId = project.id;
+    localStorage.setItem("incidentops.projectId", activeProjectId);
+    await refreshProjectScopedViews();
+    showToast("Project added", `${project.name} is now available for monitoring.`, "success");
+  } catch (error) {
+    showToast("Project not added", error.message || String(error), "error");
+  }
+}
+
+async function removeProject(projectId) {
+  const confirmed = await showConfirmation({ title: "Remove project?", message: "This removes the workspace configuration from this app. It does not delete log files, metric files, or saved incidents.", confirmLabel: "Remove project", destructive: true });
+  if (!confirmed) return;
+  try {
+    await requestJson(`/api/projects/${encodeURIComponent(projectId)}`, { method: "DELETE" });
+    if (activeProjectId === projectId) {
+      activeProjectId = "all";
+      localStorage.setItem("incidentops.projectId", activeProjectId);
+    }
+    await refreshProjectScopedViews();
+    showToast("Project removed", "The workspace configuration was removed.", "success");
+  } catch (error) {
+    showToast("Project remove failed", error.message || String(error), "error");
+  }
 }
 
 function projectQuery(prefix = "?") {
@@ -1039,7 +1089,7 @@ function populateHistoryFilters(rows) {
   setSelectOptions(elements.historyServiceFilter, "All services", uniqueValues(rows.map((row) => row.service)));
   setSelectOptions(elements.historyStatusFilter, "All statuses", incidentLifecycleStatuses, formatStatusLabel);
   setSessionFilterOptions(rows);
-  setSelectOptions(elements.historySeverityFilter, "All severities", uniqueValues(rows.map((row) => row.severity)));
+  setSelectOptions(elements.historySeverityFilter, "All severities", severityFilterValues, formatSeverityLabel);
 }
 
 function renderHistory() {
@@ -1266,7 +1316,7 @@ function getModalFocusableElements(modal = elements.historyModal) {
 
 function renderSourcesPage(items) {
   const warning = items.some((item) => item.isDemoMode) ? `<div class="warning-banner"><span data-icon="alert"></span>Sample data active - logs and metrics are bundled sample files. Connect real sources for production use.</div>` : "";
-  const projectCards = projects.map((project) => `<article class="source-card project-source-card"><div><h3>${escapeHtml(project.name || project.id)} <span class="badge project-badge">${escapeHtml(project.id)}</span></h3><p>${escapeHtml(project.sourceHealthEndpoint || "No health endpoint configured")}</p><div class="badge-row"><span class="badge">logs: ${escapeHtml(project.logEntriesPath ? "configured" : "default")}</span><span class="badge">metrics: ${escapeHtml(project.metricSamplesPath ? "configured" : "default")}</span><span class="badge">threshold: errors ${escapeHtml(project.thresholds?.highErrorRateThreshold ?? "?")}</span></div></div></article>`).join("");
+  const projectCards = projects.map((project) => `<article class="project-source-card"><div><h3>${escapeHtml(project.name || project.id)} <span class="badge project-badge">${escapeHtml(project.id)}</span></h3><p>${escapeHtml(project.sourceHealthEndpoint || "No health endpoint configured")}</p><div class="badge-row"><span class="badge">logs: ${escapeHtml(project.logEntriesPath ? "configured" : "default")}</span><span class="badge">metrics: ${escapeHtml(project.metricSamplesPath ? "configured" : "default")}</span><span class="badge">threshold: errors ${escapeHtml(project.thresholds?.highErrorRateThreshold ?? "?")}</span></div></div>${project.removable ? `<button class="secondary compact-button danger-outline" type="button" data-remove-project="${escapeHtml(project.id)}"><span data-icon="trash"></span>Remove</button>` : `<span class="badge muted">Configured</span>`}</article>`).join("");
   return `${warning}<section class="project-source-grid">${projectCards}</section>${items.map(renderSourceCard).join("")}<section class="setup-section"><div class="setup-heading"><div><h3><span data-icon="plug"></span>Source configuration</h3><p>Source locations are read-only here because configuration is managed in appsettings or environment variables. Configured means a path is set; connected means the API verified it.</p></div></div><div class="setup-steps"><span><strong>1</strong> Configure paths</span><span><strong>2</strong> Refresh monitor</span><span><strong>3</strong> Verify RAG diagnostics</span></div></section>`;
 }
 

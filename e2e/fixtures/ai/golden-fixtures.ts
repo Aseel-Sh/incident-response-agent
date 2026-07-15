@@ -91,9 +91,9 @@ export const goldenFixtures: Record<string, GoldenAnalysisFixture> = {
     description: 'rag-unavailable-api has a measured request error-rate impact while embedding retrieval is unavailable.',
     severity: 'sev2', serviceName: 'rag-unavailable-api',
     expected: {
-      severityLabel: 'SEV-2', requiredEvidence: ['tool.metrics', 'rag.runbook.'],
-      expectedHypothesisTerms: ['pool saturation'], requiredUnknownTerms: ['root cause'],
-      usefulActionTerms: ['connection-pool utilization'], forbiddenActionTerms: ['RAG confirmed'], shouldMatchRunbook: true
+      severityLabel: 'SEV-2', requiredEvidence: ['tool.metrics'],
+      expectedHypothesisTerms: ['measured impact'], requiredUnknownTerms: ['root cause'],
+      usefulActionTerms: ['error-rate metric'], forbiddenActionTerms: ['RAG confirmed'], shouldMatchRunbook: false
     }
   }
 };

@@ -26,6 +26,10 @@ public sealed class RunbookRetrievalOptions
 
 	public int EmbeddingTimeoutSeconds { get; init; } = 30;
 
+	public bool AllowLocalEmbeddingFallback { get; init; }
+
+	public bool AllowLocalVectorStoreFallback { get; init; }
+
 	public string? LocalEmbeddingModel { get; init; } = "local-hashing-384";
 
 	public int LocalEmbeddingDimensions { get; init; } = 384;

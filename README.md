@@ -1,8 +1,8 @@
 # Incident Response Agent
 
-Incident Response Agent is a .NET 10 backend for AI-assisted incident investigation. It accepts an incident report, retrieves relevant operational runbooks through a local RAG pipeline, queries log and metric tools, and runs a Microsoft Agent Framework agent through OpenRouter when configured.
+Incident Response Agent is a .NET 10 incident investigation and workflow assistant. It detects or accepts incident candidates, lets an operator confirm or dismiss them, gathers operational evidence and runbooks, runs a Microsoft Agent Framework agent through OpenRouter, and persists the response and learning lifecycle.
 
-The project is built as a portfolio-quality modular monolith. It is useful without paid services because it includes local embeddings, sample operational data, SQLite persistence, and a local prompt-based agent fallback. When API keys are added, it can use OpenRouter-compatible chat models and Hugging Face-hosted embeddings.
+The project is a modular monolith intended for single-instance use. External model analysis and hosted embeddings are the normal product path. Local prompt analysis, hashing embeddings, deterministic telemetry, and SQLite vector fallback are offline/demo escape hatches and are disabled by default; the application reports an unavailable provider instead of silently degrading.
 
 It also includes a static frontend served by the API and optional Qdrant vector database support for local, free vector search.
 
@@ -13,8 +13,8 @@ It also includes a static frontend served by the API and optional Qdrant vector 
 - Retrieves relevant Markdown runbook chunks using hybrid RAG.
 - Stores runbook documents, chunks, and embedding vectors in SQLite.
 - Uses Qdrant as the primary vector database when it is running locally.
-- Falls back to SQLite vector search when Qdrant is unavailable.
-- Falls back to local embeddings if Hugging Face is unavailable.
+- Can use SQLite vector search only when selected directly or explicitly enabled as a Qdrant fallback.
+- Can use local hashing embeddings only when explicitly enabled for an offline demo.
 - Searches local JSON-backed log samples.
 - Queries local JSON-backed metric samples.
 - Scans operational logs and metrics for likely incident candidates.
@@ -22,7 +22,8 @@ It also includes a static frontend served by the API and optional Qdrant vector 
 - Persists multi-turn investigation session state in SQLite.
 - Uses a real Microsoft Agent Framework `ChatClientAgent` when an OpenRouter key is configured.
 - Registers framework `AIFunction` tools for logs, metrics, runbooks, trusted prior incidents, prior action outcomes, similarity, and proposed knowledge drafts.
-- Falls back to a local prompt-based agent when no model key is configured.
+- Fails model analysis closed by default when OpenRouter is unavailable; local prompt fallback requires explicit opt-in.
+- Supports project-scoped monitoring, sources, thresholds, incidents, and history.
 - Returns structured evidence, hypotheses, recommended actions, confidence, notes, and session context.
 - Exposes RAG diagnostics so retrieval quality can be inspected directly.
 - Exposes detected incident candidates so the frontend can self-report likely incidents.
@@ -72,10 +73,10 @@ At runtime the RAG service:
 2. Parses title, summary, metadata, and tags.
 3. Chunks runbooks by headings and numbered steps.
 4. Generates an embedding for each chunk.
-5. Stores document metadata and fallback vectors in SQLite.
-6. Upserts vectors and payloads to Qdrant when Qdrant is available.
+5. Stores document metadata and an index copy in SQLite.
+6. Upserts vectors and payloads to Qdrant when Qdrant is selected and available.
 7. Reindexes when Markdown content, approved incident knowledge, or the embedding provider/model changes.
-8. Retrieves chunks from Qdrant first, then falls back to SQLite vector search.
+8. Retrieves chunks from the selected vector store; cross-provider fallback requires explicit opt-in.
 9. Reranks with hybrid semantic and lexical scoring.
 10. Returns top matches to the agent and API response.
 
@@ -117,7 +118,7 @@ The project uses:
 }
 ```
 
-If Docker Desktop is not running or Qdrant is unavailable, the app logs the failure and falls back to SQLite search.
+If Docker Desktop is not running or Qdrant is unavailable, RAG reports unavailable. Set `AllowLocalVectorStoreFallback=true` only when an intentional SQLite fallback is acceptable.
 
 Qdrant docs:
 
@@ -133,7 +134,7 @@ The project supports two embedding paths:
 - Local fallback: `local-hashing-384`
 - Hosted Hugging Face feature-extraction model: `BAAI/bge-small-en-v1.5`
 
-If a Hugging Face token is configured, the app tries Hugging Face first. If Hugging Face is unreachable, rate-limited, misconfigured, or otherwise fails, the app logs the failure and falls back to local embeddings for the current process.
+Hugging Face is the normal embedding path. If it is unreachable, rate-limited, or misconfigured, RAG reports `unavailable` by default. Set `Runbooks__SemanticRetrieval__AllowLocalEmbeddingFallback=true` only for an intentional offline/demo run. Likewise, Qdrant does not silently fall back to SQLite unless `AllowLocalVectorStoreFallback` is explicitly enabled; selecting `VectorStoreProvider=SQLite` directly remains supported for a local deployment.
 
 Get a Hugging Face token:
 
@@ -213,9 +214,7 @@ Or in `IncidentResponseAgent.Api/appsettings.Development.json`:
 
 The older `IRA_AGENT_API_KEY`, `IRA_AGENT_MODEL`, and `IRA_AGENT_ENDPOINT` names remain compatible, but the `OPENROUTER_*` variables above are preferred and override default model/base-URL settings.
 
-If no key is configured, or the OpenRouter model call and its relaxed structured-output retry both fail, the app uses the local evidence-based fallback only when usable evidence exists. The UI and persisted record show the exact sanitized fallback reason. If embeddings or the vector store fail, analysis continues through OpenRouter with `RAG degraded`; RAG failure alone never selects the local model fallback.
-
-If the configured model provider is slow, unavailable, or rejects the request, the app falls back to the local analyzer instead of leaving the request stuck indefinitely. Free OpenRouter models can queue or time out, so the default model timeout is intentionally bounded:
+If no key is configured, or the OpenRouter call and its relaxed structured-output retry both fail, the API returns a provider error; it does not silently replace the model with local analysis. RAG failure remains independently visible and does not select a local model. Free OpenRouter models can queue or time out, so the timeout remains bounded:
 
 ```json
 {
@@ -226,6 +225,8 @@ If the configured model provider is slow, unavailable, or rejects the request, t
   }
 }
 ```
+
+For an intentional offline demo only, set `Agent__IncidentAnalysis__AllowLocalAnalysisFallback=true`. The fallback still refuses to invent an analysis when there is no log, metric, runbook, or approved prior-incident evidence.
 
 Only approved proposed knowledge updates are written into the Markdown knowledge corpus and reindexed for later retrieval. Rejected proposals and deleted incidents remove their generated knowledge document. In the UI, proposed runbook/postmortem updates appear from History after an incident is resolved. After approval, the approved Markdown file is visible from the Runbooks/RAG source view and becomes searchable through runbook retrieval.
 
@@ -597,7 +598,7 @@ Current tests cover:
 - incident request validation
 - structured agent JSON parsing
 - SQLite-backed RAG indexing and diagnostics
-- resilient embedding fallback
+- fail-closed external embeddings plus explicitly opted-in offline fallback
 - SQLite session persistence
 - rubric evaluation
 - built-in evaluation scenarios
@@ -629,7 +630,7 @@ api-inference.huggingface.co:443
 
 Expected behavior:
 
-The app logs the hosted embedding failure and falls back to `local-hashing-384`.
+The app logs the hosted embedding failure and reports RAG unavailable. For an intentional offline demo, explicitly enable `AllowLocalEmbeddingFallback` to use `local-hashing-384`.
 
 ### OpenRouter 401 Unauthorized
 

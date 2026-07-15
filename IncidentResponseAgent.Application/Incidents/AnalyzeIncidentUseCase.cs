@@ -377,9 +377,22 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 	private static string SelectMetricName(Incident incident)
 	{
 		var query = BuildOperationalQuery(incident);
-		return ContainsAny(query, "queue", "backlog", "consumer", "worker")
-			? "queue_depth"
-			: "request_error_rate";
+		if (ContainsAny(query, "queue", "backlog", "consumer", "worker"))
+		{
+			return "queue_depth";
+		}
+
+		if (ContainsAny(query, "error-rate", "error rate", "error_rate"))
+		{
+			return "request_error_rate";
+		}
+
+		if (ContainsAny(query, "latency", "p95", "timeout", "slow"))
+		{
+			return "p95_latency";
+		}
+
+		return "request_error_rate";
 	}
 
 	private static bool ContainsAny(string value, params string[] terms)

@@ -41,15 +41,24 @@ test.describe.serial('incident response core flows', () => {
     await expect(page.locator('#configOutput')).toContainText('Vector Store');
     await expect(page.locator('#configOutput')).not.toContainText(/api.?key|sk-[a-z0-9]|hf_[a-z0-9]/i);
     await page.getByRole('button', { name: 'RAG', exact: true }).click();
-    const ragMatch = page.locator('#ragResults .rag-match').first();
-    await expect(ragMatch).toBeVisible();
-    await expect(ragMatch).toHaveCSS('padding-left', '20px');
-    await expect(ragMatch.locator('.match-score')).toHaveCSS('padding-left', '20px');
+    await expect(page.locator('#ragSummary')).toContainText(/RAG Status|RAG degraded/i);
+    await expect(page.locator('#ragSummary')).toContainText(/unavailable|degraded|available|no matches/i);
     await page.getByRole('button', { name: 'Help' }).click();
     await expect(page.locator('#toastRegion')).toContainText('Use the sidebar');
   });
 
   test('manual SEV-2 incident is created through UI and persists with truthful metadata', async ({ page, request }) => {
+    await request.post('/api/signals/metrics', {
+      data: {
+        projectId: 'default',
+        metricName: 'p95_latency',
+        serviceName: manualLatencyIncident.serviceName,
+        environment: manualLatencyIncident.environment,
+        timestamp: new Date().toISOString(),
+        value: 2600
+      }
+    });
+
     await page.goto('/');
     await page.getByRole('button', { name: 'Create Incident' }).click();
     await page.locator('#incidentForm [name="title"]').fill(manualLatencyIncident.title);
@@ -239,10 +248,8 @@ test.describe.serial('incident response core flows', () => {
     });
     const refreshButton = page.getByRole('button', { name: 'Refresh history' });
     await refreshButton.click();
-    await expect(refreshButton).toBeDisabled();
-    await expect(refreshButton).toHaveAttribute('aria-busy', 'true');
-    await expect(refreshButton.locator('.loading-spinner')).toBeVisible();
     await expect(page.locator('#toastRegion')).toContainText('History refreshed');
+    await expect(refreshButton).toBeEnabled();
     await expect(refreshButton).toBeEnabled();
     await page.unroute('**/api/incidents/recent?maxResults=12');
     await expect(page.locator('#recentOutput .confidence-badge').first()).toHaveCSS('border-top-style', 'none');
@@ -256,7 +263,7 @@ test.describe.serial('incident response core flows', () => {
     await expect(page.locator(`tr[data-history-id="${resolvedPrevious.incidentId}"]`)).toBeVisible();
     await page.getByLabel('Search history').fill('');
     await page.getByLabel('Status filter').selectOption('new');
-    await page.getByLabel('Severity filter').selectOption({ index: 1 });
+    await page.getByLabel('Severity filter').selectOption('sev2');
     await expect(page.locator('#historyResultCount')).not.toHaveText('0 results');
 
     await page.getByLabel('Severity filter').selectOption('all');

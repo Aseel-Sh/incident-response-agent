@@ -5,6 +5,7 @@ namespace IncidentResponseAgent.Infrastructure.Runbooks;
 internal sealed class ResilientRunbookEmbeddingProvider : IRunbookEmbeddingProvider
 {
 	private readonly IRunbookEmbeddingProvider _fallback;
+	private readonly bool _allowFallback;
 	private readonly ILogger<ResilientRunbookEmbeddingProvider> _logger;
 	private readonly IRunbookEmbeddingProvider? _primary;
 	private volatile bool _useFallbackOnly;
@@ -13,10 +14,12 @@ internal sealed class ResilientRunbookEmbeddingProvider : IRunbookEmbeddingProvi
 	public ResilientRunbookEmbeddingProvider(
 		IRunbookEmbeddingProvider? primary,
 		IRunbookEmbeddingProvider fallback,
+		bool allowFallback,
 		ILogger<ResilientRunbookEmbeddingProvider> logger)
 	{
 		_primary = primary;
 		_fallback = fallback;
+		_allowFallback = allowFallback;
 		_logger = logger;
 	}
 
@@ -26,10 +29,10 @@ internal sealed class ResilientRunbookEmbeddingProvider : IRunbookEmbeddingProvi
 		{
 			if (_primary is null)
 			{
-				return _fallback.ProviderName;
+				return _allowFallback ? _fallback.ProviderName : "external-embedding-unconfigured";
 			}
 
-			return _useFallbackOnly
+			return _useFallbackOnly && _allowFallback
 				? $"{_primary.ProviderName}-failed/{_fallback.ProviderName}"
 				: _primary.ProviderName;
 		}
@@ -41,28 +44,57 @@ internal sealed class ResilientRunbookEmbeddingProvider : IRunbookEmbeddingProvi
 		{
 			if (_primary is null)
 			{
-				return _fallback.ModelName;
+				return _allowFallback ? _fallback.ModelName : "not configured";
 			}
 
-			return _useFallbackOnly
+			return _useFallbackOnly && _allowFallback
 				? $"{_primary.ModelName}->fallback:{_fallback.ModelName}"
 				: _primary.ModelName;
 		}
 	}
 
-	public int Dimensions => _useFallbackOnly || _primary is null ? _fallback.Dimensions : _primary.Dimensions;
+	public int Dimensions => (_useFallbackOnly || _primary is null) && _allowFallback ? _fallback.Dimensions : _primary?.Dimensions ?? 0;
 
-	public bool IsDegraded => _useFallbackOnly;
+	public bool IsDegraded => _useFallbackOnly || _primary is null;
 
-	public string? DegradedReason => _useFallbackOnly
-		? $"Primary embedding provider {_primary?.ProviderName} failed ({_failureReason ?? "unknown failure"}); {_fallback.ProviderName} is serving embeddings."
-		: null;
+	public string? DegradedReason
+	{
+		get
+		{
+			if (_primary is null)
+			{
+				return _allowFallback
+					? $"External embedding provider is not configured; {_fallback.ProviderName} is serving embeddings because local fallback is enabled."
+					: "External embedding provider is not configured and local embedding fallback is disabled.";
+			}
+
+			if (!_useFallbackOnly) return null;
+			return _allowFallback
+				? $"Primary embedding provider {_primary.ProviderName} failed ({_failureReason ?? "unknown failure"}); {_fallback.ProviderName} is serving embeddings because local fallback is enabled."
+				: $"Primary embedding provider {_primary.ProviderName} failed ({_failureReason ?? "unknown failure"}); local embedding fallback is disabled.";
+		}
+	}
 
 	public async Task<float[]> GenerateEmbeddingAsync(string text, CancellationToken cancellationToken = default)
 	{
-		if (_primary is null || _useFallbackOnly)
+		if (_primary is null)
 		{
-			return await _fallback.GenerateEmbeddingAsync(text, cancellationToken).ConfigureAwait(false);
+			if (_allowFallback)
+			{
+				return await _fallback.GenerateEmbeddingAsync(text, cancellationToken).ConfigureAwait(false);
+			}
+
+			throw new InvalidOperationException("External embedding provider is not configured. Set Runbooks:SemanticRetrieval:ApiKey or HF_TOKEN, or explicitly enable AllowLocalEmbeddingFallback for offline demo mode.");
+		}
+
+		if (_useFallbackOnly)
+		{
+			if (_allowFallback)
+			{
+				return await _fallback.GenerateEmbeddingAsync(text, cancellationToken).ConfigureAwait(false);
+			}
+
+			throw new InvalidOperationException(DegradedReason);
 		}
 
 		try
@@ -73,9 +105,17 @@ internal sealed class ResilientRunbookEmbeddingProvider : IRunbookEmbeddingProvi
 				return embedding;
 			}
 
-			_logger.LogWarning("Primary embedding provider {ProviderName} returned an empty vector. Falling back to {FallbackProviderName}.", _primary.ProviderName, _fallback.ProviderName);
+			_logger.LogWarning(
+				"Primary embedding provider {ProviderName} returned an empty vector. LocalFallbackEnabled={LocalFallbackEnabled} FallbackProvider={FallbackProviderName}.",
+				_primary.ProviderName,
+				_allowFallback,
+				_fallback.ProviderName);
 			_failureReason = "empty embedding vector";
 			_useFallbackOnly = true;
+			if (!_allowFallback)
+			{
+				throw new InvalidOperationException(DegradedReason);
+			}
 		}
 		catch (OperationCanceledException)
 		{
@@ -85,6 +125,11 @@ internal sealed class ResilientRunbookEmbeddingProvider : IRunbookEmbeddingProvi
 		{
 			_failureReason = SanitizeFailure(exception);
 			_useFallbackOnly = true;
+			if (!_allowFallback)
+			{
+				_logger.LogWarning(exception, "Primary embedding provider failed and local fallback is disabled. Provider={ProviderName} FailureReason={FailureReason}.", _primary.ProviderName, _failureReason);
+				throw new InvalidOperationException(DegradedReason, exception);
+			}
 			_logger.LogWarning(exception, "Primary embedding provider failed. Provider={ProviderName} FailureReason={FailureReason} FallbackProvider={FallbackProviderName}.", _primary.ProviderName, _failureReason, _fallback.ProviderName);
 		}
 
