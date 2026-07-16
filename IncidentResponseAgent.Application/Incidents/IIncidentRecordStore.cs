@@ -24,6 +24,10 @@ public interface IIncidentRecordStore
 
 	Task<string> UpdateStatusAsync(Guid incidentId, string status, CancellationToken cancellationToken = default);
 
+	Task<IncidentAnalysisRecord> UpdateCoordinationAsync(Guid incidentId, string? assignee, string? acknowledgedBy, bool acknowledge, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+	Task<IncidentAnalysisRecord> MarkAnalysisFailedAsync(Guid incidentId, string reason, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
 	Task<bool> DeleteAsync(Guid incidentId, CancellationToken cancellationToken = default);
 
 	Task<IncidentActionOutcome> AddActionOutcomeAsync(Guid incidentId, string description, string status, CancellationToken cancellationToken = default);

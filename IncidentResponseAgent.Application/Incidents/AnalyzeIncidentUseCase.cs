@@ -50,19 +50,24 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 		var sessionContextTask = _incidentAnalysisSessionStore.GetOrCreateAsync(sessionId, cancellationToken);
 		var runbookResultTask = RetrieveRunbooksSafelyAsync(incident, cancellationToken);
 		var logResultTask = _logSearchProvider.SearchAsync(BuildLogSearchRequest(incident), cancellationToken);
-		var metricsResultTask = _metricsProvider.QueryAsync(BuildMetricsQueryRequest(incident), cancellationToken);
+		var metricResultTasks = BuildMetricsQueryRequests(incident).Select(request => _metricsProvider.QueryAsync(request, cancellationToken)).ToArray();
 		var similarIncidentsTask = _incidentRecordStore.FindSimilarAsync(incident, 3, incident.ProjectId, cancellationToken);
 		var linkedSessionRecordsTask = string.IsNullOrWhiteSpace(sessionId)
 			? Task.FromResult<IReadOnlyList<IncidentAnalysisRecord>>(Array.Empty<IncidentAnalysisRecord>())
 			: _incidentRecordStore.GetRecentAsync(100, incident.ProjectId, cancellationToken);
 
-		await Task.WhenAll(sessionContextTask, runbookResultTask, logResultTask, metricsResultTask, similarIncidentsTask, linkedSessionRecordsTask);
+		await Task.WhenAll(new Task[] { sessionContextTask, runbookResultTask, logResultTask, similarIncidentsTask, linkedSessionRecordsTask }.Concat(metricResultTasks));
 		evidenceStopwatch.Stop();
 
 		var sessionContext = await sessionContextTask;
 		var runbookResult = await runbookResultTask;
 		var logResult = await logResultTask;
-		var metricsResult = await metricsResultTask;
+		var metricResults = await Task.WhenAll(metricResultTasks);
+		var metricsResult = new MetricsQueryResult
+		{
+			MetricName = string.Join(", ", metricResults.Select(item => item.MetricName)),
+			Samples = metricResults.SelectMany(item => item.Samples).OrderBy(item => item.Timestamp).ToArray()
+		};
 		var linkedSessionMatches = BuildLinkedSessionMatches(await linkedSessionRecordsTask, sessionId, incident.Id);
 		var similarIncidents = linkedSessionMatches
 			.Concat(await similarIncidentsTask)
@@ -393,6 +398,18 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 		}
 
 		return "request_error_rate";
+	}
+
+	private static IReadOnlyList<MetricsQueryRequest> BuildMetricsQueryRequests(Incident incident)
+	{
+		var query = BuildOperationalQuery(incident);
+		var names = new List<string>();
+		if (ContainsAny(query, "queue", "backlog", "consumer", "worker")) names.Add("queue_depth");
+		if (ContainsAny(query, "latency", "p95", "timeout", "slow")) names.Add("p95_latency");
+		if (ContainsAny(query, "error", "5xx", "500", "failure")) names.Add("request_error_rate");
+		if (ContainsAny(query, "health", "unhealthy", "probe")) names.Add("health_check_failures");
+		if (names.Count == 0) names.Add(SelectMetricName(incident));
+		return names.Distinct(StringComparer.OrdinalIgnoreCase).Select(name => BuildMetricsQueryRequest(incident) with { MetricName = name }).ToArray();
 	}
 
 	private static bool ContainsAny(string value, params string[] terms)

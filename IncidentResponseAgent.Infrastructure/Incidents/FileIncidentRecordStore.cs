@@ -62,6 +62,9 @@ public sealed class FileIncidentRecordStore : IIncidentRecordStore
 				AnalysisResult = analysisResult,
 				ProjectId = incident.ProjectId,
 				Status = isExisting ? existing!.Status : "new",
+				Assignee = existing?.Assignee,
+				AcknowledgedBy = existing?.AcknowledgedBy,
+				AcknowledgedAtUtc = existing?.AcknowledgedAtUtc,
 				CreatedAtUtc = isExisting ? existing!.CreatedAtUtc : now,
 				UpdatedAtUtc = now,
 				CandidateId = existing?.CandidateId,
@@ -222,7 +225,7 @@ public sealed class FileIncidentRecordStore : IIncidentRecordStore
 			if (candidate.Status != "candidate") throw new InvalidOperationException("Only undecided candidates can be confirmed.");
 			var incident = ToIncident(candidate);
 			var now = DateTimeOffset.UtcNow;
-			var placeholder = new IncidentAnalysisResult { IncidentId = incident.Id, IncidentSummary = incident.Title, AnalysisText = "", AnalysisProvider = "pending", SessionId = "", Confidence = "Low" };
+			var placeholder = new IncidentAnalysisResult { IncidentId = incident.Id, ProjectId = incident.ProjectId, IncidentSummary = incident.Title, Severity = incident.Severity.ToString().ToUpperInvariant().Replace("SEV", "SEV-"), AnalysisState = "pending", AnalysisText = "", AnalysisProvider = "pending", SessionId = "", Confidence = "Low", Notes = "Analysis has not completed yet." };
 			var records = await ReadRecordsAsync(cancellationToken);
 			records[incident.Id] = new IncidentAnalysisRecord
 			{
@@ -645,6 +648,45 @@ public sealed class FileIncidentRecordStore : IIncidentRecordStore
 		}
 
 		return actualProjectId.Equals(requestedProjectId, StringComparison.OrdinalIgnoreCase);
+	}
+
+	public async Task<IncidentAnalysisRecord> UpdateCoordinationAsync(Guid incidentId, string? assignee, string? acknowledgedBy, bool acknowledge, CancellationToken cancellationToken = default)
+	{
+		await _fileLock.WaitAsync(cancellationToken);
+		try
+		{
+			var records = await ReadRecordsAsync(cancellationToken);
+			if (!records.TryGetValue(incidentId, out var record)) throw new KeyNotFoundException($"Incident record {incidentId} was not found.");
+			var now = DateTimeOffset.UtcNow;
+			var normalizedAssignee = string.IsNullOrWhiteSpace(assignee) ? null : assignee.Trim();
+			var normalizedActor = string.IsNullOrWhiteSpace(acknowledgedBy) ? null : acknowledgedBy.Trim();
+			var timeline = record.Timeline.ToList();
+			if (!string.Equals(record.Assignee, normalizedAssignee, StringComparison.Ordinal))
+				timeline.Add(Event("assignment changed", normalizedAssignee is null ? "Incident assignment cleared." : $"Incident assigned to {normalizedAssignee}.", now, actor: normalizedActor ?? "user"));
+			if (acknowledge && record.AcknowledgedAtUtc is null)
+				timeline.Add(Event("acknowledged", $"Incident acknowledged by {normalizedActor ?? normalizedAssignee ?? "user"}.", now, actor: normalizedActor ?? normalizedAssignee ?? "user"));
+			var updated = record with { Assignee = normalizedAssignee, AcknowledgedBy = acknowledge ? normalizedActor ?? normalizedAssignee ?? "user" : record.AcknowledgedBy, AcknowledgedAtUtc = acknowledge ? record.AcknowledgedAtUtc ?? now : record.AcknowledgedAtUtc, UpdatedAtUtc = now, Timeline = timeline };
+			records[incidentId] = updated;
+			await WriteRecordsAsync(records.Values, cancellationToken);
+			return updated;
+		}
+		finally { _fileLock.Release(); }
+	}
+
+	public async Task<IncidentAnalysisRecord> MarkAnalysisFailedAsync(Guid incidentId, string reason, CancellationToken cancellationToken = default)
+	{
+		await _fileLock.WaitAsync(cancellationToken);
+		try
+		{
+			var records = await ReadRecordsAsync(cancellationToken);
+			if (!records.TryGetValue(incidentId, out var record)) throw new KeyNotFoundException($"Incident record {incidentId} was not found.");
+			var now = DateTimeOffset.UtcNow;
+			var updated = record with { AnalysisResult = record.AnalysisResult with { AnalysisState = "failed", AnalysisProvider = "unavailable", Notes = reason }, UpdatedAtUtc = now, Timeline = record.Timeline.Append(Event("analysis failed", reason, now)).ToArray() };
+			records[incidentId] = updated;
+			await WriteRecordsAsync(records.Values, cancellationToken);
+			return updated;
+		}
+		finally { _fileLock.Release(); }
 	}
 
 	private static IncidentTimelineEvent Event(string type, string summary, DateTimeOffset occurredAtUtc, string actor = "system", string? evidenceReference = null) => new()

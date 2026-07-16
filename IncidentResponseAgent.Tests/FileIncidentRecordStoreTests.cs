@@ -254,6 +254,38 @@ public sealed class FileIncidentRecordStoreTests : IDisposable
 		Assert.Contains("503", saved.AnalysisResult.ProviderTransparency.FallbackReason);
 	}
 
+	[Fact]
+	public async Task AssignmentAndAcknowledgementPersistWithAuditTimeline()
+	{
+		var store = new FileIncidentRecordStore(Options.Create(new IncidentStorageOptions { IncidentRecordsPath = Path.Combine(_rootPath, "coordination-records.json") }));
+		var incident = new Incident(Guid.NewGuid(), "Owned incident", "Requires a responder.", IncidentSeverity.Sev2);
+		await store.SaveAsync(incident, new IncidentAnalysisResult { IncidentId = incident.Id, IncidentSummary = incident.Title, AnalysisText = "{}", AnalysisProvider = "test", SessionId = "coordination" });
+
+		var updated = await store.UpdateCoordinationAsync(incident.Id, "payments-oncall", "aseel", acknowledge: true);
+
+		Assert.Equal("payments-oncall", updated.Assignee);
+		Assert.Equal("aseel", updated.AcknowledgedBy);
+		Assert.NotNull(updated.AcknowledgedAtUtc);
+		Assert.Contains(updated.Timeline, item => item.Type == "assignment changed");
+		Assert.Contains(updated.Timeline, item => item.Type == "acknowledged" && item.Actor == "aseel");
+	}
+
+	[Fact]
+	public async Task AnalysisFailureDoesNotRemoveConfirmedIncident()
+	{
+		var store = new FileIncidentRecordStore(Options.Create(new IncidentStorageOptions { IncidentRecordsPath = Path.Combine(_rootPath, "failed-analysis-records.json") }));
+		var candidate = new DetectedIncidentCandidate { Id = "candidate-analysis-failure", Title = "Provider outage", Description = "The model provider is unavailable.", Severity = IncidentSeverity.Sev2, DetectedAtUtc = DateTimeOffset.UtcNow, Source = "manual" };
+		await store.SaveCandidatesAsync([candidate], new MonitoringScanRecord { StartedAtUtc = DateTimeOffset.UtcNow, CompletedAtUtc = DateTimeOffset.UtcNow, CandidateCount = 1 });
+		var incident = await store.ConfirmCandidateAsync(candidate.Id);
+
+		var failed = await store.MarkAnalysisFailedAsync(incident.Id, "OpenRouter unavailable");
+
+		Assert.Equal("failed", failed.AnalysisResult.AnalysisState);
+		Assert.Equal("new", failed.Status);
+		Assert.Contains(failed.Timeline, item => item.Type == "incident confirmed");
+		Assert.Contains(failed.Timeline, item => item.Type == "analysis failed");
+	}
+
 	public void Dispose()
 	{
 		if (Directory.Exists(_rootPath))

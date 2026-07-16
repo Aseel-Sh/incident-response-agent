@@ -256,6 +256,17 @@ elements.historyDetail.addEventListener("click", async (event) => {
     await updateIncidentStatus(button.dataset.incidentId, button.dataset.ticketStatus);
     return;
   }
+  const coordinationButton = event.target.closest("[data-save-coordination]");
+  if (coordinationButton) {
+    const assignee = elements.historyDetail.querySelector("[data-assignee]")?.value || null;
+    await updateIncidentCoordination(coordinationButton.dataset.saveCoordination, assignee, coordinationButton.dataset.acknowledge === "true");
+    return;
+  }
+  const retryButton = event.target.closest("[data-retry-analysis]");
+  if (retryButton) {
+    await retryIncidentAnalysis(retryButton.dataset.retryAnalysis);
+    return;
+  }
   const reviewButton = event.target.closest("[data-knowledge-review]");
   if (reviewButton) await reviewKnowledgeUpdate(reviewButton.dataset.incidentId, reviewButton.dataset.knowledgeReview);
 });
@@ -334,6 +345,11 @@ elements.recentOutput.addEventListener("keydown", (event) => {
   if (item) renderHistoryDetail(item);
 });
 elements.analysisOutput.addEventListener("click", async (event) => {
+  const retryButton = event.target.closest("[data-retry-analysis]");
+  if (retryButton) {
+    await retryIncidentAnalysis(retryButton.dataset.retryAnalysis);
+    return;
+  }
   const copyButton = event.target.closest("[data-copy-code]");
   if (copyButton) {
     void copyCodeText(copyButton);
@@ -758,9 +774,13 @@ async function analyzeCurrentIncident() {
     const result = await requestJson(`/api/incidents/candidates/${encodeURIComponent(candidate.id)}/confirm${sessionQuery}`, { method: "POST" });
     currentIncidentId = result.incidentId;
     elements.incidentForm.sessionId.value = result.sessionId;
-    renderAnalysis(result);
+    if (result.analysisState === "failed") {
+      elements.analysisStatus.textContent = "Incident confirmed; analysis unavailable.";
+      elements.analysisOutput.innerHTML = `<section class="analysis-card"><h3>Incident saved</h3><p>${escapeHtml(result.notes || "The external analysis provider is unavailable.")}</p><button type="button" data-retry-analysis="${escapeHtml(result.incidentId)}">Retry analysis</button></section>`;
+      hydrateIcons(elements.analysisOutput);
+    } else renderAnalysis(result);
     void loadRecent();
-    showToast("Incident confirmed", `${inferProviderMode(result).label}, turn ${result.sessionTurnNumber}.`, result.usedFallbackAnalysis ? "warning" : "success");
+    showToast("Incident confirmed", result.analysisState === "failed" ? "The incident is saved. External analysis can be retried later." : `${inferProviderMode(result).label}, turn ${result.sessionTurnNumber}.`, result.analysisState === "failed" || result.usedFallbackAnalysis ? "warning" : "success");
   } catch (error) {
     renderError(elements.analysisOutput, error);
     elements.analysisStatus.textContent = "Analysis failed.";
@@ -780,9 +800,10 @@ async function confirmCandidate(item) {
   try {
     const result = await requestJson(`/api/incidents/candidates/${encodeURIComponent(item.id)}/confirm`, { method: "POST" });
     currentIncidentId = result.incidentId;
-    renderAnalysis(result);
+    if (result.analysisState === "failed") elements.analysisOutput.innerHTML = `<section class="analysis-card"><h3>Incident saved; analysis unavailable</h3><p>${escapeHtml(result.notes || "Retry when the external provider is restored.")}</p></section>`;
+    else renderAnalysis(result);
     await Promise.all([loadRecent(), loadDetected(false)]);
-    showToast("Candidate confirmed", "The incident is active and its evidence-grounded analysis is ready.", "success");
+    showToast("Candidate confirmed", result.analysisState === "failed" ? "The incident is active; external analysis can be retried later." : "The incident is active and its evidence-grounded analysis is ready.", result.analysisState === "failed" ? "warning" : "success");
   } catch (error) {
     renderError(elements.analysisOutput, error);
     elements.analysisStatus.textContent = "Analysis failed.";
@@ -1261,6 +1282,7 @@ function renderHistoryDetail(item) {
   const evidence = item.evidence || [];
   const linkedAnalyses = recentAnalyses.filter((analysis) => analysis.sessionId === item.sessionId).length;
   elements.historyDetail.innerHTML = `<p class="eyebrow">${item.sessionTurnNumber > 1 ? `Follow-up analysis ${item.sessionTurnNumber - 1}` : "Original analysis"}</p><div class="modal-title-row"><div><h3 id="historyModalTitle">${escapeHtml(item.incidentTitle || item.incidentSummary)}</h3>${renderStatusText(item.status || "active")}</div>${renderTicketActions(item.incidentId, item.status || "active")}</div><p class="incident-detail-description">${escapeHtml(item.incidentDescription || "No description provided.")}</p>${item.incidentSummary && item.incidentSummary !== item.incidentTitle ? `<p class="analysis-summary"><strong>Analysis summary:</strong> ${escapeHtml(item.incidentSummary)}</p>` : ""}<div class="session-link-row"><div class="session-identity"><span><span class="live-dot"></span>Linked session</span><code title="${escapeHtml(item.sessionId)}">${escapeHtml(item.sessionId)}</code></div><div class="session-count"><strong>Turn ${item.sessionTurnNumber}</strong><span>${linkedAnalyses} linked ${linkedAnalyses === 1 ? "analysis" : "analyses"}</span></div><button class="icon-refresh-button" type="button" data-copy-session="${escapeHtml(item.sessionId)}" aria-label="Copy session ID"><span data-icon="copy"></span></button><button class="secondary compact-button" type="button" data-follow-up-session="${escapeHtml(item.sessionId)}">Continue session</button></div>${renderKnowledgeUpdate(item.incidentId, item.proposedKnowledgeUpdate)}${renderProviderTransparency(item.providerTransparency)}${renderRecommendedActions(actions, false)}${renderGroundedFacts(item.knownFacts)}${renderHypotheses(hypotheses)}${renderAnalysisBlock("Unknowns & validation gaps", item.unknowns, "info")}${renderStoredEvidenceBlock(evidence)}${renderRunbookMatches(item.runbookMatches)}${renderAnalysisQuality(item.quality)}${renderPriorActions(item.similarIncidents)}${renderOutcomeHistory(item.actionOutcomes)}${renderFeedbackHistory(item.feedback)}${renderTimeline(item.timeline)}<section class="danger-zone"><div><strong>Delete incident</strong><p>Remove this incident from history and future similarity matches.</p></div><button class="compact-button delete-incident-button" type="button" data-delete-incident="${escapeHtml(item.incidentId)}"><span data-icon="trash"></span>Delete incident</button></section>`;
+  elements.historyDetail.insertAdjacentHTML("afterbegin", renderCoordination(item));
   elements.historyModal.hidden = false;
   hydrateIcons(elements.historyDetail);
   requestAnimationFrame(() => elements.historyModalClose.focus());
@@ -1282,6 +1304,31 @@ function closeHistoryModal() {
   const returnFocus = historyModalReturnFocus;
   historyModalReturnFocus = null;
   if (returnFocus?.isConnected) returnFocus.focus();
+}
+
+function renderCoordination(item) {
+  const acknowledged = item.acknowledgedAtUtc ? `${item.acknowledgedBy || "Responder"} · ${new Date(item.acknowledgedAtUtc).toLocaleString()}` : "Not acknowledged";
+  const retry = item.analysisState === "failed" ? `<button type="button" class="secondary compact-button" data-retry-analysis="${escapeHtml(item.incidentId)}">Retry analysis</button>` : "";
+  return `<section class="analysis-card coordination-card"><h3>Ownership & acknowledgement</h3><div class="outcome-form"><label>Assignee<input data-assignee value="${escapeHtml(item.assignee || "")}" placeholder="Responder name or team"></label><button type="button" data-save-coordination="${escapeHtml(item.incidentId)}">Save assignment</button>${item.acknowledgedAtUtc ? "" : `<button type="button" class="secondary" data-save-coordination="${escapeHtml(item.incidentId)}" data-acknowledge="true">Acknowledge</button>`}${retry}</div><p class="meta">${escapeHtml(acknowledged)} · Analysis: ${escapeHtml(item.analysisState || "completed")}</p></section>`;
+}
+
+async function updateIncidentCoordination(incidentId, assignee, acknowledge) {
+  await requestJson(`/api/incidents/${encodeURIComponent(incidentId)}/coordination`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ assignee, actor: assignee, acknowledge }) });
+  await loadRecent();
+  const item = recentAnalyses.find(row => row.incidentId === incidentId);
+  if (item) renderHistoryDetail(item);
+  showToast(acknowledge ? "Incident acknowledged" : "Assignment saved", assignee || "Assignment cleared", "success");
+}
+
+async function retryIncidentAnalysis(incidentId) {
+  try {
+    const result = await requestJson(`/api/incidents/${encodeURIComponent(incidentId)}/analysis/retry`, { method: "POST" });
+    renderAnalysis(result);
+    await loadRecent();
+    const item = recentAnalyses.find(row => row.incidentId === incidentId);
+    if (item) renderHistoryDetail(item);
+    showToast("Analysis completed", "The external provider returned a new analysis.", "success");
+  } catch (error) { showToast("Analysis still unavailable", error.message || String(error), "error"); }
 }
 
 function showConfirmation({ title, message, confirmLabel = "Confirm", destructive = false }) {

@@ -13,7 +13,10 @@ test.describe.serial('incident response core flows', () => {
   let primary: CreatedIncident;
   let followUp: CreatedIncident;
 
-  test('app shell exposes honest health, version, runtime config, themes, and useful tabs', async ({ page }) => {
+  test('app shell exposes honest health, version, runtime config, themes, and useful tabs', async ({ page, request }) => {
+    const readiness = await request.get('/ready');
+    expect(readiness.status()).toBe(503);
+    expect(await readiness.json()).toMatchObject({ status: 'not-ready', components: { model: { status: 'unconfigured' }, embeddings: { status: 'unconfigured' } } });
     await page.goto('/');
     await expect(page.locator('#dashboardView')).toHaveClass(/active/);
     await expect(page.locator('#detectedOutput')).toBeVisible();
@@ -163,6 +166,10 @@ test.describe.serial('incident response core flows', () => {
   test('lifecycle transitions persist and append timeline events', async ({ page, request }) => {
     await page.goto('/');
     await openIncident(page, manualLatencyIncident.title, primary.incidentId);
+    await page.getByPlaceholder('Responder name or team').fill('checkout-oncall');
+    await page.getByRole('button', { name: 'Acknowledge' }).click();
+    await expect(page.getByRole('dialog')).toContainText('checkout-oncall');
+    await expect.poll(async () => (await recentIncidents(request)).find(item => item.incidentId === primary.incidentId)?.acknowledgedBy).toBe('checkout-oncall');
     await page.getByRole('button', { name: 'Start work' }).click();
     await expect(page.getByRole('dialog')).toContainText('work started');
     await expect.poll(async () => (await recentIncidents(request)).find(item => item.incidentId === primary.incidentId)?.status).toBe('active');

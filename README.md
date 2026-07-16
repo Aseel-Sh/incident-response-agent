@@ -24,6 +24,10 @@ It also includes a static frontend served by the API and optional Qdrant vector 
 - Registers framework `AIFunction` tools for logs, metrics, runbooks, trusted prior incidents, prior action outcomes, similarity, and proposed knowledge drafts.
 - Fails model analysis closed by default when OpenRouter is unavailable; local prompt fallback requires explicit opt-in.
 - Supports project-scoped monitoring, sources, thresholds, incidents, and history.
+- Persists responder assignment and acknowledgement with actor/timestamp timeline events.
+- Preserves confirmed incidents when external analysis is unavailable and exposes an explicit retry workflow.
+- Queries all symptom-relevant metric families in parallel rather than selecting only one signal.
+- Separates process liveness (`/health`) from dependency readiness (`/ready`).
 - Returns structured evidence, hypotheses, recommended actions, confidence, notes, and session context.
 - Exposes RAG diagnostics so retrieval quality can be inspected directly.
 - Exposes detected incident candidates so the frontend can self-report likely incidents.
@@ -453,6 +457,27 @@ Health:
 
 ```http
 GET http://localhost:5155/health
+```
+
+Provider and dependency readiness (returns `503` with per-component details when required external services or production persistence are not configured):
+
+```http
+GET http://localhost:5155/ready
+```
+
+Assign or acknowledge an incident:
+
+```http
+PUT http://localhost:5155/api/incidents/{incidentId}/coordination
+Content-Type: application/json
+
+{ "assignee": "checkout-oncall", "actor": "aseel", "acknowledge": true }
+```
+
+Retry an unavailable analysis:
+
+```http
+POST http://localhost:5155/api/incidents/{incidentId}/analysis/retry
 ```
 
 Analyze an incident:

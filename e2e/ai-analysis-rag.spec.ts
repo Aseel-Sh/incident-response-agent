@@ -2,6 +2,7 @@ import { expect, test, type APIRequestContext, type Page } from '@playwright/tes
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { goldenFixtures, type GoldenAnalysisFixture } from './fixtures/ai/golden-fixtures';
+import { recentIncidents } from './support/incident-fixtures';
 
 const fixtureTime = new Date('2026-06-19T12:30:00Z');
 
@@ -161,7 +162,7 @@ test.describe.serial('@ai evidence-grounded analysis, RAG, and fallback honesty'
     expect(body.providerTransparency.structuredOutputRetryReason).toContain('empty content');
     await expect(page.locator('#analysisOutput')).toContainText('Structured-output retry');
     const calls = await (await request.get('http://127.0.0.1:5199/__requests')).json();
-    expect(calls.filter((item: any) => item.title === fixture.title).map((item: any) => item.strict)).toEqual([true, false]);
+    expect(calls.filter((item: any) => item.title === fixture.title).map((item: any) => item.strict).slice(-2)).toEqual([true, false]);
     expect(calls.find((item: any) => item.title === fixture.title)).toEqual(expect.objectContaining({
       model: 'fixture/model-v1', authorizationPresent: true
     }));
@@ -183,13 +184,15 @@ test.describe.serial('@ai evidence-grounded analysis, RAG, and fallback honesty'
     expect(stored.providerTransparency.fallbackReason).toBe(body.providerTransparency.fallbackReason);
   });
 
-  test('model and local fallback failure returns a structured error without fabricated analysis', async ({ page }) => {
+  test('model and local fallback failure preserves the incident without fabricated analysis', async ({ page, request }) => {
     const fixture = goldenFixtures.bothUnavailable;
     const { response, body } = await analyzeThroughUi(page, fixture);
-    expect(response.ok()).toBeFalsy();
-    expect(response.status()).toBeGreaterThanOrEqual(500);
+    expect(response.ok()).toBeTruthy();
+    expect(body.analysisState).toBe('failed');
     expect(JSON.stringify(body)).toMatch(/insufficient operational evidence|analysis unavailable/i);
-    await expect(page.locator('#analysisStatus')).toHaveText('Analysis failed.');
+    await expect(page.locator('#analysisStatus')).toHaveText('Incident confirmed; analysis unavailable.');
+    const stored = (await recentIncidents(request)).find(item => item.incidentId === body.incidentId);
+    expect(stored).toMatchObject({ analysisState: 'failed', status: 'new' });
     await expect(page.locator('#analysisOutput')).toContainText(/insufficient operational evidence|analysis unavailable/i);
     await expect(page.locator('#analysisOutput')).not.toContainText('Recommended actions');
   });

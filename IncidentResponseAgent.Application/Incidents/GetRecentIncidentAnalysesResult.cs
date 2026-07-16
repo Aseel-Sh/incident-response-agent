@@ -2,6 +2,10 @@ namespace IncidentResponseAgent.Application.Incidents;
 
 public sealed record GetRecentIncidentAnalysesResult
 {
+	public string AnalysisState { get; init; } = "completed";
+	public string? Assignee { get; init; }
+	public string? AcknowledgedBy { get; init; }
+	public DateTimeOffset? AcknowledgedAtUtc { get; init; }
 	public required Guid IncidentId { get; init; }
 
 	public string ProjectId { get; init; } = "default";

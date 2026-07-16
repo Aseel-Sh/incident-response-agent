@@ -65,6 +65,8 @@ Back up the incident JSON before first production rollout. Existing incidents ar
 
 ## Analysis trust and feedback additions
 
+Candidate confirmation and model analysis are separate durability boundaries. Confirmation first writes an active incident with `analysisState=pending`. Provider failure changes that state to `failed` and appends an audit event without deleting or rolling back the incident; responders can retry analysis later. Assignment and acknowledgement are also persisted on the incident aggregate with actor and timestamp timeline entries.
+
 Analysis responses now expose known facts with evidence references, hypotheses with validated references, explicit unknowns, exact runbook matches, deterministic quality scores, similar incidents with real metadata, and prior successful/failed action outcomes. Recommendations without a valid reference to collected evidence are removed before persistence or display.
 
 Provider transparency is stored with every analysis: model provider/model, embedding provider, vector store actually used for the query, RAG status, model fallback status, and degraded-mode reason. A RAG exception produces an empty degraded retrieval result and model analysis continues. It does not trigger local analysis; the resilient model agent controls model fallback independently.

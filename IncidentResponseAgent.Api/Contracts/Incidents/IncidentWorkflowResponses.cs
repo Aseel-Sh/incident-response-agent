@@ -12,6 +12,13 @@ public sealed record CandidateDecisionRequest
 	public Guid? MergeIntoIncidentId { get; init; }
 }
 
+public sealed record IncidentCoordinationRequest
+{
+	public string? Assignee { get; init; }
+	public string? Actor { get; init; }
+	public bool Acknowledge { get; init; }
+}
+
 public sealed record KnowledgeReviewRequest
 {
 	public string Decision { get; init; } = string.Empty;

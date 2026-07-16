@@ -12,6 +12,12 @@ public sealed record IncidentAnalysisRecord
 
 	public string Status { get; init; } = "new";
 
+	public string? Assignee { get; init; }
+
+	public string? AcknowledgedBy { get; init; }
+
+	public DateTimeOffset? AcknowledgedAtUtc { get; init; }
+
 	public required DateTimeOffset CreatedAtUtc { get; init; }
 
 	public DateTimeOffset UpdatedAtUtc { get; init; }

@@ -16,6 +16,10 @@ public sealed class GetRecentIncidentAnalysesUseCase : IGetRecentIncidentAnalyse
 		return records.Select(record => new GetRecentIncidentAnalysesResult
 		{
 			IncidentId = record.Incident.Id,
+			AnalysisState = record.AnalysisResult.AnalysisState,
+			Assignee = record.Assignee,
+			AcknowledgedBy = record.AcknowledgedBy,
+			AcknowledgedAtUtc = record.AcknowledgedAtUtc,
 			ProjectId = string.IsNullOrWhiteSpace(record.ProjectId) ? record.Incident.ProjectId : record.ProjectId,
 			IncidentTitle = record.Incident.Title,
 			IncidentSummary = record.AnalysisResult.IncidentSummary,

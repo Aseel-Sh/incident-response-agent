@@ -46,9 +46,12 @@ public sealed class IncidentsController : ControllerBase
         await _incidentRecordStore.SaveCandidatesAsync([candidate], new MonitoringScanRecord { StartedAtUtc = now, CompletedAtUtc = now, CandidateCount = 1, Status = "manual" }, cancellationToken);
         var incident = await _incidentRecordStore.ConfirmCandidateAsync(candidate.Id, cancellationToken);
 
-        var result = await _analyzeIncidentUseCase.AnalyzeAsync(incident, request.SessionId, cancellationToken);
-
-        return Ok(ToAnalysisResponse(result));
+        try { return Ok(ToAnalysisResponse(await _analyzeIncidentUseCase.AnalyzeAsync(incident, request.SessionId, cancellationToken))); }
+        catch (IncidentAnalysisUnavailableException exception)
+        {
+            var failed = await _incidentRecordStore.MarkAnalysisFailedAsync(incident.Id, exception.Message, cancellationToken);
+            return Ok(ToAnalysisResponse(failed.AnalysisResult));
+        }
     }
 
     [HttpPost("{incidentId:guid}/outcomes")]
@@ -124,6 +127,10 @@ public sealed class IncidentsController : ControllerBase
         return Ok(results.Select(result => new RecentIncidentAnalysisResponse
         {
             IncidentId = result.IncidentId,
+            AnalysisState = result.AnalysisState,
+            Assignee = result.Assignee,
+            AcknowledgedBy = result.AcknowledgedBy,
+            AcknowledgedAtUtc = result.AcknowledgedAtUtc,
             ProjectId = result.ProjectId,
             IncidentTitle = result.IncidentTitle,
             IncidentSummary = result.IncidentSummary,
@@ -211,11 +218,43 @@ public sealed class IncidentsController : ControllerBase
         try
         {
             var incident = await _incidentRecordStore.ConfirmCandidateAsync(candidateId, cancellationToken);
-            var result = await _analyzeIncidentUseCase.AnalyzeAsync(incident, sessionId, cancellationToken);
-            return Ok(ToAnalysisResponse(result));
+            try
+            {
+                var result = await _analyzeIncidentUseCase.AnalyzeAsync(incident, sessionId, cancellationToken);
+                return Ok(ToAnalysisResponse(result));
+            }
+            catch (IncidentAnalysisUnavailableException exception)
+            {
+                var failed = await _incidentRecordStore.MarkAnalysisFailedAsync(incident.Id, exception.Message, cancellationToken);
+                return Ok(ToAnalysisResponse(failed.AnalysisResult));
+            }
         }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (InvalidOperationException exception) { return Conflict(exception.Message); }
+    }
+
+    [HttpPost("{incidentId:guid}/analysis/retry")]
+    public async Task<ActionResult<IncidentAnalysisResponse>> RetryAnalysisAsync(Guid incidentId, [FromQuery] string? sessionId, CancellationToken cancellationToken)
+    {
+        var record = await _incidentRecordStore.GetByIncidentIdAsync(incidentId, cancellationToken);
+        if (record is null) return NotFound();
+        try { return Ok(ToAnalysisResponse(await _analyzeIncidentUseCase.AnalyzeAsync(record.Incident, sessionId, cancellationToken))); }
+        catch (IncidentAnalysisUnavailableException exception)
+        {
+            var failed = await _incidentRecordStore.MarkAnalysisFailedAsync(incidentId, exception.Message, cancellationToken);
+            return StatusCode(StatusCodes.Status503ServiceUnavailable, ToAnalysisResponse(failed.AnalysisResult));
+        }
+    }
+
+    [HttpPut("{incidentId:guid}/coordination")]
+    public async Task<ActionResult<object>> UpdateCoordinationAsync(Guid incidentId, [FromBody] IncidentCoordinationRequest request, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var record = await _incidentRecordStore.UpdateCoordinationAsync(incidentId, request.Assignee, request.Actor, request.Acknowledge, cancellationToken);
+            return Ok(new { record.Assignee, record.AcknowledgedBy, record.AcknowledgedAtUtc });
+        }
+        catch (KeyNotFoundException) { return NotFound(); }
     }
 
     [HttpPost("candidates/{candidateId}/decision")]
@@ -312,6 +351,7 @@ public sealed class IncidentsController : ControllerBase
 
     private static IncidentAnalysisResponse ToAnalysisResponse(IncidentAnalysisResult result) => new()
     {
+        AnalysisState = result.AnalysisState,
         IncidentId = result.IncidentId, ProjectId = result.ProjectId, SessionId = result.SessionId, SessionTurnNumber = result.SessionTurnNumber, SessionContextSummary = result.SessionContextSummary,
         IncidentSummary = result.IncidentSummary, Severity = result.Severity, AnalysisText = result.AnalysisText, AnalysisProvider = result.AnalysisProvider, AnalysisModel = result.AnalysisModel,
         UsedFallbackAnalysis = result.UsedFallbackAnalysis, FallbackReason = result.FallbackReason,

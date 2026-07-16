@@ -2,6 +2,7 @@ namespace IncidentResponseAgent.Api.Contracts.Incidents;
 
 public sealed record IncidentAnalysisResponse
 {
+    public string AnalysisState { get; init; } = "completed";
     public Guid IncidentId { get; init; }
 
     public string ProjectId { get; init; } = "default";
