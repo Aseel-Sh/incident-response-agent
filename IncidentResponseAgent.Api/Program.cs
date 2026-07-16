@@ -10,6 +10,9 @@ using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Mvc;
 using System.Net;
 using IncidentResponseAgent.Api.Services;
+using IncidentResponseAgent.Api.Security;
+using Microsoft.AspNetCore.Authentication;
+using IncidentResponseAgent.Infrastructure.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Logging.ClearProviders();
@@ -24,6 +27,7 @@ builder.Services.Configure<RunbookRetrievalOptions>(builder.Configuration.GetSec
 builder.Services.Configure<OperationalDataOptions>(builder.Configuration.GetSection("Tools:OperationalData"));
 builder.Services.Configure<IncidentStorageOptions>(builder.Configuration.GetSection("Storage:Incidents"));
 builder.Services.Configure<MonitoringRuntimeOptions>(builder.Configuration.GetSection("Monitoring"));
+builder.Services.Configure<ServiceCatalogOptions>(builder.Configuration.GetSection("ServiceCatalog"));
 builder.Services.AddApplication();
 builder.Services.AddInfrastructure();
 builder.Services.AddAgent();
@@ -33,6 +37,10 @@ builder.Services.AddHostedService(provider => provider.GetRequiredService<Server
 // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
 builder.Services.AddOpenApi();
 builder.Services.AddProblemDetails();
+builder.Services.Configure<IncidentAuthenticationOptions>(builder.Configuration.GetSection("Authentication"));
+builder.Services.AddAuthentication(IncidentAuthenticationOptions.Scheme)
+    .AddScheme<AuthenticationSchemeOptions, IncidentApiKeyAuthenticationHandler>(IncidentAuthenticationOptions.Scheme, _ => { });
+builder.Services.AddAuthorization();
 
 var app = builder.Build();
 
@@ -68,6 +76,7 @@ app.UseStaticFiles();
 
 app.UseHttpsRedirection();
 
+app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapGet("/health", () => Results.Ok(new

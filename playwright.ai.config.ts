@@ -30,6 +30,7 @@ export default defineConfig({
     env: {
       ASPNETCORE_URLS: baseURL,
       ASPNETCORE_ENVIRONMENT: 'Production',
+      'Authentication__AllowDevelopmentIdentity': 'true',
       'Logging__EventLog__LogLevel__Default': 'None',
       'Agent__IncidentAnalysis__Provider': 'OpenRouter',
       'Agent__IncidentAnalysis__Model': 'fixture/model-v1',

@@ -1,9 +1,11 @@
 using IncidentResponseAgent.Application.Incidents;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Authorization;
 
 namespace IncidentResponseAgent.Api.Controllers;
 
 [ApiController]
+[Authorize]
 [Route("api/monitoring")]
 public sealed class MonitoringController(IIncidentMonitoringCoordinator coordinator) : ControllerBase
 {

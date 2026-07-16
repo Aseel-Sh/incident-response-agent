@@ -5,6 +5,8 @@ using IncidentResponseAgent.Application.Runbooks;
 using IncidentResponseAgent.Infrastructure.Tools;
 using IncidentResponseAgent.Infrastructure.Runbooks;
 using IncidentResponseAgent.Infrastructure.Incidents;
+using IncidentResponseAgent.Application.Services;
+using IncidentResponseAgent.Infrastructure.Services;
 
 namespace IncidentResponseAgent.Infrastructure;
 
@@ -26,6 +28,7 @@ public static class DependencyInjection
 		services.AddSingleton<IIncidentSignalMonitor, LocalOperationalSignalMonitor>();
 		services.AddSingleton<IIncidentAnalysisSessionStore, SqliteIncidentAnalysisSessionStore>();
 		services.AddSingleton<IIncidentRecordStore, FileIncidentRecordStore>();
+		services.AddSingleton<IServiceCatalog, ConfiguredServiceCatalog>();
 		return services;
 	}
 }

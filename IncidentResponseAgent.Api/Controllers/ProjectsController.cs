@@ -1,10 +1,12 @@
 using IncidentResponseAgent.Infrastructure.Tools;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.Extensions.Options;
 
 namespace IncidentResponseAgent.Api.Controllers;
 
 [ApiController]
+[Authorize]
 [Route("api/projects")]
 public sealed class ProjectsController : ControllerBase
 {
@@ -30,6 +32,7 @@ public sealed class ProjectsController : ControllerBase
 	}
 
 	[HttpPost]
+	[Authorize(Roles = "admin")]
 	[ProducesResponseType(typeof(ProjectWorkspaceResponse), StatusCodes.Status201Created)]
 	public async Task<ActionResult<ProjectWorkspaceResponse>> AddProjectAsync([FromBody] ProjectWorkspaceInput input, CancellationToken cancellationToken)
 	{
@@ -54,6 +57,7 @@ public sealed class ProjectsController : ControllerBase
 	}
 
 	[HttpDelete("{projectId}")]
+	[Authorize(Roles = "admin")]
 	public async Task<IActionResult> RemoveProjectAsync(string projectId, CancellationToken cancellationToken) =>
 		await _registry.RemoveProjectAsync(projectId, cancellationToken) ? NoContent() : NotFound();
 

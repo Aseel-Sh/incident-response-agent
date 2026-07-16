@@ -32,6 +32,11 @@ export default defineConfig({
     env: {
       ASPNETCORE_URLS: baseURL,
       ASPNETCORE_ENVIRONMENT: 'Production',
+      'Authentication__AllowDevelopmentIdentity': 'true',
+      'ServiceCatalog__Services__0__ServiceName': 'checkout-api',
+      'ServiceCatalog__Services__0__OwningTeam': 'checkout-team',
+      'ServiceCatalog__Services__0__OnCallTarget': 'checkout-oncall',
+      'ServiceCatalog__Services__0__EscalationPolicy': 'page primary, then platform lead after 10 minutes',
       'Logging__EventLog__LogLevel__Default': 'None',
       'Agent__IncidentAnalysis__ApiKey': '',
       'Agent__IncidentAnalysis__AnalysisTimeoutSeconds': '2',

@@ -3,14 +3,17 @@ using IncidentResponseAgent.Application.Incidents;
 using IncidentResponseAgent.Domain.Incidents;
 using IncidentResponseAgent.Infrastructure.Tools;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.Extensions.Options;
 using ApplicationAnalysisActionRecommendation = IncidentResponseAgent.Application.Incidents.IncidentActionRecommendation;
 using ApplicationAnalysisEvidenceItem = IncidentResponseAgent.Application.Incidents.IncidentAnalysisEvidenceItem;
 using ApplicationAnalysisHypothesis = IncidentResponseAgent.Application.Incidents.IncidentHypothesis;
+using IncidentResponseAgent.Application.Services;
 
 namespace IncidentResponseAgent.Api.Controllers;
 
 [ApiController]
+[Authorize]
 [Route("api/incidents")]
 public sealed class IncidentsController : ControllerBase
 {
@@ -19,19 +22,22 @@ public sealed class IncidentsController : ControllerBase
     private readonly IIncidentSignalMonitor _incidentSignalMonitor;
     private readonly IIncidentRecordStore _incidentRecordStore;
     private readonly OperationalDataOptions _operationalDataOptions;
+    private readonly IServiceCatalog? _serviceCatalog;
 
     public IncidentsController(
         IAnalyzeIncidentUseCase analyzeIncidentUseCase,
         IGetRecentIncidentAnalysesUseCase getRecentIncidentAnalysesUseCase,
         IIncidentSignalMonitor incidentSignalMonitor,
         IIncidentRecordStore incidentRecordStore,
-        IOptions<OperationalDataOptions>? operationalDataOptions = null)
+        IOptions<OperationalDataOptions>? operationalDataOptions = null,
+        IServiceCatalog? serviceCatalog = null)
     {
         _analyzeIncidentUseCase = analyzeIncidentUseCase;
         _getRecentIncidentAnalysesUseCase = getRecentIncidentAnalysesUseCase;
         _incidentSignalMonitor = incidentSignalMonitor;
         _incidentRecordStore = incidentRecordStore;
         _operationalDataOptions = operationalDataOptions?.Value ?? new OperationalDataOptions();
+        _serviceCatalog = serviceCatalog;
     }
 
     [HttpPost("analyze")]
@@ -45,6 +51,7 @@ public sealed class IncidentsController : ControllerBase
         var candidate = BuildManualCandidate(request, now);
         await _incidentRecordStore.SaveCandidatesAsync([candidate], new MonitoringScanRecord { StartedAtUtc = now, CompletedAtUtc = now, CandidateCount = 1, Status = "manual" }, cancellationToken);
         var incident = await _incidentRecordStore.ConfirmCandidateAsync(candidate.Id, cancellationToken);
+        await ApplyCatalogAssignmentAsync(incident, cancellationToken);
 
         try { return Ok(ToAnalysisResponse(await _analyzeIncidentUseCase.AnalyzeAsync(incident, request.SessionId, cancellationToken))); }
         catch (IncidentAnalysisUnavailableException exception)
@@ -104,6 +111,7 @@ public sealed class IncidentsController : ControllerBase
     }
 
     [HttpDelete("{incidentId:guid}")]
+    [Authorize(Roles = "admin")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> DeleteAsync(
@@ -218,6 +226,7 @@ public sealed class IncidentsController : ControllerBase
         try
         {
             var incident = await _incidentRecordStore.ConfirmCandidateAsync(candidateId, cancellationToken);
+            await ApplyCatalogAssignmentAsync(incident, cancellationToken);
             try
             {
                 var result = await _analyzeIncidentUseCase.AnalyzeAsync(incident, sessionId, cancellationToken);
@@ -251,7 +260,8 @@ public sealed class IncidentsController : ControllerBase
     {
         try
         {
-            var record = await _incidentRecordStore.UpdateCoordinationAsync(incidentId, request.Assignee, request.Actor, request.Acknowledge, cancellationToken);
+            var actor = User.Identity?.Name ?? throw new InvalidOperationException("Authenticated responder identity is unavailable.");
+            var record = await _incidentRecordStore.UpdateCoordinationAsync(incidentId, request.Assignee, actor, request.Acknowledge, cancellationToken);
             return Ok(new { record.Assignee, record.AcknowledgedBy, record.AcknowledgedAtUtc });
         }
         catch (KeyNotFoundException) { return NotFound(); }
@@ -267,6 +277,7 @@ public sealed class IncidentsController : ControllerBase
     }
 
     [HttpPost("{incidentId:guid}/knowledge-review")]
+    [Authorize(Roles = "admin")]
     public async Task<ActionResult<ProposedKnowledgeUpdateResponse>> ReviewKnowledgeAsync(Guid incidentId, [FromBody] KnowledgeReviewRequest request, CancellationToken cancellationToken)
     {
         try { return Ok(ToKnowledgeResponse(await _incidentRecordStore.ReviewKnowledgeUpdateAsync(incidentId, request.Decision, request.Content, request.Notes, cancellationToken))); }
@@ -296,6 +307,14 @@ public sealed class IncidentsController : ControllerBase
     private static IncidentSeverity ParseSeverity(string severity)
     {
         return Enum.Parse<IncidentSeverity>(severity, ignoreCase: true);
+    }
+
+    private async Task ApplyCatalogAssignmentAsync(Incident incident, CancellationToken cancellationToken)
+    {
+        var service = _serviceCatalog?.Find(incident.ServiceName);
+        var target = service?.OnCallTarget ?? service?.OwningTeam;
+        if (!string.IsNullOrWhiteSpace(target))
+            await _incidentRecordStore.UpdateCoordinationAsync(incident.Id, target, "service-catalog", acknowledge: false, cancellationToken);
     }
 
     private int CountUnavailableDetectionSources()

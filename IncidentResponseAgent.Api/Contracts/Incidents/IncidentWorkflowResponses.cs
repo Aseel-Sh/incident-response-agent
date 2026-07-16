@@ -15,7 +15,6 @@ public sealed record CandidateDecisionRequest
 public sealed record IncidentCoordinationRequest
 {
 	public string? Assignee { get; init; }
-	public string? Actor { get; init; }
 	public bool Acknowledge { get; init; }
 }
 

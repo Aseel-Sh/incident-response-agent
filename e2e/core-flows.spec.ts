@@ -17,6 +17,10 @@ test.describe.serial('incident response core flows', () => {
     const readiness = await request.get('/ready');
     expect(readiness.status()).toBe(503);
     expect(await readiness.json()).toMatchObject({ status: 'not-ready', components: { model: { status: 'unconfigured' }, embeddings: { status: 'unconfigured' } } });
+    const identity = await request.get('/api/identity/me');
+    expect(await identity.json()).toMatchObject({ name: 'local-operator', roles: ['admin'] });
+    const services = await request.get('/api/services');
+    expect(await services.json()).toEqual(expect.arrayContaining([expect.objectContaining({ serviceName: 'checkout-api', owningTeam: 'checkout-team', onCallTarget: 'checkout-oncall' })]));
     await page.goto('/');
     await expect(page.locator('#dashboardView')).toHaveClass(/active/);
     await expect(page.locator('#detectedOutput')).toBeVisible();
@@ -42,7 +46,7 @@ test.describe.serial('incident response core flows', () => {
 
     await expect(page.locator('#configOutput')).toContainText('App Mode');
     await expect(page.locator('#configOutput')).toContainText('Vector Store');
-    await expect(page.locator('#configOutput')).not.toContainText(/api.?key|sk-[a-z0-9]|hf_[a-z0-9]/i);
+    await expect(page.locator('#configOutput')).not.toContainText(/sk-[a-z0-9]{12,}|hf_[a-z0-9]{12,}/i);
     await page.getByRole('button', { name: 'RAG', exact: true }).click();
     await expect(page.locator('#ragSummary')).toContainText(/RAG Status|RAG degraded/i);
     await expect(page.locator('#ragSummary')).toContainText(/unavailable|degraded|available|no matches/i);
@@ -114,6 +118,7 @@ test.describe.serial('incident response core flows', () => {
       sessionId: primary.sessionId
     });
     expect(stored.tags).toEqual(expect.arrayContaining(manualLatencyIncident.tags));
+    expect(stored.assignee).toBe('checkout-oncall');
   });
 
   test('numeric severity contract rejects invalid values and supports search/filter/color', async ({ page, request }) => {
@@ -169,7 +174,7 @@ test.describe.serial('incident response core flows', () => {
     await page.getByPlaceholder('Responder name or team').fill('checkout-oncall');
     await page.getByRole('button', { name: 'Acknowledge' }).click();
     await expect(page.getByRole('dialog')).toContainText('checkout-oncall');
-    await expect.poll(async () => (await recentIncidents(request)).find(item => item.incidentId === primary.incidentId)?.acknowledgedBy).toBe('checkout-oncall');
+    await expect.poll(async () => (await recentIncidents(request)).find(item => item.incidentId === primary.incidentId)?.acknowledgedBy).toBe('local-operator');
     await page.getByRole('button', { name: 'Start work' }).click();
     await expect(page.getByRole('dialog')).toContainText('work started');
     await expect.poll(async () => (await recentIncidents(request)).find(item => item.incidentId === primary.incidentId)?.status).toBe('active');

@@ -5,6 +5,7 @@ using IncidentResponseAgent.Infrastructure.Runbooks;
 using IncidentResponseAgent.Infrastructure.Tools;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
+using IncidentResponseAgent.Api.Security;
 
 namespace IncidentResponseAgent.Api.Controllers;
 
@@ -15,6 +16,7 @@ public sealed class ReadinessController(
 	IOptions<RunbookRetrievalOptions> runbookOptions,
 	IOptions<OperationalDataOptions> operationalOptions,
 	IOptions<IncidentStorageOptions> storageOptions,
+	IOptions<IncidentAuthenticationOptions> authenticationOptions,
 	IIncidentMonitoringCoordinator monitoring) : ControllerBase
 {
 	[HttpGet]
@@ -33,12 +35,14 @@ public sealed class ReadinessController(
 		var metrics = SourceState(operational.MetricSamplesPath, Path.Combine(AppContext.BaseDirectory, "Tools", "SampleData", "metrics.json"));
 		var monitor = await monitoring.GetStateAsync(cancellationToken: cancellationToken);
 		var persistenceConfigured = !string.IsNullOrWhiteSpace(storage.IncidentRecordsPath) && !string.IsNullOrWhiteSpace(storage.SessionDatabasePath);
-		var ready = modelConfigured && embeddingsConfigured && vectorStore != "unconfigured" && logs != "missing" && metrics != "missing" && persistenceConfigured;
+		var authenticationConfigured = authenticationOptions.Value.Users.Count > 0 && !authenticationOptions.Value.AllowDevelopmentIdentity;
+		var ready = modelConfigured && embeddingsConfigured && vectorStore != "unconfigured" && logs != "missing" && metrics != "missing" && persistenceConfigured && authenticationConfigured;
 		var body = new
 		{
 			status = ready ? "ready" : "not-ready",
 			components = new
 			{
+				authentication = new { status = authenticationConfigured ? "configured" : authenticationOptions.Value.AllowDevelopmentIdentity ? "development-identity" : "unconfigured" },
 				model = new { status = modelConfigured ? "configured" : "unconfigured", provider = agent.Provider, agent.Model },
 				embeddings = new { status = embeddingsConfigured ? "configured" : "unconfigured", runbooks.Model },
 				vectorStore = new { status = vectorStore, provider = runbooks.VectorStoreProvider, endpoint = runbooks.VectorStoreProvider.Equals("Qdrant", StringComparison.OrdinalIgnoreCase) ? runbooks.QdrantEndpoint : null },

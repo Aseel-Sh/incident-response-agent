@@ -4,11 +4,13 @@ using IncidentResponseAgent.Infrastructure.Runbooks;
 using IncidentResponseAgent.Infrastructure.Tools;
 using IncidentResponseAgent.Application.Tools;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.Extensions.Options;
 
 namespace IncidentResponseAgent.Api.Controllers;
 
 [ApiController]
+[Authorize]
 [Route("api/operations")]
 public sealed class OperationsController : ControllerBase
 {

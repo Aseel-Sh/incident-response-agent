@@ -1,10 +1,12 @@
 using IncidentResponseAgent.Api.Contracts.Evaluation;
 using IncidentResponseAgent.Application.Evaluation;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Authorization;
 
 namespace IncidentResponseAgent.Api.Controllers;
 
 [ApiController]
+[Authorize]
 [Route("api/evaluation")]
 public sealed class EvaluationController : ControllerBase
 {

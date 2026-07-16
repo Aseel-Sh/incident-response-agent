@@ -103,6 +103,7 @@ let confirmationReturnFocus = null;
 let dashboardPage = 1;
 let historyPage = 1;
 let projects = [];
+let serviceCatalog = [];
 let activeProjectId = localStorage.getItem("incidentops.projectId") || "default";
 const pageSize = 10;
 const incidentLifecycleStatuses = ["new", "active", "mitigated", "resolved", "recovered"];
@@ -288,6 +289,19 @@ document.addEventListener("keydown", (event) => {
   } else if (!event.shiftKey && document.activeElement === last) {
     event.preventDefault();
     first.focus();
+  }
+});
+document.addEventListener("click", (event) => {
+  if (event.target.closest("[data-save-api-key]")) {
+    const value = document.querySelector("[data-api-key]")?.value.trim();
+    if (value) sessionStorage.setItem("incidentops.apiKey", value);
+    showToast("Authentication updated", value ? "API key active for this browser tab." : "Enter an API key first.", value ? "success" : "warning");
+  }
+  if (event.target.closest("[data-clear-api-key]")) {
+    sessionStorage.removeItem("incidentops.apiKey");
+    const input = document.querySelector("[data-api-key]");
+    if (input) input.value = "";
+    showToast("Authentication cleared", "The tab-scoped API key was removed.", "success");
   }
 });
 
@@ -1282,7 +1296,7 @@ function renderHistoryDetail(item) {
   const evidence = item.evidence || [];
   const linkedAnalyses = recentAnalyses.filter((analysis) => analysis.sessionId === item.sessionId).length;
   elements.historyDetail.innerHTML = `<p class="eyebrow">${item.sessionTurnNumber > 1 ? `Follow-up analysis ${item.sessionTurnNumber - 1}` : "Original analysis"}</p><div class="modal-title-row"><div><h3 id="historyModalTitle">${escapeHtml(item.incidentTitle || item.incidentSummary)}</h3>${renderStatusText(item.status || "active")}</div>${renderTicketActions(item.incidentId, item.status || "active")}</div><p class="incident-detail-description">${escapeHtml(item.incidentDescription || "No description provided.")}</p>${item.incidentSummary && item.incidentSummary !== item.incidentTitle ? `<p class="analysis-summary"><strong>Analysis summary:</strong> ${escapeHtml(item.incidentSummary)}</p>` : ""}<div class="session-link-row"><div class="session-identity"><span><span class="live-dot"></span>Linked session</span><code title="${escapeHtml(item.sessionId)}">${escapeHtml(item.sessionId)}</code></div><div class="session-count"><strong>Turn ${item.sessionTurnNumber}</strong><span>${linkedAnalyses} linked ${linkedAnalyses === 1 ? "analysis" : "analyses"}</span></div><button class="icon-refresh-button" type="button" data-copy-session="${escapeHtml(item.sessionId)}" aria-label="Copy session ID"><span data-icon="copy"></span></button><button class="secondary compact-button" type="button" data-follow-up-session="${escapeHtml(item.sessionId)}">Continue session</button></div>${renderKnowledgeUpdate(item.incidentId, item.proposedKnowledgeUpdate)}${renderProviderTransparency(item.providerTransparency)}${renderRecommendedActions(actions, false)}${renderGroundedFacts(item.knownFacts)}${renderHypotheses(hypotheses)}${renderAnalysisBlock("Unknowns & validation gaps", item.unknowns, "info")}${renderStoredEvidenceBlock(evidence)}${renderRunbookMatches(item.runbookMatches)}${renderAnalysisQuality(item.quality)}${renderPriorActions(item.similarIncidents)}${renderOutcomeHistory(item.actionOutcomes)}${renderFeedbackHistory(item.feedback)}${renderTimeline(item.timeline)}<section class="danger-zone"><div><strong>Delete incident</strong><p>Remove this incident from history and future similarity matches.</p></div><button class="compact-button delete-incident-button" type="button" data-delete-incident="${escapeHtml(item.incidentId)}"><span data-icon="trash"></span>Delete incident</button></section>`;
-  elements.historyDetail.insertAdjacentHTML("afterbegin", renderCoordination(item));
+  elements.historyDetail.insertAdjacentHTML("afterbegin", renderCoordination(item) + renderServiceOwnership(item));
   elements.historyModal.hidden = false;
   hydrateIcons(elements.historyDetail);
   requestAnimationFrame(() => elements.historyModalClose.focus());
@@ -1312,8 +1326,14 @@ function renderCoordination(item) {
   return `<section class="analysis-card coordination-card"><h3>Ownership & acknowledgement</h3><div class="outcome-form"><label>Assignee<input data-assignee value="${escapeHtml(item.assignee || "")}" placeholder="Responder name or team"></label><button type="button" data-save-coordination="${escapeHtml(item.incidentId)}">Save assignment</button>${item.acknowledgedAtUtc ? "" : `<button type="button" class="secondary" data-save-coordination="${escapeHtml(item.incidentId)}" data-acknowledge="true">Acknowledge</button>`}${retry}</div><p class="meta">${escapeHtml(acknowledged)} · Analysis: ${escapeHtml(item.analysisState || "completed")}</p></section>`;
 }
 
+function renderServiceOwnership(item) {
+  const service = serviceCatalog.find(entry => entry.serviceName?.toLowerCase() === item.serviceName?.toLowerCase());
+  if (!service) return "";
+  return `<section class="analysis-card"><h3>Service ownership</h3><p><strong>${escapeHtml(service.owningTeam)}</strong> · On-call: ${escapeHtml(service.onCallTarget || "not configured")}</p><p>Escalation: ${escapeHtml(service.escalationPolicy || "not configured")}</p>${service.runbookUrl ? `<p><a href="${escapeHtml(service.runbookUrl)}" target="_blank" rel="noreferrer">Open service runbook</a></p>` : ""}</section>`;
+}
+
 async function updateIncidentCoordination(incidentId, assignee, acknowledge) {
-  await requestJson(`/api/incidents/${encodeURIComponent(incidentId)}/coordination`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ assignee, actor: assignee, acknowledge }) });
+  await requestJson(`/api/incidents/${encodeURIComponent(incidentId)}/coordination`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ assignee, acknowledge }) });
   await loadRecent();
   const item = recentAnalyses.find(row => row.incidentId === incidentId);
   if (item) renderHistoryDetail(item);
@@ -1462,7 +1482,7 @@ function renderConfig() {
     ["Analysis Mode", document.querySelector("#analysisStatus .status-pill")?.textContent || "not run yet"],
     ["Demo Mode", isDemo ? "enabled" : "disabled"]
   ];
-  elements.config.innerHTML = `<div class="mode-banner-content"><span data-icon="check"></span>${isDemo ? "Local Sample Mode - some sources are using bundled sample data." : "Configured source mode - using configured local inputs."}</div><table class="config-table"><tbody>${rows.map(([label, value]) => `<tr><th>${escapeHtml(label)}</th><td>${escapeHtml(value)}</td></tr>`).join("")}</tbody></table>`;
+  elements.config.innerHTML = `<section class="analysis-card"><h3>Responder authentication</h3><p>Production API actions require an API key. The key is kept only in this browser tab.</p><div class="outcome-form"><label>API key<input type="password" data-api-key autocomplete="off" value="${escapeHtml(sessionStorage.getItem("incidentops.apiKey") || "")}"></label><button type="button" data-save-api-key>Use key</button><button type="button" class="secondary" data-clear-api-key>Clear</button></div></section><div class="mode-banner-content"><span data-icon="check"></span>${isDemo ? "Local Sample Mode - some sources are using bundled sample data." : "Configured source mode - using configured local inputs."}</div><table class="config-table"><tbody>${rows.map(([label, value]) => `<tr><th>${escapeHtml(label)}</th><td>${escapeHtml(value)}</td></tr>`).join("")}</tbody></table>`;
   hydrateIcons(elements.config);
 }
 
@@ -1583,7 +1603,10 @@ function hydrateIcons(root = document) {
 }
 
 async function requestJson(url, options = {}) {
-  const response = await fetch(url, options);
+  const apiKey = sessionStorage.getItem("incidentops.apiKey");
+  const headers = new Headers(options.headers || {});
+  if (apiKey) headers.set("X-IRA-API-Key", apiKey);
+  const response = await fetch(url, { ...options, headers });
   const text = await response.text();
   const data = text ? JSON.parse(text) : null;
   if (!response.ok) throw new Error(data?.detail || data?.title || response.statusText);
@@ -1752,9 +1775,17 @@ async function initialize() {
   restoreLastScanState();
   hydrateIcons();
   await checkHealth();
-  await loadProjects();
-  await loadSources();
-  await loadPersistedMonitoringState();
+  try {
+    await loadProjects();
+    serviceCatalog = normalizeArray(await requestJson("/api/services"));
+    await loadSources();
+    await loadPersistedMonitoringState();
+  } catch (error) {
+    renderConfig();
+    activateTab("config");
+    showToast("Authentication required", "Enter a configured API key to load incident data.", "warning");
+    return;
+  }
   elements.lastScan.innerHTML = renderMonitorSummary(detectedCandidates);
   renderSidebarLastScan();
   hydrateIcons(elements.lastScan);

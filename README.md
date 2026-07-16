@@ -25,6 +25,8 @@ It also includes a static frontend served by the API and optional Qdrant vector 
 - Fails model analysis closed by default when OpenRouter is unavailable; local prompt fallback requires explicit opt-in.
 - Supports project-scoped monitoring, sources, thresholds, incidents, and history.
 - Persists responder assignment and acknowledgement with actor/timestamp timeline events.
+- Authenticates API users with configured API keys and derives audit actors from server identity rather than request data.
+- Supports responder/admin roles and a service catalog with ownership, on-call, escalation, dependencies, and runbook links.
 - Preserves confirmed incidents when external analysis is unavailable and exposes an explicit retry workflow.
 - Queries all symptom-relevant metric families in parallel rather than selecting only one signal.
 - Separates process liveness (`/health`) from dependency readiness (`/ready`).
@@ -419,6 +421,37 @@ Default local URL:
 ```text
 http://localhost:5155
 ```
+
+## Authentication and responder identity
+
+Production API routes require `X-IRA-API-Key`. Configure users through environment variables or a secret-backed configuration provider; do not commit keys:
+
+```powershell
+$env:Authentication__Users__0__Name = "aseel"
+$env:Authentication__Users__0__Role = "admin"
+$env:Authentication__Users__0__ApiKey = "use-a-secret-manager-generated-value"
+```
+
+The Config tab keeps an entered key only in `sessionStorage` for the current browser tab. Development identity is disabled in base settings and should only be enabled by a local development or test override. Assignment and acknowledgement actors always come from the authenticated principal.
+
+Service ownership is configured under `ServiceCatalog:Services`. A matching incident service automatically receives its on-call target or owning team as the initial assignee:
+
+```json
+{
+  "ServiceCatalog": {
+    "Services": [{
+      "ServiceName": "checkout-api",
+      "OwningTeam": "checkout-team",
+      "OnCallTarget": "checkout-oncall",
+      "EscalationPolicy": "page primary, then platform lead after 10 minutes",
+      "RunbookUrl": "https://internal.example/runbooks/checkout",
+      "Dependencies": ["payments-api"]
+    }]
+  }
+}
+```
+
+Rotate any provider credentials that were previously stored in plaintext development configuration and move them to user-secrets, environment variables, or a secret manager.
 
 ## Frontend
 
