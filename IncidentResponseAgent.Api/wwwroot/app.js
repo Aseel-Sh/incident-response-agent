@@ -294,11 +294,11 @@ document.addEventListener("keydown", (event) => {
 document.addEventListener("click", (event) => {
   if (event.target.closest("[data-save-api-key]")) {
     const value = document.querySelector("[data-api-key]")?.value.trim();
-    if (value) sessionStorage.setItem("incidentops.apiKey", value);
-    showToast("Authentication updated", value ? "API key active for this browser tab." : "Enter an API key first.", value ? "success" : "warning");
+    if (value) sessionStorage.setItem("incidentops.accessToken", value);
+    showToast("Authentication updated", value ? "Access token active for this browser tab." : "Enter an access token first.", value ? "success" : "warning");
   }
   if (event.target.closest("[data-clear-api-key]")) {
-    sessionStorage.removeItem("incidentops.apiKey");
+    sessionStorage.removeItem("incidentops.accessToken");
     const input = document.querySelector("[data-api-key]");
     if (input) input.value = "";
     showToast("Authentication cleared", "The tab-scoped API key was removed.", "success");
@@ -1484,6 +1484,13 @@ function renderConfig() {
   ];
   elements.config.innerHTML = `<section class="analysis-card"><h3>Responder authentication</h3><p>Production API actions require an API key. The key is kept only in this browser tab.</p><div class="outcome-form"><label>API key<input type="password" data-api-key autocomplete="off" value="${escapeHtml(sessionStorage.getItem("incidentops.apiKey") || "")}"></label><button type="button" data-save-api-key>Use key</button><button type="button" class="secondary" data-clear-api-key>Clear</button></div></section><div class="mode-banner-content"><span data-icon="check"></span>${isDemo ? "Local Sample Mode - some sources are using bundled sample data." : "Configured source mode - using configured local inputs."}</div><table class="config-table"><tbody>${rows.map(([label, value]) => `<tr><th>${escapeHtml(label)}</th><td>${escapeHtml(value)}</td></tr>`).join("")}</tbody></table>`;
   hydrateIcons(elements.config);
+	const authText = elements.config.querySelector(".analysis-card p");
+	if (authText) authText.textContent = "Production API actions require an OIDC access token. The token is kept only in this browser tab.";
+	const authLabel = elements.config.querySelector("[data-api-key]")?.closest("label");
+	if (authLabel) authLabel.childNodes[0].textContent = "Access token";
+	const savedToken = sessionStorage.getItem("incidentops.accessToken") || "";
+	const authInput = elements.config.querySelector("[data-api-key]");
+	if (authInput) authInput.value = savedToken;
 }
 
 function renderMonitorSummary(items) {
@@ -1603,9 +1610,9 @@ function hydrateIcons(root = document) {
 }
 
 async function requestJson(url, options = {}) {
-  const apiKey = sessionStorage.getItem("incidentops.apiKey");
+  const accessToken = sessionStorage.getItem("incidentops.accessToken");
   const headers = new Headers(options.headers || {});
-  if (apiKey) headers.set("X-IRA-API-Key", apiKey);
+  if (accessToken) headers.set("Authorization", `Bearer ${accessToken}`);
   const response = await fetch(url, { ...options, headers });
   const text = await response.text();
   const data = text ? JSON.parse(text) : null;

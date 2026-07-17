@@ -12,6 +12,8 @@ using System.Net;
 using IncidentResponseAgent.Api.Services;
 using IncidentResponseAgent.Api.Security;
 using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.IdentityModel.Tokens;
 using IncidentResponseAgent.Infrastructure.Services;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -34,13 +36,41 @@ builder.Services.AddAgent();
 builder.Services.AddSingleton<ServerIncidentMonitoringService>();
 builder.Services.AddSingleton<IIncidentMonitoringCoordinator>(provider => provider.GetRequiredService<ServerIncidentMonitoringService>());
 builder.Services.AddHostedService(provider => provider.GetRequiredService<ServerIncidentMonitoringService>());
-// Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
-builder.Services.AddOpenApi();
 builder.Services.AddProblemDetails();
+var authentication = builder.Configuration.GetSection("Authentication").Get<IncidentAuthenticationOptions>() ?? new();
 builder.Services.Configure<IncidentAuthenticationOptions>(builder.Configuration.GetSection("Authentication"));
-builder.Services.AddAuthentication(IncidentAuthenticationOptions.Scheme)
-    .AddScheme<AuthenticationSchemeOptions, IncidentApiKeyAuthenticationHandler>(IncidentAuthenticationOptions.Scheme, _ => { });
-builder.Services.AddAuthorization();
+if (authentication.AllowDevelopmentIdentity)
+{
+    builder.Services.AddAuthentication(IncidentAuthenticationOptions.DevelopmentScheme)
+        .AddScheme<AuthenticationSchemeOptions, IncidentDevelopmentAuthenticationHandler>(IncidentAuthenticationOptions.DevelopmentScheme, _ => { });
+}
+else
+{
+    if (string.IsNullOrWhiteSpace(authentication.Authority) || string.IsNullOrWhiteSpace(authentication.Audience))
+        throw new InvalidOperationException("Authentication:Authority and Authentication:Audience are required when development identity is disabled.");
+    builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddJwtBearer(options =>
+    {
+        options.Authority = authentication.Authority;
+        options.Audience = authentication.Audience;
+        options.MapInboundClaims = false;
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuer = true, ValidateAudience = true, ValidateIssuerSigningKey = true, ValidateLifetime = true,
+            NameClaimType = authentication.NameClaimType, RoleClaimType = authentication.RoleClaimType,
+            ClockSkew = TimeSpan.FromMinutes(1)
+        };
+    });
+}
+builder.Services.AddAuthorizationBuilder().SetDefaultPolicy(new Microsoft.AspNetCore.Authorization.AuthorizationPolicyBuilder()
+    .RequireAuthenticatedUser()
+    .RequireAssertion(context =>
+    {
+        if (authentication.AllowDevelopmentIdentity || context.User.IsInRole("responder") || context.User.IsInRole("admin")) return true;
+        if (string.IsNullOrWhiteSpace(authentication.RequiredScope)) return true;
+        var scopes = context.User.FindAll("scp").Concat(context.User.FindAll("scope")).SelectMany(claim => claim.Value.Split(' ', StringSplitOptions.RemoveEmptyEntries));
+        return scopes.Contains(authentication.RequiredScope, StringComparer.Ordinal);
+    })
+    .Build());
 
 var app = builder.Build();
 
@@ -65,11 +95,6 @@ app.UseExceptionHandler(errorApp =>
         await context.Response.WriteAsJsonAsync(problem);
     });
 });
-
-if (app.Environment.IsDevelopment())
-{
-    app.MapOpenApi();
-}
 
 app.UseDefaultFiles();
 app.UseStaticFiles();

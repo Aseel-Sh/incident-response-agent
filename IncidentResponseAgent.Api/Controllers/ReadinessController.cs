@@ -35,14 +35,14 @@ public sealed class ReadinessController(
 		var metrics = SourceState(operational.MetricSamplesPath, Path.Combine(AppContext.BaseDirectory, "Tools", "SampleData", "metrics.json"));
 		var monitor = await monitoring.GetStateAsync(cancellationToken: cancellationToken);
 		var persistenceConfigured = !string.IsNullOrWhiteSpace(storage.IncidentRecordsPath) && !string.IsNullOrWhiteSpace(storage.SessionDatabasePath);
-		var authenticationConfigured = authenticationOptions.Value.Users.Count > 0 && !authenticationOptions.Value.AllowDevelopmentIdentity;
+		var authenticationConfigured = !authenticationOptions.Value.AllowDevelopmentIdentity && !string.IsNullOrWhiteSpace(authenticationOptions.Value.Authority) && !string.IsNullOrWhiteSpace(authenticationOptions.Value.Audience);
 		var ready = modelConfigured && embeddingsConfigured && vectorStore != "unconfigured" && logs != "missing" && metrics != "missing" && persistenceConfigured && authenticationConfigured;
 		var body = new
 		{
 			status = ready ? "ready" : "not-ready",
 			components = new
 			{
-				authentication = new { status = authenticationConfigured ? "configured" : authenticationOptions.Value.AllowDevelopmentIdentity ? "development-identity" : "unconfigured" },
+				authentication = new { status = authenticationConfigured ? "oidc-configured" : authenticationOptions.Value.AllowDevelopmentIdentity ? "development-identity" : "unconfigured", authority = authenticationOptions.Value.Authority, audience = authenticationOptions.Value.Audience },
 				model = new { status = modelConfigured ? "configured" : "unconfigured", provider = agent.Provider, agent.Model },
 				embeddings = new { status = embeddingsConfigured ? "configured" : "unconfigured", runbooks.Model },
 				vectorStore = new { status = vectorStore, provider = runbooks.VectorStoreProvider, endpoint = runbooks.VectorStoreProvider.Equals("Qdrant", StringComparison.OrdinalIgnoreCase) ? runbooks.QdrantEndpoint : null },

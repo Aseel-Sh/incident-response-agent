@@ -424,15 +424,15 @@ http://localhost:5155
 
 ## Authentication and responder identity
 
-Production API routes require `X-IRA-API-Key`. Configure users through environment variables or a secret-backed configuration provider; do not commit keys:
+Production API routes use standard OIDC/OAuth 2.0 JWT bearer access tokens issued by an external identity provider such as Microsoft Entra ID, Auth0, or Okta. The API validates token signature, issuer, audience, and expiration through the provider's discovery metadata:
 
 ```powershell
-$env:Authentication__Users__0__Name = "aseel"
-$env:Authentication__Users__0__Role = "admin"
-$env:Authentication__Users__0__ApiKey = "use-a-secret-manager-generated-value"
+$env:Authentication__Authority = "https://login.microsoftonline.com/your-tenant-id/v2.0"
+$env:Authentication__Audience = "api://your-api-client-id"
+$env:Authentication__RequiredScope = "incident_response"
 ```
 
-The Config tab keeps an entered key only in `sessionStorage` for the current browser tab. Development identity is disabled in base settings and should only be enabled by a local development or test override. Assignment and acknowledgement actors always come from the authenticated principal.
+The identity provider should issue `responder` or `admin` app roles in the `roles` claim, or the delegated `incident_response` scope. `admin` is required for destructive and knowledge-management operations. The Config tab can keep a short-lived access token only in `sessionStorage` for the current browser tab; it does not store passwords or refresh tokens. Development identity is disabled in base settings and should only be enabled by a local development or test override. Assignment and acknowledgement actors always come from the validated token principal.
 
 Service ownership is configured under `ServiceCatalog:Services`. A matching incident service automatically receives its on-call target or owning team as the initial assignee:
 
@@ -477,12 +477,6 @@ The frontend lets you:
 - see embedding/vector store status
 
 No npm install or frontend build step is required.
-
-OpenAPI is exposed in Development through:
-
-```text
-http://localhost:5155/openapi/v1.json
-```
 
 ## Endpoints
 
