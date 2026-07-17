@@ -292,16 +292,16 @@ document.addEventListener("keydown", (event) => {
   }
 });
 document.addEventListener("click", (event) => {
-  if (event.target.closest("[data-save-api-key]")) {
-    const value = document.querySelector("[data-api-key]")?.value.trim();
+  if (event.target.closest("[data-save-access-token]")) {
+    const value = document.querySelector("[data-access-token]")?.value.trim();
     if (value) sessionStorage.setItem("incidentops.accessToken", value);
     showToast("Authentication updated", value ? "Access token active for this browser tab." : "Enter an access token first.", value ? "success" : "warning");
   }
-  if (event.target.closest("[data-clear-api-key]")) {
+  if (event.target.closest("[data-clear-access-token]")) {
     sessionStorage.removeItem("incidentops.accessToken");
-    const input = document.querySelector("[data-api-key]");
+    const input = document.querySelector("[data-access-token]");
     if (input) input.value = "";
-    showToast("Authentication cleared", "The tab-scoped API key was removed.", "success");
+    showToast("Authentication cleared", "The tab-scoped access token was removed.", "success");
   }
 });
 
@@ -1482,15 +1482,9 @@ function renderConfig() {
     ["Analysis Mode", document.querySelector("#analysisStatus .status-pill")?.textContent || "not run yet"],
     ["Demo Mode", isDemo ? "enabled" : "disabled"]
   ];
-  elements.config.innerHTML = `<section class="analysis-card"><h3>Responder authentication</h3><p>Production API actions require an API key. The key is kept only in this browser tab.</p><div class="outcome-form"><label>API key<input type="password" data-api-key autocomplete="off" value="${escapeHtml(sessionStorage.getItem("incidentops.apiKey") || "")}"></label><button type="button" data-save-api-key>Use key</button><button type="button" class="secondary" data-clear-api-key>Clear</button></div></section><div class="mode-banner-content"><span data-icon="check"></span>${isDemo ? "Local Sample Mode - some sources are using bundled sample data." : "Configured source mode - using configured local inputs."}</div><table class="config-table"><tbody>${rows.map(([label, value]) => `<tr><th>${escapeHtml(label)}</th><td>${escapeHtml(value)}</td></tr>`).join("")}</tbody></table>`;
+  const savedToken = sessionStorage.getItem("incidentops.accessToken") || "";
+  elements.config.innerHTML = `<section class="analysis-card"><h3>Responder authentication</h3><p>Production API actions require an OIDC access token. The token is kept only in this browser tab.</p><div class="outcome-form"><label>Access token<input type="password" data-access-token autocomplete="off" value="${escapeHtml(savedToken)}"></label><button type="button" data-save-access-token>Use token</button><button type="button" class="secondary" data-clear-access-token>Clear</button></div></section><div class="mode-banner-content"><span data-icon="check"></span>${isDemo ? "Local Sample Mode - some sources are using bundled sample data." : "Configured source mode - using configured local inputs."}</div><table class="config-table"><tbody>${rows.map(([label, value]) => `<tr><th>${escapeHtml(label)}</th><td>${escapeHtml(value)}</td></tr>`).join("")}</tbody></table>`;
   hydrateIcons(elements.config);
-	const authText = elements.config.querySelector(".analysis-card p");
-	if (authText) authText.textContent = "Production API actions require an OIDC access token. The token is kept only in this browser tab.";
-	const authLabel = elements.config.querySelector("[data-api-key]")?.closest("label");
-	if (authLabel) authLabel.childNodes[0].textContent = "Access token";
-	const savedToken = sessionStorage.getItem("incidentops.accessToken") || "";
-	const authInput = elements.config.querySelector("[data-api-key]");
-	if (authInput) authInput.value = savedToken;
 }
 
 function renderMonitorSummary(items) {
@@ -1790,7 +1784,7 @@ async function initialize() {
   } catch (error) {
     renderConfig();
     activateTab("config");
-    showToast("Authentication required", "Enter a configured API key to load incident data.", "warning");
+    showToast("Authentication required", "Enter a valid OIDC access token to load incident data.", "warning");
     return;
   }
   elements.lastScan.innerHTML = renderMonitorSummary(detectedCandidates);

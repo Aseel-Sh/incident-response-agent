@@ -25,7 +25,7 @@ It also includes a static frontend served by the API and optional Qdrant vector 
 - Fails model analysis closed by default when OpenRouter is unavailable; local prompt fallback requires explicit opt-in.
 - Supports project-scoped monitoring, sources, thresholds, incidents, and history.
 - Persists responder assignment and acknowledgement with actor/timestamp timeline events.
-- Authenticates API users with configured API keys and derives audit actors from server identity rather than request data.
+- Authenticates API users with externally issued OIDC access tokens and derives audit actors from validated identity claims rather than request data.
 - Supports responder/admin roles and a service catalog with ownership, on-call, escalation, dependencies, and runbook links.
 - Preserves confirmed incidents when external analysis is unavailable and exposes an explicit retry workflow.
 - Queries all symptom-relevant metric families in parallel rather than selecting only one signal.

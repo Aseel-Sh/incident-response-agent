@@ -145,3 +145,5 @@ static (int StatusCode, string Title, string Detail) MapException(Exception? exc
             "The server could not complete the request. Check application logs for details.")
     };
 }
+
+public partial class Program;
