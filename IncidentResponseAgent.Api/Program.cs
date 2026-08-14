@@ -13,6 +13,9 @@ using IncidentResponseAgent.Api.Services;
 using IncidentResponseAgent.Api.Security;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.Authentication.OpenIdConnect;
+using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.IdentityModel.Tokens;
 using IncidentResponseAgent.Infrastructure.Services;
 
@@ -37,7 +40,11 @@ builder.Services.AddSingleton<ServerIncidentMonitoringService>();
 builder.Services.AddSingleton<IIncidentMonitoringCoordinator>(provider => provider.GetRequiredService<ServerIncidentMonitoringService>());
 builder.Services.AddHostedService(provider => provider.GetRequiredService<ServerIncidentMonitoringService>());
 builder.Services.AddProblemDetails();
+builder.Services.AddAntiforgery(options => options.HeaderName = "X-CSRF-TOKEN");
 var authentication = builder.Configuration.GetSection("Authentication").Get<IncidentAuthenticationOptions>() ?? new();
+var browserOidcEnabled = !authentication.AllowDevelopmentIdentity
+    && !string.IsNullOrWhiteSpace(authentication.BrowserClientId)
+    && !string.IsNullOrWhiteSpace(authentication.BrowserClientSecret);
 builder.Services.Configure<IncidentAuthenticationOptions>(builder.Configuration.GetSection("Authentication"));
 if (authentication.AllowDevelopmentIdentity)
 {
@@ -48,7 +55,17 @@ else
 {
     if (string.IsNullOrWhiteSpace(authentication.Authority) || string.IsNullOrWhiteSpace(authentication.Audience))
         throw new InvalidOperationException("Authentication:Authority and Authentication:Audience are required when development identity is disabled.");
-    builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddJwtBearer(options =>
+    var authenticationBuilder = builder.Services.AddAuthentication(options =>
+    {
+        options.DefaultScheme = "IncidentSmart";
+        options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+    }).AddPolicyScheme("IncidentSmart", "Bearer token or browser session", options =>
+    {
+        options.ForwardDefaultSelector = context =>
+            context.Request.Headers.Authorization.ToString().StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)
+                ? JwtBearerDefaults.AuthenticationScheme
+                : browserOidcEnabled ? CookieAuthenticationDefaults.AuthenticationScheme : JwtBearerDefaults.AuthenticationScheme;
+    }).AddJwtBearer(options =>
     {
         options.Authority = authentication.Authority;
         options.Audience = authentication.Audience;
@@ -60,6 +77,38 @@ else
             ClockSkew = TimeSpan.FromMinutes(1)
         };
     });
+    if (browserOidcEnabled)
+    {
+        authenticationBuilder.AddCookie(options =>
+        {
+            options.Cookie.Name = "__Host-IncidentResponseSession";
+            options.Cookie.HttpOnly = true;
+            options.Cookie.SameSite = SameSiteMode.Lax;
+            options.Cookie.SecurePolicy = CookieSecurePolicy.Always;
+            options.SlidingExpiration = false;
+            options.Events.OnRedirectToLogin = context => { context.Response.StatusCode = StatusCodes.Status401Unauthorized; return Task.CompletedTask; };
+            options.Events.OnRedirectToAccessDenied = context => { context.Response.StatusCode = StatusCodes.Status403Forbidden; return Task.CompletedTask; };
+        }).AddOpenIdConnect(OpenIdConnectDefaults.AuthenticationScheme, options =>
+        {
+            options.Authority = authentication.Authority;
+            options.ClientId = authentication.BrowserClientId;
+            options.ClientSecret = authentication.BrowserClientSecret;
+            options.ResponseType = "code";
+            options.UsePkce = true;
+            options.UseTokenLifetime = true;
+            options.MapInboundClaims = false;
+            options.SignInScheme = CookieAuthenticationDefaults.AuthenticationScheme;
+            options.TokenValidationParameters.NameClaimType = authentication.NameClaimType;
+            options.TokenValidationParameters.RoleClaimType = authentication.RoleClaimType;
+            options.Scope.Clear();
+            foreach (var scope in authentication.BrowserScope.Split(' ', StringSplitOptions.RemoveEmptyEntries)) options.Scope.Add(scope);
+            options.Events.OnRedirectToIdentityProvider = context =>
+            {
+                context.ProtocolMessage.SetParameter("audience", authentication.Audience);
+                return Task.CompletedTask;
+            };
+        });
+    }
 }
 builder.Services.AddAuthorizationBuilder().SetDefaultPolicy(new Microsoft.AspNetCore.Authorization.AuthorizationPolicyBuilder()
     .RequireAuthenticatedUser()
@@ -81,6 +130,11 @@ app.UseExceptionHandler(errorApp =>
     {
         var exception = context.Features.Get<IExceptionHandlerFeature>()?.Error;
         var (statusCode, title, detail) = MapException(exception);
+        if (exception is not null)
+        {
+            var logger = context.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("IncidentResponseAgent.Api.ExceptionHandler");
+            logger.LogError(exception, "Unhandled request failure. TraceId={TraceId} Path={Path} StatusCode={StatusCode}", context.TraceIdentifier, context.Request.Path, statusCode);
+        }
         context.Response.StatusCode = statusCode;
 
         var problem = new ProblemDetails
@@ -102,6 +156,16 @@ app.UseStaticFiles();
 app.UseHttpsRedirection();
 
 app.UseAuthentication();
+app.Use(async (context, next) =>
+{
+    var usesBrowserCookie = context.User.Identities.Any(identity => identity.IsAuthenticated && identity.AuthenticationType == CookieAuthenticationDefaults.AuthenticationScheme);
+    var unsafeMethod = !HttpMethods.IsGet(context.Request.Method) && !HttpMethods.IsHead(context.Request.Method) && !HttpMethods.IsOptions(context.Request.Method) && !HttpMethods.IsTrace(context.Request.Method);
+    if (usesBrowserCookie && unsafeMethod)
+    {
+        await context.RequestServices.GetRequiredService<IAntiforgery>().ValidateRequestAsync(context);
+    }
+    await next();
+});
 app.UseAuthorization();
 
 app.MapGet("/health", () => Results.Ok(new
@@ -111,6 +175,32 @@ app.MapGet("/health", () => Results.Ok(new
     }))
     .WithName("Health");
 
+app.MapGet("/auth/session", (HttpContext context, IAntiforgery antiforgery) =>
+{
+    var cookieIdentity = context.User.Identities.FirstOrDefault(identity => identity.IsAuthenticated && identity.AuthenticationType == CookieAuthenticationDefaults.AuthenticationScheme);
+    var csrfToken = cookieIdentity is null ? null : antiforgery.GetAndStoreTokens(context).RequestToken;
+    var roleClaimType = (context.User.Identity as System.Security.Claims.ClaimsIdentity)?.RoleClaimType ?? System.Security.Claims.ClaimTypes.Role;
+    return Results.Ok(new
+    {
+        browserLoginEnabled = browserOidcEnabled,
+        authenticated = context.User.Identity?.IsAuthenticated == true,
+        name = context.User.Identity?.Name,
+        roles = context.User.Claims.Where(claim => claim.Type == roleClaimType).Select(claim => claim.Value).ToArray(),
+        csrfToken
+    });
+}).AllowAnonymous();
+
+app.MapGet("/auth/login", (string? returnUrl) =>
+{
+    if (!browserOidcEnabled) return Results.Problem("Browser OIDC login requires Authentication:BrowserClientId and Authentication:BrowserClientSecret.", statusCode: StatusCodes.Status503ServiceUnavailable);
+    var safeReturnUrl = !string.IsNullOrWhiteSpace(returnUrl) && Uri.IsWellFormedUriString(returnUrl, UriKind.Relative) && returnUrl.StartsWith('/') && !returnUrl.StartsWith("//") ? returnUrl : "/";
+    return Results.Challenge(new AuthenticationProperties { RedirectUri = safeReturnUrl }, [OpenIdConnectDefaults.AuthenticationScheme]);
+}).AllowAnonymous();
+
+app.MapPost("/auth/logout", () => browserOidcEnabled
+    ? Results.SignOut(new AuthenticationProperties { RedirectUri = "/" }, [CookieAuthenticationDefaults.AuthenticationScheme, OpenIdConnectDefaults.AuthenticationScheme])
+    : Results.Redirect("/"));
+
 app.MapControllers();
 
 app.Run();
@@ -119,6 +209,10 @@ static (int StatusCode, string Title, string Detail) MapException(Exception? exc
 {
     return exception switch
     {
+        AntiforgeryValidationException antiforgeryException => (
+            StatusCodes.Status400BadRequest,
+            "Invalid antiforgery token",
+            antiforgeryException.Message),
         IncidentAnalysisUnavailableException unavailableException => (
             StatusCodes.Status503ServiceUnavailable,
             "Incident analysis unavailable",

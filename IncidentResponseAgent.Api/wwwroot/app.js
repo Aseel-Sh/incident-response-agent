@@ -104,6 +104,7 @@ let dashboardPage = 1;
 let historyPage = 1;
 let projects = [];
 let serviceCatalog = [];
+let authSession = { browserLoginEnabled: false, authenticated: false, name: null, roles: [], csrfToken: null };
 let activeProjectId = localStorage.getItem("incidentops.projectId") || "default";
 const pageSize = 10;
 const incidentLifecycleStatuses = ["new", "active", "mitigated", "resolved", "recovered"];
@@ -292,17 +293,7 @@ document.addEventListener("keydown", (event) => {
   }
 });
 document.addEventListener("click", (event) => {
-  if (event.target.closest("[data-save-access-token]")) {
-    const value = document.querySelector("[data-access-token]")?.value.trim();
-    if (value) sessionStorage.setItem("incidentops.accessToken", value);
-    showToast("Authentication updated", value ? "Access token active for this browser tab." : "Enter an access token first.", value ? "success" : "warning");
-  }
-  if (event.target.closest("[data-clear-access-token]")) {
-    sessionStorage.removeItem("incidentops.accessToken");
-    const input = document.querySelector("[data-access-token]");
-    if (input) input.value = "";
-    showToast("Authentication cleared", "The tab-scoped access token was removed.", "success");
-  }
+  if (event.target.closest("[data-sign-in]")) location.assign(`/auth/login?returnUrl=${encodeURIComponent(location.pathname + location.hash)}`);
 });
 
 let historyModalReturnFocus = null;
@@ -1482,8 +1473,18 @@ function renderConfig() {
     ["Analysis Mode", document.querySelector("#analysisStatus .status-pill")?.textContent || "not run yet"],
     ["Demo Mode", isDemo ? "enabled" : "disabled"]
   ];
-  const savedToken = sessionStorage.getItem("incidentops.accessToken") || "";
-  elements.config.innerHTML = `<section class="analysis-card"><h3>Responder authentication</h3><p>Production API actions require an OIDC access token. The token is kept only in this browser tab.</p><div class="outcome-form"><label>Access token<input type="password" data-access-token autocomplete="off" value="${escapeHtml(savedToken)}"></label><button type="button" data-save-access-token>Use token</button><button type="button" class="secondary" data-clear-access-token>Clear</button></div></section><div class="mode-banner-content"><span data-icon="check"></span>${isDemo ? "Local Sample Mode - some sources are using bundled sample data." : "Configured source mode - using configured local inputs."}</div><table class="config-table"><tbody>${rows.map(([label, value]) => `<tr><th>${escapeHtml(label)}</th><td>${escapeHtml(value)}</td></tr>`).join("")}</tbody></table>`;
+  const roles = authSession.roles?.length ? ` (${authSession.roles.join(", ")})` : "";
+  const authMessage = authSession.authenticated
+    ? `Signed in as ${escapeHtml(authSession.name || "authenticated user")}${escapeHtml(roles)}.`
+    : authSession.browserLoginEnabled
+      ? "Sign in through your organization's identity provider. Credentials and refresh tokens are never exposed to this page."
+      : "Browser login is not configured. Set the Auth0 domain, browser client ID, and browser client secret to enable sign-in.";
+  const authAction = authSession.browserLoginEnabled
+    ? authSession.authenticated
+      ? `<form method="post" action="/auth/logout"><input type="hidden" name="__RequestVerificationToken" value="${escapeHtml(authSession.csrfToken || "")}"><button type="submit" class="secondary">Sign out</button></form>`
+      : `<button type="button" data-sign-in>Sign in</button>`
+    : "";
+  elements.config.innerHTML = `<section class="analysis-card"><h3>Responder authentication</h3><p>${authMessage}</p><div class="outcome-form">${authAction}</div></section><div class="mode-banner-content"><span data-icon="check"></span>${isDemo ? "Local Sample Mode - some sources are using bundled sample data." : "Configured source mode - using configured local inputs."}</div><table class="config-table"><tbody>${rows.map(([label, value]) => `<tr><th>${escapeHtml(label)}</th><td>${escapeHtml(value)}</td></tr>`).join("")}</tbody></table>`;
   hydrateIcons(elements.config);
 }
 
@@ -1604,9 +1605,8 @@ function hydrateIcons(root = document) {
 }
 
 async function requestJson(url, options = {}) {
-  const accessToken = sessionStorage.getItem("incidentops.accessToken");
   const headers = new Headers(options.headers || {});
-  if (accessToken) headers.set("Authorization", `Bearer ${accessToken}`);
+  if (authSession.csrfToken && !["GET", "HEAD", "OPTIONS", "TRACE"].includes(String(options.method || "GET").toUpperCase())) headers.set("X-CSRF-TOKEN", authSession.csrfToken);
   const response = await fetch(url, { ...options, headers });
   const text = await response.text();
   const data = text ? JSON.parse(text) : null;
@@ -1777,6 +1777,10 @@ async function initialize() {
   hydrateIcons();
   await checkHealth();
   try {
+    const response = await fetch("/auth/session");
+    if (response.ok) authSession = await response.json();
+  } catch { /* Config view reports unavailable authentication state. */ }
+  try {
     await loadProjects();
     serviceCatalog = normalizeArray(await requestJson("/api/services"));
     await loadSources();
@@ -1784,7 +1788,7 @@ async function initialize() {
   } catch (error) {
     renderConfig();
     activateTab("config");
-    showToast("Authentication required", "Enter a valid OIDC access token to load incident data.", "warning");
+    showToast("Authentication required", authSession.browserLoginEnabled ? "Sign in through your identity provider to load incident data." : "Browser OIDC login is not configured.", "warning");
     return;
   }
   elements.lastScan.innerHTML = renderMonitorSummary(detectedCandidates);

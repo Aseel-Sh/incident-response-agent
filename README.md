@@ -424,15 +424,37 @@ http://localhost:5155
 
 ## Authentication and responder identity
 
-Production API routes use standard OIDC/OAuth 2.0 JWT bearer access tokens issued by an external identity provider such as Microsoft Entra ID, Auth0, or Okta. The API validates token signature, issuer, audience, and expiration through the provider's discovery metadata:
+Production authentication is configured for the Auth0 Free hosted tier. Create one Auth0 **Regular Web Application** and one Auth0 API whose identifier is `https://incident-response-agent-api`. The repository already supplies the audience, scopes, claim names, PKCE flow, secure cookie, and CSRF handling; only the account-specific Auth0 values remain external:
+
+Store the three Auth0-generated values with .NET User Secrets instead of editing `appsettings.json`:
 
 ```powershell
-$env:Authentication__Authority = "https://login.microsoftonline.com/your-tenant-id/v2.0"
-$env:Authentication__Audience = "api://your-api-client-id"
-$env:Authentication__RequiredScope = "incident_response"
+dotnet user-secrets set "Authentication:Authority" "https://YOUR_TENANT.us.auth0.com/" --project IncidentResponseAgent.Api
+dotnet user-secrets set "Authentication:BrowserClientId" "YOUR_AUTH0_REGULAR_WEB_APP_CLIENT_ID" --project IncidentResponseAgent.Api
+dotnet user-secrets set "Authentication:BrowserClientSecret" "YOUR_AUTH0_REGULAR_WEB_APP_CLIENT_SECRET" --project IncidentResponseAgent.Api
+dotnet run --project IncidentResponseAgent.Api --launch-profile https
 ```
 
-The identity provider should issue `responder` or `admin` app roles in the `roles` claim, or the delegated `incident_response` scope. `admin` is required for destructive and knowledge-management operations. The Config tab can keep a short-lived access token only in `sessionStorage` for the current browser tab; it does not store passwords or refresh tokens. Development identity is disabled in base settings and should only be enabled by a local development or test override. Assignment and acknowledgement actors always come from the validated token principal.
+Configure these URLs in the Auth0 application:
+
+```text
+Allowed Callback URL: https://localhost:7104/signin-oidc
+Allowed Logout URL:   https://localhost:7104/
+Allowed Web Origin:   https://localhost:7104
+```
+
+Create the `incident_response` permission on the Auth0 API and create `responder` and `admin` roles. Add this Auth0 Post Login Action to the Login flow so roles are available to both browser sessions and bearer clients:
+
+```javascript
+exports.onExecutePostLogin = async (event, api) => {
+  const claim = "https://incidentresponseagent/roles";
+  const roles = event.authorization?.roles || [];
+  api.idToken.setCustomClaim(claim, roles);
+  api.accessToken.setCustomClaim(claim, roles);
+};
+```
+
+Assign each operator at least `responder`; use `admin` only for operators who may delete incidents, modify projects/runbook sources, and approve knowledge. The browser uses Authorization Code with PKCE and sends Auth0 the configured API audience. The server holds the session in a secure HTTP-only cookie and validates antiforgery tokens for mutations, so tokens are not stored in JavaScript. JWT bearer authentication remains available for API clients. Development identity is disabled in base settings and should only be enabled by an explicit local/test override.
 
 Service ownership is configured under `ServiceCatalog:Services`. A matching incident service automatically receives its on-call target or owning team as the initial assignee:
 
