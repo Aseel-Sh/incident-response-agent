@@ -1,0 +1,272 @@
+<div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <span class="brand-mark"></span>
+        <strong>incidentOps</strong>
+      </div>
+      <nav class="nav-tabs" aria-label="Primary">
+        <button class="nav-tab active" type="button" data-tab="dashboard" data-icon="radar">Dashboard</button>
+        <button class="nav-tab" type="button" data-tab="analysis" data-icon="brain">Analysis</button>
+        <button class="nav-tab" type="button" data-tab="history" data-icon="history">History</button>
+        <button class="nav-tab" type="button" data-tab="sources" data-icon="plug">Sources</button>
+        <button class="nav-tab" type="button" data-tab="ingestion" data-icon="terminal">Diagnostics</button>
+        <button class="nav-tab" type="button" data-tab="rag" data-icon="book">RAG</button>
+        <button class="nav-tab" type="button" data-tab="evaluation" data-icon="check">Evaluation</button>
+        <button class="nav-tab" type="button" data-tab="monitor" data-icon="activity">Monitor</button>
+        <button class="nav-tab" type="button" data-tab="config" data-icon="database">Config</button>
+      </nav>
+      <div class="sidebar-footer">
+        <span id="appVersion">v...</span>
+        <span id="sidebarLastScan">Last scan: not run</span>
+      </div>
+    </aside>
+
+    <main class="workspace">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow" id="workspaceEyebrow">Operations backlog</p>
+          <h1 id="workspaceTitle">Dashboard</h1>
+        </div>
+        <div class="topbar-actions">
+          <label class="project-selector" aria-label="Project workspace">
+            <span data-icon="database">Project</span>
+            <select id="projectSelector"></select>
+          </label>
+          <span id="healthStatus" class="status-pill status-pending">Checking</span>
+          <span id="demoModePill" class="status-pill status-warning">Demo Mode</span>
+          <button id="scanButton" class="top-icon" type="button" data-icon="moon" aria-label="Toggle theme"></button>
+        </div>
+      </header>
+
+      <section id="dashboardView" class="tab-view active">
+        <div id="sourceModeBanner" class="mode-banner"></div>
+        <dl class="metric-strip dashboard-stats">
+          <div class="stat-new"><dt>Candidates</dt><dd id="newCount">0</dd></div>
+          <div class="stat-confirmed"><dt>Confirmed</dt><dd id="confirmedCount">0</dd></div>
+          <div class="stat-active"><dt>Investigating</dt><dd id="investigatingCount">0</dd></div>
+          <div class="stat-mitigated"><dt>Mitigated</dt><dd id="mitigatedCount">0</dd></div>
+          <div class="stat-resolved"><dt>Resolved</dt><dd id="resolvedCount">0</dd></div>
+        </dl>
+        <section class="panel">
+          <div class="toolbar backlog-toolbar">
+            <label class="search-field" aria-label="Search incidents">
+              <span data-icon="search"></span>
+              <input id="incidentSearch" type="search" placeholder="Search by title or service...">
+            </label>
+            <div id="statusFilters" class="chip-row">
+              <button class="filter-chip active" type="button" data-status="all">All</button>
+              <button class="filter-chip" type="button" data-status="candidate">Candidates</button>
+              <button class="filter-chip" type="button" data-status="new">Confirmed</button>
+              <button class="filter-chip" type="button" data-status="active">Active</button>
+              <button class="filter-chip" type="button" data-status="mitigated">Mitigated</button>
+              <button class="filter-chip" type="button" data-status="resolved">Resolved</button>
+            </div>
+            <button id="manualIncidentButton" class="secondary compact-button" type="button" data-icon="play">Create Incident</button>
+          </div>
+          <div id="detectedOutput" class="incident-backlog"></div>
+        </section>
+      </section>
+
+      <section id="analysisView" class="tab-view">
+        <div class="page-heading compact-only">
+          <h2>Incident analysis</h2>
+          <p>Evidence, runbook steps, and related incidents for the selected signal.</p>
+        </div>
+        <div class="analysis-layout">
+          <section class="panel compact-panel">
+            <div class="section-title">
+              <h2>Incident input</h2>
+              <button id="sampleButton" class="secondary compact-button" type="button" data-icon="wand">Sample</button>
+            </div>
+            <form id="incidentForm" class="form-grid">
+              <label class="wide">Title<input name="title" required maxlength="200" placeholder="Describe the incident"></label>
+              <label>Severity<select name="severity" required><option value="" selected disabled>Select severity</option><option value="sev1">SEV-1 — Critical</option><option value="sev2">SEV-2 — Major</option><option value="sev3">SEV-3 — Partial</option><option value="sev4">SEV-4 — Minor</option><option value="sev5">SEV-5 — Informational</option></select></label>
+              <label>Service<input name="serviceName" placeholder="e.g. checkout-service"></label>
+              <label>Environment<input name="environment" placeholder="e.g. prod"></label>
+              <label>Session ID<input name="sessionId" placeholder="optional follow-up session"></label>
+              <label class="wide">Tags<input name="tags" placeholder="comma-separated tags"></label>
+              <label class="wide">Description<textarea name="description" required maxlength="5000" placeholder="What is happening and who is affected?"></textarea></label>
+              <div class="actions wide">
+                <button id="analyzeButton" type="submit" data-icon="play">Create candidate &amp; confirm</button>
+              </div>
+            </form>
+          </section>
+          <section class="analysis-feed">
+            <div id="analysisStatus" class="analysis-status">Select a backlog incident or run manual analysis.</div>
+            <div id="analysisOutput" class="empty-state">No analysis yet.</div>
+          </section>
+        </div>
+      </section>
+
+      <section id="historyView" class="tab-view">
+        <div class="page-heading history-heading">
+          <div><h2><span data-icon="history"></span>Incident History</h2><p><span id="historyResultCount">0 results</span><span class="history-count-divider" aria-hidden="true">·</span><span id="historyTotal">0</span> total incidents</p></div>
+          <button id="historyReloadButton" class="icon-refresh-button" type="button" data-icon="refresh" aria-label="Refresh history"></button>
+        </div>
+        <div class="section-title history-filters">
+          <div class="filter-icon" data-icon="search"></div>
+          <input id="historySearch" type="search" aria-label="Search history" placeholder="Search history...">
+          <select id="historyServiceFilter" aria-label="Service filter"><option value="all">All services</option></select>
+          <select id="historyStatusFilter" aria-label="Status filter"><option value="all">All statuses</option></select>
+          <select id="historySessionFilter" aria-label="Session filter"><option value="all">All sessions</option></select>
+          <select id="historySeverityFilter" aria-label="Severity filter"><option value="all">All severities</option></select>
+        </div>
+        <section class="panel">
+          <div class="history-layout">
+            <div id="recentOutput" class="history-list"></div>
+          </div>
+        </section>
+      </section>
+
+      <section id="sourcesView" class="tab-view">
+        <div class="page-heading">
+          <h2><span data-icon="database"></span>Sources</h2>
+          <p>Configured data sources and their capabilities</p>
+        </div>
+        <section class="panel project-manager-panel">
+          <div class="section-title">
+            <div>
+              <h3><span data-icon="database"></span>Project workspaces</h3>
+              <p>Add a service/project without editing appsettings. The monitor will scan its logs, metrics, health endpoint, and thresholds.</p>
+            </div>
+          </div>
+          <form id="projectForm" class="form-grid project-form">
+            <label>Project ID<input name="id" required placeholder="project-a"></label>
+            <label>Name<input name="name" required placeholder="Project A"></label>
+            <label class="wide">Log file path<input name="logEntriesPath" placeholder="C:\path\to\logs.json"></label>
+            <label class="wide">Metric file path<input name="metricSamplesPath" placeholder="C:\path\to\metrics.json"></label>
+            <label class="wide">Health endpoint<input name="sourceHealthEndpoint" placeholder="http://127.0.0.1:5268/health"></label>
+            <label>Error threshold<input name="highErrorRateThreshold" type="number" step="0.1" placeholder="25"></label>
+            <label>Latency threshold ms<input name="latencyWarningThresholdMs" type="number" step="1" placeholder="1000"></label>
+            <div class="actions wide">
+              <button type="submit" data-icon="plug">Add project</button>
+            </div>
+          </form>
+        </section>
+        <section class="panel">
+          <div id="sourcesOutput" class="source-list"></div>
+        </section>
+      </section>
+
+      <section id="ingestionView" class="tab-view">
+        <div class="page-heading">
+          <h2><span data-icon="activity"></span>Signal Diagnostics</h2>
+          <p>Manual ingestion for connector testing, emergency input, and detection-rule validation</p>
+        </div>
+        <div class="mode-banner"><div class="mode-banner-content"><span data-icon="info"></span><span>Signals submitted here are persisted into the configured log and metric stores and enter the same server-side detection pipeline as connected telemetry. This diagnostics tool is not a replacement for production collectors.</span></div></div>
+        <div class="split-layout">
+          <section class="panel">
+            <div class="section-title"><h2><span data-icon="terminal"></span>POST LOG SIGNAL</h2></div>
+            <form id="logSignalForm" class="form-grid">
+              <label class="wide">Service<input name="source" value="checkout-service" required></label>
+              <label class="wide">Level<select name="level"><option>Error</option><option>Warning</option><option>Information</option><option>Critical</option></select></label>
+              <label class="wide">Message<textarea name="message" required>ERROR: connection pool timeout after 30s...</textarea></label>
+              <div class="form-actions wide">
+                <button type="submit" data-icon="terminal">Post Signal</button>
+                <button class="secondary rescan-button" type="button" data-rescan>Rescan</button>
+              </div>
+            </form>
+          </section>
+          <section class="panel">
+            <div class="section-title"><h2><span data-icon="chart"></span>POST METRIC SAMPLE</h2></div>
+            <form id="metricSignalForm" class="form-grid">
+              <label class="wide">Service<input name="serviceName" value="checkout-service" required></label>
+              <label>Metric name<input name="metricName" value="p95_latency" required></label>
+              <label>Value<input name="value" type="number" step="0.1" value="4200" required></label>
+              <label class="wide">Unit (optional)<input name="unit" value="ms"></label>
+              <input type="hidden" name="environment" value="prod">
+              <div class="form-actions wide">
+                <button type="submit" data-icon="chart">Post Metric</button>
+                <button class="secondary rescan-button" type="button" data-rescan>Rescan</button>
+              </div>
+            </form>
+          </section>
+        </div>
+        <div id="ingestionFeedback" class="scan-feedback"></div>
+      </section>
+
+      <section id="ragView" class="tab-view">
+        <div class="page-heading">
+          <h2><span data-icon="book"></span>RAG Diagnostics</h2>
+          <p>Embedding provider, vector store, and retrieval match quality</p>
+        </div>
+        <section class="panel runbook-sources-panel">
+          <div class="section-title"><div><h3>Connected runbook sources</h3><p>Connect a Markdown directory or an existing local Git working tree. Credentials stay outside the app.</p></div></div>
+          <form id="runbookSourceForm" class="source-connect-form">
+            <label>Name<input name="name" required placeholder="Operations runbooks"></label>
+            <label>Type<select name="type"><option value="directory">Local / mounted directory</option><option value="git">Git working tree</option></select></label>
+            <label class="wide">Directory path<input name="path" required placeholder="C:\\ops\\runbooks"></label>
+            <button type="submit" data-icon="plug">Connect source</button>
+          </form>
+          <div id="runbookSources" class="runbook-source-list"></div>
+        </section>
+        <section class="panel">
+          <div id="ragSummary" class="rag-summary"></div>
+          <form id="ragForm" class="search-bar"><input name="query" value="checkout 5xx latency" aria-label="RAG query"><button type="submit" data-icon="search">Search</button></form>
+          <div id="ragResults" class="result-list"></div>
+        </section>
+      </section>
+
+      <section id="evaluationView" class="tab-view">
+        <div class="page-heading">
+          <h2><span data-icon="check"></span>Evaluation</h2>
+          <p>Run scenarios and compare output against rubric items</p>
+        </div>
+        <section class="panel">
+          <div id="evaluationOutput" class="evaluation-grid"></div>
+        </section>
+      </section>
+
+      <section id="monitorView" class="tab-view">
+        <div class="page-heading">
+          <h2><span data-icon="activity"></span>Live Monitor</h2>
+          <p>Polling interval, scan controls, and last scan result</p>
+        </div>
+        <section class="panel">
+          <div id="lastScan" class="monitor-summary">No scan yet</div>
+          <div id="scanFeedback" class="scan-feedback"></div>
+          <div class="monitor-controls">
+            <div class="section-title stacked">
+              <h3>Controls</h3>
+              <span class="meta">Polling interval: <strong id="pollingIntervalValue">30s</strong></span>
+            </div>
+            <input id="pollingIntervalSlider" class="polling-slider" type="range" min="10" max="300" step="10" value="30" aria-label="Polling interval">
+            <div class="slider-ticks" aria-hidden="true"><span style="--tick-position:0%">10s</span><span style="--tick-position:17.24%">60s</span><span style="--tick-position:37.93%">120s</span><span style="--tick-position:100%">300s</span></div>
+            <div class="monitor-actions">
+              <button id="pauseScanButton" class="warning-button compact-button" type="button" data-icon="pause">Pause Scanning</button>
+              <button id="manualRefreshButton" class="compact-button" type="button" data-icon="refresh">Manual Refresh</button>
+            </div>
+          </div>
+        </section>
+      </section>
+
+      <section id="configView" class="tab-view">
+        <div class="page-heading">
+          <h2><span data-icon="database"></span>Configuration</h2>
+          <p>Current environment, provider, and mode summary</p>
+        </div>
+        <section class="panel">
+          <div id="configOutput" class="config-grid"></div>
+        </section>
+      </section>
+    </main>
+  </div>
+  <button class="help-button" type="button" aria-label="Help">?</button>
+  <div id="toastRegion" class="toast-region" aria-live="polite" aria-atomic="true"></div>
+  <div id="historyModal" class="modal-backdrop" hidden>
+    <section class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="historyModalTitle">
+      <button id="historyModalClose" class="modal-close" type="button" aria-label="Close history detail">x</button>
+      <div id="historyDetail" class="history-detail"><p class="eyebrow">Selected run</p><h3 id="historyModalTitle">No analysis selected</h3><p class="meta">Choose a saved run to inspect evidence, actions, and provider mode.</p></div>
+    </section>
+  </div>
+  <div id="confirmModal" class="modal-backdrop confirm-backdrop" hidden>
+    <section class="modal-panel confirm-panel" role="alertdialog" aria-modal="true" aria-labelledby="confirmModalTitle" aria-describedby="confirmModalMessage">
+      <div class="confirm-icon" data-icon="alert"></div>
+      <h2 id="confirmModalTitle">Confirm action</h2>
+      <p id="confirmModalMessage"></p>
+      <div class="confirm-actions">
+        <button id="confirmModalCancel" class="secondary" type="button">Cancel</button>
+        <button id="confirmModalAccept" class="danger-button" type="button">Confirm</button>
+      </div>
+    </section>
+  </div>

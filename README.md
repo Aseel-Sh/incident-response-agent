@@ -4,7 +4,7 @@ Incident Response Agent is a .NET 10 incident investigation and workflow assista
 
 The project is a modular monolith intended for single-instance use. External model analysis and hosted embeddings are the normal product path. Local prompt analysis, hashing embeddings, deterministic telemetry, and SQLite vector fallback are offline/demo escape hatches and are disabled by default; the application reports an unavailable provider instead of silently degrading.
 
-It also includes a static frontend served by the API and optional Qdrant vector database support for local, free vector search.
+It also includes a React frontend built with Vite and served by the API, plus optional Qdrant vector database support.
 
 ## What It Does
 
@@ -424,6 +424,8 @@ http://localhost:5155
 
 ## Authentication and responder identity
 
+> Deferred setup: the authentication implementation remains in the API, but live Auth0 tenant configuration and end-to-end provider validation are intentionally paused until after the frontend migration. Development/test identity remains the supported local workflow in the meantime.
+
 Production authentication is configured for the Auth0 Free hosted tier. Create one Auth0 **Regular Web Application** and one Auth0 API whose identifier is `https://incident-response-agent-api`. The repository already supplies the audience, scopes, claim names, PKCE flow, secure cookie, and CSRF handling; only the account-specific Auth0 values remain external:
 
 Store the three Auth0-generated values with .NET User Secrets instead of editing `appsettings.json`:
@@ -477,7 +479,7 @@ Rotate any provider credentials that were previously stored in plaintext develop
 
 ## Frontend
 
-The API serves a static frontend at:
+The incident console is a React 19 application under `frontend/`, built with Vite and served by ASP.NET Core at:
 
 ```text
 http://localhost:5155
@@ -498,7 +500,21 @@ The frontend lets you:
 - see where runbooks, logs, metrics, and vectors are coming from
 - see embedding/vector store status
 
-No npm install or frontend build step is required.
+Install and build the frontend before running or publishing the API:
+
+```powershell
+npm.cmd install
+npm.cmd run build
+```
+
+For frontend development with hot reload, run the ASP.NET Core HTTPS profile and Vite in separate terminals:
+
+```powershell
+dotnet run --project IncidentResponseAgent.Api --launch-profile https
+npm.cmd run dev
+```
+
+Vite serves the development UI at `http://localhost:5173` and proxies API, authentication, health, and readiness requests to ASP.NET Core. End-to-end preparation builds React automatically.
 
 ## Endpoints
 
