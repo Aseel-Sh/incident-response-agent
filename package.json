@@ -19,6 +19,7 @@
     "@axe-core/playwright": "4.10.2",
     "@playwright/test": "1.58.2",
     "@vitejs/plugin-react": "^6.0.5",
+    "react-doctor": "^0.9.14",
     "vite": "^8.2.1"
   },
   "dependencies": {
