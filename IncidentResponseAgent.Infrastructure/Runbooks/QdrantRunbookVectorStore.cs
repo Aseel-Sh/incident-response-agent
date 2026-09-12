@@ -227,13 +227,13 @@ internal sealed class QdrantRunbookVectorStore
 		{
 			var body = new
 			{
-				vector = queryVector,
+				query = queryVector,
 				limit,
 				with_payload = true
 			};
 
 			using var response = await _httpClient.PostAsJsonAsync(
-				$"/collections/{Uri.EscapeDataString(CollectionName)}/points/search",
+				$"/collections/{Uri.EscapeDataString(CollectionName)}/points/query",
 				body,
 				SerializerOptions,
 				cancellationToken).ConfigureAwait(false);
@@ -246,8 +246,8 @@ internal sealed class QdrantRunbookVectorStore
 			}
 
 			await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-			var envelope = await JsonSerializer.DeserializeAsync<QdrantSearchEnvelope>(stream, SerializerOptions, cancellationToken).ConfigureAwait(false);
-			return envelope?.Result?.Select(ToMatch).Where(match => match is not null).Cast<QdrantRunbookMatch>().ToArray()
+			var envelope = await JsonSerializer.DeserializeAsync<QdrantQueryEnvelope>(stream, SerializerOptions, cancellationToken).ConfigureAwait(false);
+			return envelope?.Result?.Points?.Select(ToMatch).Where(match => match is not null).Cast<QdrantRunbookMatch>().ToArray()
 				?? Array.Empty<QdrantRunbookMatch>();
 		}
 		catch (OperationCanceledException)
@@ -330,7 +330,9 @@ internal sealed class QdrantRunbookVectorStore
 		return new Guid(bytes[..16]).ToString();
 	}
 
-	private sealed record QdrantSearchEnvelope(IReadOnlyList<QdrantScoredPoint>? Result);
+	private sealed record QdrantQueryEnvelope(QdrantQueryResult? Result);
+
+	private sealed record QdrantQueryResult(IReadOnlyList<QdrantScoredPoint>? Points);
 
 	private sealed record QdrantCollectionState(bool Exists, int? VectorSize);
 

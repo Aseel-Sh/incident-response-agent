@@ -94,12 +94,18 @@ Default RAG database:
 
 ## Free Local Vector Database
 
-Qdrant is the configured primary vector database. It is free and runs locally through Docker.
+Qdrant is the configured primary vector database. It is free and runs locally through Docker. The Compose file pins Qdrant `v1.19.0` so an upstream `latest` release cannot silently break the API contract.
 
 Start Qdrant:
 
 ```powershell
 docker compose up -d qdrant
+```
+
+Confirm the service is healthy before starting the app:
+
+```powershell
+Invoke-RestMethod http://localhost:6333/healthz
 ```
 
 Qdrant endpoints:

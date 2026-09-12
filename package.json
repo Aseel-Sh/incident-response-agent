@@ -12,7 +12,8 @@
     "test:e2e:learning": "npm.cmd run e2e:prepare && playwright test -c playwright.learning.config.ts",
     "test:e2e:headed": "npm.cmd run e2e:prepare && playwright test --headed",
     "test:e2e:ui": "npm.cmd run e2e:prepare && playwright test --ui",
-    "test:e2e:report": "playwright show-report"
+    "test:e2e:report": "playwright show-report",
+    "doctor": "npx react-doctor@latest"
   },
   "devDependencies": {
     "@axe-core/playwright": "4.10.2",

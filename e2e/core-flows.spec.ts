@@ -50,8 +50,56 @@ test.describe.serial('incident response core flows', () => {
     await page.getByRole('button', { name: 'RAG', exact: true }).click();
     await expect(page.locator('#ragSummary')).toContainText(/RAG Status|RAG degraded/i);
     await expect(page.locator('#ragSummary')).toContainText(/unavailable|degraded|available|no matches/i);
+    await page.getByRole('button', { name: 'Dashboard', exact: true }).click();
+    await page.getByRole('button', { name: 'Create Incident' }).click();
+    await page.getByRole('button', { name: 'Sample' }).click();
+    await expect(page.locator('#incidentForm [name="title"]')).not.toHaveValue('');
+    await expect(page.locator('#incidentForm [name="description"]')).not.toHaveValue('');
+    await expect(page.locator('#incidentForm [name="severity"]')).not.toHaveValue('');
     await page.getByRole('button', { name: 'Help' }).click();
     await expect(page.locator('#toastRegion')).toContainText('Use the sidebar');
+  });
+
+  test('project workspaces can be added, selected, persisted, and removed through the UI', async ({ page, request }) => {
+    const projectId = 'payments-e2e';
+    const projectName = 'Payments E2E';
+    await page.goto('/');
+    await page.getByRole('button', { name: 'Sources', exact: true }).click();
+    const projectForm = page.locator('#projectForm');
+    await projectForm.getByLabel('Project ID').fill(projectId);
+    await projectForm.getByLabel('Name', { exact: true }).fill(projectName);
+    await projectForm.getByLabel('Log file path').fill('.tmp/e2e-data/payments-logs.json');
+    await projectForm.getByLabel('Metric file path').fill('.tmp/e2e-data/payments-metrics.json');
+    await projectForm.getByLabel('Error threshold').fill('12');
+    await projectForm.getByLabel('Latency threshold ms').fill('900');
+    await projectForm.getByRole('button', { name: 'Add project' }).click();
+
+    await expect(page.locator('#toastRegion')).toContainText('Project added');
+    await expect(page.getByLabel('Project workspace')).toHaveValue(projectId);
+    await expect(page.locator('#sourcesOutput')).toContainText(projectName);
+    await expect(page.locator('#sourcesOutput')).toContainText('threshold: errors 12');
+    expect(await (await request.get('/api/projects')).json()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: projectId, name: projectName, removable: true })
+    ]));
+
+    await page.reload();
+    await expect(page.getByLabel('Project workspace')).toHaveValue(projectId);
+    await page.getByRole('button', { name: 'Sources', exact: true }).click();
+    const projectCard = page.locator('.project-source-card').filter({ hasText: projectName });
+    await expect(projectCard).toBeVisible();
+
+    await projectCard.getByRole('button', { name: 'Remove' }).click();
+    const confirmation = page.getByRole('alertdialog');
+    await expect(confirmation).toContainText('Remove project?');
+    await confirmation.getByRole('button', { name: 'Cancel' }).click();
+    await expect(projectCard).toBeVisible();
+
+    await projectCard.getByRole('button', { name: 'Remove' }).click();
+    await confirmation.getByRole('button', { name: 'Remove project' }).click();
+    await expect(page.locator('#toastRegion')).toContainText('Project removed');
+    await expect(page.getByLabel('Project workspace')).toHaveValue('all');
+    await expect(page.locator('.project-source-card').filter({ hasText: projectName })).toHaveCount(0);
+    expect((await (await request.get('/api/projects')).json()).some((project: any) => project.id === projectId)).toBeFalsy();
   });
 
   test('manual SEV-2 incident is created through UI and persists with truthful metadata', async ({ page, request }) => {

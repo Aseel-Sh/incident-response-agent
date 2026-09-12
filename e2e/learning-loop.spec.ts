@@ -64,6 +64,14 @@ test.describe.serial('@learning safe feedback, outcomes, knowledge approval, and
       });
       feedbackIncidentIds.push(incident.incidentId);
       const card = page.locator('#analysisOutput .feedback-card');
+      if (index === 0) {
+        const recommendation = page.getByRole('button', { name: 'Rate this recommendation' }).first();
+        await recommendation.click();
+        await expect(card.getByLabel('Recommendation being rated Optional')).not.toHaveValue('');
+        await expect(card.getByLabel('Recommendation being rated Optional')).toBeFocused();
+        await page.getByRole('button', { name: 'Copy evidence' }).first().click();
+        await expect(page.locator('#toastRegion')).toContainText('Evidence copied');
+      }
       await card.getByRole('button', { name: feedback.usefulness, exact: true }).click();
       await card.getByRole('button', { name: feedback.correctness, exact: true }).click();
       for (const reason of feedback.reasons) await card.getByLabel(reason, { exact: true }).check();

@@ -55,6 +55,7 @@ export default defineConfig({
       'Storage__Incidents__IncidentRecordsPath': '.tmp/e2e-data/incident-records.json',
       'Tools__OperationalData__LogEntriesPath': '.tmp/e2e-data/logs.json',
       'Tools__OperationalData__MetricSamplesPath': '.tmp/e2e-data/metrics.json',
+      'Tools__OperationalData__ProjectRegistryPath': '.tmp/e2e-data/projects.json',
       'Tools__OperationalData__LogPatternCountThreshold': '2',
       'Tools__OperationalData__HighErrorRateThreshold': '25',
       'Tools__OperationalData__CriticalErrorRateThreshold': '40',

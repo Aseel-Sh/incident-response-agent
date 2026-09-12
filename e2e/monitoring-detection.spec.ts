@@ -90,10 +90,17 @@ test.describe.serial('@monitoring source ingestion and automatic detection', () 
     expect(new Date(reloadedScan.scannedAt).getTime()).toBe(completedAt);
     await page.getByRole('button', { name: 'Resume Scanning' }).click();
     await expect(page.locator('#lastScan')).toContainText('Active');
+    const intervalResponse = page.waitForResponse(response =>
+      response.request().method() === 'PUT' && new URL(response.url()).pathname === '/api/monitoring/interval');
+    await page.getByLabel('Polling interval').fill('60');
+    expect((await intervalResponse).ok()).toBeTruthy();
+    await expect(page.locator('#pollingIntervalValue')).toHaveText('60s');
+    await expect(page.locator('#toastRegion')).toContainText('Polling interval updated');
     const timestampBeforeActiveReload = await page.evaluate(() => JSON.parse(localStorage.getItem('incidentops.lastScan') || 'null')?.scannedAt);
     await page.reload();
     await page.getByRole('button', { name: 'Monitor', exact: true }).click();
     await expect(page.getByRole('button', { name: 'Pause Scanning' })).toBeVisible();
+    await expect(page.getByLabel('Polling interval')).toHaveValue('60');
     await expect(page.locator('#lastScan')).toContainText('Active');
     const timestampAfterActiveReload = await page.evaluate(() => JSON.parse(localStorage.getItem('incidentops.lastScan') || 'null')?.scannedAt);
     expect(timestampAfterActiveReload).toBe(timestampBeforeActiveReload);

@@ -16,6 +16,8 @@ Update this table whenever a visible interactive control is added, removed, or c
 | Global | Theme button | Toggle light/dark theme | Toggles `data-theme` | No | Yes | No | Playwright shell E2E |
 | Global | Help button | Explain navigation | Shows concise help toast | No | Yes | No | Playwright shell E2E |
 | Sources | Source status cards | Show only configured/bundled sources with verified connected, pending, or missing state | Renders backend source inventory and never treats missing/pending as connected | Yes | Yes | No | Playwright monitoring/detection E2E |
+| Sources | Add project | Persist a project workspace and select it | Saves project paths/thresholds, refreshes project-scoped views, and survives reload | Yes | Yes | No | Playwright core E2E |
+| Sources | Remove project | Remove a UI-managed workspace without deleting telemetry or incidents | Requires confirmation, removes only workspace configuration, and returns to global view | Yes | Yes | No | Playwright core E2E |
 | Dashboard | Search | Filter tickets and candidates | Filters by title, service, environment, source, signals, and tags | Yes | Yes | No | Playwright manual incident E2E |
 | Dashboard | Status chips | Filter by candidate/active/mitigated/resolved | Applies selected status and resets pagination | Yes | Yes | No | Playwright manual incident E2E |
 | Dashboard | Create Incident | Open manual candidate form | Opens/reset form with current detection time | Yes | Yes | No | Playwright manual incident E2E |
@@ -24,17 +26,17 @@ Update this table whenever a visible interactive control is added, removed, or c
 | Dashboard | Ignore | Persist ignored candidate | Persists decision after confirmation dialog | Yes | Yes | No | Playwright monitoring/detection E2E |
 | Dashboard | Merge duplicate | Merge candidate evidence into target incident | Available only with a real duplicate ID; persists merge without creating another incident | Yes | Yes | No | Playwright monitoring/detection E2E |
 | Dashboard | Open incident | Open persisted incident detail | Opens history modal using actual record | Yes | Yes | No | Playwright history E2E |
-| Analysis | Sample | Fill a realistic sample incident | Populates form without submitting | No | Yes | No | No |
+| Analysis | Sample | Fill a realistic sample incident | Populates form without submitting | No | Yes | No | Playwright shell E2E |
 | Analysis | Create candidate and confirm | Persist manual candidate, confirm, analyze | Runs complete candidate lifecycle; preserves follow-up session ID and renders grounded model/fallback output | Yes | Yes | No | Playwright manual/follow-up + AI/RAG E2E |
 | Analysis | Provider information | Disclose model, embedding provider, vector store, RAG, retry, degraded mode, and fallback | Displays persisted providers and explicit `RAG degraded` / fallback reasons | Yes | Yes | No | Playwright AI/RAG E2E |
 | Analysis | Known facts / hypotheses / unknowns / evidence | Separate claims by epistemic status and cite evidence | Every tested fact, hypothesis, and action maps to a supplied source reference | Yes | Yes | No | Playwright AI/RAG grounding gates |
 | Analysis | Runbook matches | Show retrieved relevant sections and disclose empty retrieval | Displays matching sections; empty results explicitly state that absence is not proof no runbook exists | Yes | Yes | No | Playwright AI/RAG E2E |
-| Analysis | Copy evidence | Copy exact evidence text | Copies selected evidence and shows toast | No | Yes | No | No |
+| Analysis | Copy evidence | Copy exact evidence text | Copies selected evidence and shows toast | No | Yes | No | Playwright learning-loop E2E |
 | Analysis | Similar History | Open actual matched incident | Loads only an eligible persisted incident by real GUID or reports unavailable | Yes | Yes | No | Playwright learning-loop E2E |
 | Analysis | Similar Compare | Compare current and actual prior incident | Shows real metadata, shared signals, and approved action outcomes | Yes | Yes | No | Playwright learning-loop E2E |
 | Analysis | Log outcome | Persist worked/partial/failed result | Saves outcome, appends timeline evidence, and explains approval gate for global reuse | Yes | Yes | No | Playwright learning-loop E2E + store tests |
 | Analysis | Save feedback | Persist quality/correctness ratings and reason tags | Validates all ratings/reason tags and saves them to incident history | Yes | Yes | No | Playwright learning-loop E2E |
-| Analysis | Rate this recommendation | Select a recommendation for correctness feedback | Copies the exact recommendation into the feedback form and focuses it | Yes | Yes | No | No |
+| Analysis | Rate this recommendation | Select a recommendation for correctness feedback | Copies the exact recommendation into the feedback form and focuses it | Yes | Yes | No | Playwright learning-loop E2E |
 | History | Search | Search persisted incident title, description, metadata, tags, IDs, and sessions | Filters immediately and resets pagination | Yes | Yes | No | Playwright history E2E |
 | History | Filters | Filter persisted incidents | Filters service, status, session, severity, confidence | Yes | Yes | No | Playwright history/follow-up E2E |
 | History | Refresh | Reload persisted incidents | Reloads and rerenders records | Yes | Yes | No | Playwright severity E2E |
@@ -52,7 +54,7 @@ Update this table whenever a visible interactive control is added, removed, or c
 | Evaluation | Run | Populate and analyze selected scenario | Executes scenario through normal workflow | No | Yes | No | Evaluation tests |
 | Monitor | Pause/Resume | Control browser polling | Stops/starts polling, persists the browser setting, and restores it truthfully | Yes | Yes | No | Playwright monitoring/detection E2E |
 | Monitor | Manual Refresh | Run scan immediately | Calls persisted scan endpoint and displays its timestamp, duration, source count, candidates, and errors | Yes | Yes | No | Playwright monitoring/detection E2E |
-| Monitor | Polling slider | Set browser polling interval | Persists interval locally and restarts polling | Yes | Yes | No | No |
+| Monitor | Polling slider | Set server polling interval | Persists the server schedule and restores it after reload | Yes | Yes | No | Playwright monitoring/detection E2E |
 
 ## Removed misleading controls
 
