@@ -28,7 +28,13 @@ public sealed class MarkdownApprovedKnowledgePublisher : IApprovedKnowledgePubli
 			File.Copy(path, revision, overwrite: false);
 		}
 		var document = $"---\nproposal-id: {proposalId}\nincident-id: {incidentId}\napproved-at-utc: {approvedAt:O}\napproved-by: human-review\ntags: approved, incident-learning\n---\n\n# {title.Trim()}\n\n{content.Trim()}\n";
-		await File.WriteAllTextAsync(path, document, new UTF8Encoding(false), cancellationToken).ConfigureAwait(false);
+		var temporary = path + ".pending";
+		try
+		{
+			await File.WriteAllTextAsync(temporary, document, new UTF8Encoding(false), cancellationToken).ConfigureAwait(false);
+			File.Move(temporary, path, overwrite: true);
+		}
+		finally { if (File.Exists(temporary)) File.Delete(temporary); }
 	}
 
 	public Task RemoveAsync(Guid proposalId, CancellationToken cancellationToken = default)

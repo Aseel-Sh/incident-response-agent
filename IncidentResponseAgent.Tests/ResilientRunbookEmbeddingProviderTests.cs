@@ -63,6 +63,27 @@ public sealed class ResilientRunbookEmbeddingProviderTests
 	private sealed class ThrowingEmbeddingProvider : IRunbookEmbeddingProvider
 	{
 		public string ProviderName => "throwing";
+		public string ModelName => "throwing-model";
+		public int Dimensions => 0;
+		public Task<float[]> GenerateEmbeddingAsync(string text, CancellationToken cancellationToken = default) => throw new HttpRequestException("provider unavailable");
+	}
+
+	[Fact]
+	public async Task ExternalProviderCanRecoverWithoutRestartOrLocalFallback()
+	{
+		var primary = new RecoveringProvider();
+		var provider = new ResilientRunbookEmbeddingProvider(primary, new ThrowingEmbeddingProvider(), false, NullLogger<ResilientRunbookEmbeddingProvider>.Instance);
+		await Assert.ThrowsAsync<InvalidOperationException>(() => provider.GenerateEmbeddingAsync("first"));
+		var vector = await provider.GenerateEmbeddingAsync("retry");
+		Assert.Equal(new[] {1f}, vector);
+		Assert.False(provider.IsDegraded);
+		Assert.Null(provider.DegradedReason);
+	}
+
+	private sealed class RecoveringProvider : IRunbookEmbeddingProvider
+	{
+		private bool _failed;
+		public string ProviderName => "throwing";
 
 		public string ModelName => "throwing-model";
 
@@ -70,7 +91,8 @@ public sealed class ResilientRunbookEmbeddingProviderTests
 
 		public Task<float[]> GenerateEmbeddingAsync(string text, CancellationToken cancellationToken = default)
 		{
-			throw new HttpRequestException("provider unavailable");
+			if (!_failed) { _failed = true; throw new HttpRequestException("provider unavailable"); }
+			return Task.FromResult(new[] { 1f });
 		}
 	}
 

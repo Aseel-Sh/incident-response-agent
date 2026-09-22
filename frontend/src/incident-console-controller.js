@@ -1,3 +1,10 @@
+import { createApiClient } from "./api-client.js";
+import { publishSources } from "./runbook-sources-store.js";
+import { publishDetail } from "./detail-store.js";
+import { diagnosticRows, diagnosticText, vectorStoreLocation } from "./diagnostics.js";
+import { escapeHtml, formatTime, formatTimestamp, formatReadableTime, formatEvidenceTime, formatAgo, shortenId, formatIncidentTitle, formatEvidenceSource, evidenceKind, formatNotes, normalizeAction, shortRunbookName, parseJson, similarPercent, scoreColor, formatHistoryId, formatSeverityLabel, formatStatusLabel, normalizeIncidentStatus, inferHistoryTags, normalizeArray, cleanStatusMessage, normalizeConfidence, splitTags, emptyToNull } from "./presentation.js";
+import { displayIdentity } from "./identity.js";
+import { publishDashboard } from "./dashboard-store.js";
 const $ = (selector) => {
   const element = document.querySelector(selector);
   if (!element) throw new Error(`Missing ${selector}`);
@@ -45,7 +52,7 @@ const elements = {
   ragSummary: $("#ragSummary"),
   ragResults: $("#ragResults"),
   runbookSourceForm: $("#runbookSourceForm"),
-  runbookSources: $("#runbookSources"),
+
   evaluation: $("#evaluationOutput"),
   logSignalForm: $("#logSignalForm"),
   metricSignalForm: $("#metricSignalForm"),
@@ -58,6 +65,8 @@ const elements = {
 };
 
 const iconPaths = {
+  queue: '<path d="M4 5h16v14H4z"/><path d="M8 9h8M8 13h5"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
   activity: '<path d="M22 12h-4l-3 8L9 4l-3 8H2"/>',
   alert: '<path d="m21.7 18-8-14a2 2 0 0 0-3.4 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.7-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
   book: '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M4 4.5A2.5 2.5 0 0 1 6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5z"/>',
@@ -105,15 +114,29 @@ let historyPage = 1;
 let projects = [];
 let serviceCatalog = [];
 let authSession = { browserLoginEnabled: false, authenticated: false, name: null, roles: [], csrfToken: null };
+let responders = [];
+const isAdmin = () => authSession.roles?.includes("admin");
+const responderName = (id) => displayIdentity(id, responders);
+let sessionEnded = false;
+const requestJson = createApiClient({ getSession: () => authSession, isSessionEnded: () => sessionEnded, onUnauthorized: endSession });
 let activeProjectId = localStorage.getItem("incidentops.projectId") || "default";
 const pageSize = 10;
+document.addEventListener("submit", (event) => {
+  if (event.target instanceof HTMLFormElement && new URL(event.target.action).pathname === "/auth/logout") {
+    localStorage.setItem("incidentops.authChanged", String(Date.now()));
+    stopPolling();
+  }
+});
 const incidentLifecycleStatuses = ["new", "active", "mitigated", "resolved", "recovered"];
 const severityFilterValues = ["sev1", "sev2", "sev3", "sev4", "sev5"];
 
 document.querySelectorAll(".nav-tab").forEach((button) => button.addEventListener("click", () => activateTab(button.dataset.tab)));
 document.querySelectorAll(".filter-chip").forEach((button) => {
   button.addEventListener("click", () => {
-    document.querySelectorAll(".filter-chip").forEach((item) => item.classList.toggle("active", item === button));
+    document.querySelectorAll(".filter-chip").forEach((item) => {
+      item.classList.toggle("active", item === button);
+      item.setAttribute("aria-pressed", String(item === button));
+    });
     activeStatus = button.dataset.status;
     dashboardPage = 1;
     renderDetected();
@@ -209,11 +232,6 @@ elements.runbookSourceForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   await connectRunbookSource();
 });
-elements.runbookSources.addEventListener("click", async (event) => {
-  const button = event.target.closest("button[data-runbook-source-action]");
-  if (!button) return;
-  await handleRunbookSourceAction(button);
-});
 elements.sources.addEventListener("click", async (event) => {
   const button = event.target.closest("[data-remove-project]");
   if (!button) return;
@@ -260,7 +278,7 @@ elements.historyDetail.addEventListener("click", async (event) => {
   }
   const coordinationButton = event.target.closest("[data-save-coordination]");
   if (coordinationButton) {
-    const assignee = elements.historyDetail.querySelector("[data-assignee]")?.value || null;
+    const assignee = coordinationButton.dataset.assignment === "self" ? authSession.userId : coordinationButton.dataset.assignment === "clear" ? null : elements.historyDetail.querySelector("[data-assignee]")?.value || null;
     await updateIncidentCoordination(coordinationButton.dataset.saveCoordination, assignee, coordinationButton.dataset.acknowledge === "true");
     return;
   }
@@ -269,8 +287,6 @@ elements.historyDetail.addEventListener("click", async (event) => {
     await retryIncidentAnalysis(retryButton.dataset.retryAnalysis);
     return;
   }
-  const reviewButton = event.target.closest("[data-knowledge-review]");
-  if (reviewButton) await reviewKnowledgeUpdate(reviewButton.dataset.incidentId, reviewButton.dataset.knowledgeReview);
 });
 document.addEventListener("keydown", (event) => {
   const activeModal = !elements.confirmModal.hidden ? elements.confirmModal : !elements.historyModal.hidden ? elements.historyModal : null;
@@ -393,7 +409,12 @@ elements.analysisOutput.addEventListener("click", async (event) => {
   const rateButton = event.target.closest("[data-rate-recommendation]");
   if (rateButton) {
     const field = elements.analysisOutput.querySelector("[data-feedback-recommendation]");
-    if (field) { field.value = rateButton.dataset.rateRecommendation; field.scrollIntoView({ behavior: "smooth", block: "center" }); field.focus(); }
+    if (field) {
+      field.closest('details').open = true;
+      field.value = rateButton.dataset.rateRecommendation;
+      field.scrollIntoView({ behavior: 'instant', block: 'center' });
+      field.focus({ preventScroll: true });
+    }
     return;
   }
   const button = event.target.closest("[data-outcome-log]");
@@ -429,15 +450,21 @@ elements.analysisOutput.addEventListener("click", async (event) => {
 $(".help-button").addEventListener("click", () => showToast("Help", "Use the sidebar to review incidents, sources, RAG diagnostics, and monitor controls.", "info"));
 
 function activateTab(tab) {
-  document.querySelectorAll(".nav-tab").forEach((button) => button.classList.toggle("active", button.dataset.tab === tab));
+  const titles = { dashboard: 'Incident queue', analysis: 'Investigation', history: 'Incident history', sources: 'Sources & projects', ingestion: 'Signal diagnostics', rag: 'Runbook retrieval', evaluation: 'Evaluation', monitor: 'Monitoring', config: 'Configuration' };
+  $("#workspaceTitle").textContent = titles[tab] || 'Incident response';
+  $("#workspaceEyebrow").textContent = tab === 'dashboard' ? 'Triage signals. Coordinate the response.' : 'Incident Response Agent';
+  document.querySelectorAll(".nav-tab").forEach(button => {
+    button.classList.toggle('active', button.dataset.tab === tab);
+    button.setAttribute('aria-current', button.dataset.tab === tab ? 'page' : 'false');
+  });
   document.querySelectorAll(".tab-view").forEach((view) => view.classList.toggle("active", view.id === `${tab}View`));
   if (location.hash !== `#${tab}`) {
     history.replaceState(null, "", `#${tab}`);
   }
-  if (tab === "history") void loadRecent();
-  if (tab === "sources") void loadSources();
-  if (tab === "rag") { void loadRunbookSources(); void searchRag(); }
-  if (tab === "evaluation") void loadEvaluation();
+  if (tab === "history") void loadRecent().catch(error => renderError(elements.recentOutput, error));
+  if (tab === "sources") void loadSources().catch(error => renderError(elements.sources, error));
+  if (tab === "rag") { void loadRunbookSources(); void searchRag().catch(error => renderError(elements.ragResults, error)); }
+  if (tab === "evaluation") void loadEvaluation().catch(error => renderError(elements.evaluation, error));
   if (tab === "config") renderConfig();
 }
 
@@ -539,11 +566,6 @@ function projectName(projectId) {
   return projects.find((project) => project.id === projectId)?.name || projectId || "Default project";
 }
 
-function projectBadge(projectId) {
-  if (!projectId || activeProjectId !== "all") return "";
-  return `<span class="badge project-badge">${escapeHtml(projectName(projectId))}</span>`;
-}
-
 async function loadSources() {
   sourceRows = normalizeArray(await requestJson("/api/operations/sources"));
   elements.sources.innerHTML = renderSourcesPage(sourceRows);
@@ -635,8 +657,8 @@ function restoreLastScanState() {
 function renderDetected() {
   const query = elements.incidentSearch.value.trim().toLowerCase();
   const rows = buildDashboardRows()
-    .filter((item) => activeStatus === "all" ? item.statusKey !== "resolved" : item.statusKey === activeStatus)
-    .filter((item) => !query || [item.title, item.serviceName, item.environment, item.source, item.provider, ...(item.signals || []), ...(item.tags || [])].join(" ").toLowerCase().includes(query));
+    .filter((item) => activeStatus === "all" ? !["resolved", "recovered"].includes(item.statusKey) : item.statusKey === activeStatus)
+    .filter((item) => !query || [item.title, responderName(item.assignee), projectName(item.projectId), item.serviceName, item.environment, item.source, item.provider, ...(item.signals || []), ...(item.tags || [])].join(" ").toLowerCase().includes(query));
   const page = paginateRows(rows, dashboardPage);
   dashboardPage = page.page;
   elements.detected.innerHTML = renderBacklogRows(page.items) || `<div class="empty-state">No incidents match the current filter.</div>`;
@@ -645,14 +667,16 @@ function renderDetected() {
 }
 
 function renderBacklogRows(items) {
-  if (activeProjectId !== "all") return items.map(renderBacklogRow).join("");
-  const groups = items.reduce((map, item) => {
-    const key = item.projectId || "default";
-    if (!map.has(key)) map.set(key, []);
-    map.get(key).push(item);
-    return map;
-  }, new Map());
-  return [...groups.entries()].map(([projectId, rows]) => `<section class="project-backlog-group"><h3>${escapeHtml(projectName(projectId))}<span>${rows.length}</span></h3>${rows.map(renderBacklogRow).join("")}</section>`).join("");
+  if (!items.length) return '';
+  const headings = '<div class="queue-columns" aria-hidden="true"><span>Severity</span><span>Incident / service</span><span>Status</span><span>Owner</span><span>Source / activity</span><span>Age</span></div>';
+  if (activeProjectId !== 'all') return headings + items.map(renderBacklogRow).join('');
+  const groups = new Map();
+  for (const item of items) {
+    const key = item.projectId || 'default';
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(item);
+  }
+  return headings + [...groups.entries()].map(([projectId, rows]) => `<section class="project-backlog-group"><h3>${escapeHtml(projectName(projectId))}<span>${rows.length}</span></h3>${rows.map(renderBacklogRow).join('')}</section>`).join('');
 }
 
 function buildDashboardRows() {
@@ -670,21 +694,24 @@ function buildDashboardRows() {
     confidence: row.confidence,
     provider: row.provider,
     projectId: row.projectId,
-    tags: row.tags
+    tags: row.tags,
+    assignee: row.item.assignee,
+    source: incidentSources(row.item),
+    timeline: row.item.timeline
   }));
   const ticketTitles = new Set(tickets.map((ticket) => normalizeAction(ticket.title)));
   const signals = detectedCandidates
     .map(enrichCandidate)
     .filter((signal) => signal.statusKey === "candidate")
     .filter((signal) => !ticketTitles.has(normalizeAction(signal.title)));
-  return [...tickets, ...signals];
+  return [...signals, ...tickets];
 }
 
 function enrichCandidate(item, index) {
   return {
     ...item,
     rowKind: "signal",
-    incidentNumber: `INC-${String(2487 - index).padStart(4, "0")}`,
+    incidentNumber: `SIG-${String(item.id || "").slice(0, 8).toUpperCase()}`,
     statusKey: item.status || "candidate",
     statusLabel: item.status === "candidate" ? "Candidate" : formatStatusLabel(item.status),
     confidence: "low",
@@ -694,38 +721,30 @@ function enrichCandidate(item, index) {
 }
 
 function renderBacklogRow(item) {
-  const action = item.rowKind === "ticket" ? "open-ticket" : "confirm";
-  const confidence = normalizeConfidence(item.confidence).toLowerCase();
-  const severityKey = String(item.severity || "sev3").toLowerCase().replace("-", "");
-  return `
-    <article class="backlog-row" data-row-id="${escapeHtml(item.id)}" data-row-kind="${escapeHtml(item.rowKind)}">
-      <div>
-        <div class="badge-row">
-          <span class="badge muted">${escapeHtml(item.incidentNumber)}</span>
-          <span class="severity severity-${escapeHtml(severityKey)}">${escapeHtml(formatSeverityLabel(item.severity))}</span>
-          <span class="badge status-${escapeHtml(item.statusKey)}">${escapeHtml(item.statusLabel)}</span>
-          <span class="badge badge-info">${escapeHtml(item.provider)}</span>
-          ${projectBadge(item.projectId)}
-        </div>
-        <h3>${escapeHtml(formatIncidentTitle(item.title))}</h3>
-        <p><span>${escapeHtml(item.serviceName || "unknown")}</span><span class="badge meta-badge">${escapeHtml(item.environment || "unknown")}</span><span class="conf-label confidence-${escapeHtml(confidence)}">${escapeHtml(confidence)} conf.</span></p>
-        ${item.rowKind === "signal" ? `<p class="candidate-evidence"><strong>Evidence:</strong> ${escapeHtml((item.signals || []).slice(0, 2).join(" · ") || "No observable signal supplied")}</p>` : ""}
-      </div>
-      <div class="row-side">
-        ${item.rowKind === "signal" && item.statusKey === "candidate" ? `<div class="candidate-actions"><button type="button" data-action="confirm" data-id="${escapeHtml(item.id)}">Confirm</button><button class="secondary" type="button" data-action="false_positive" data-id="${escapeHtml(item.id)}">False positive</button><button class="secondary" type="button" data-action="ignored" data-id="${escapeHtml(item.id)}">Ignore</button>${item.duplicateIncidentId ? `<button class="secondary" type="button" data-action="merged" data-id="${escapeHtml(item.id)}">Merge duplicate</button>` : ""}</div>` : `<button class="icon-row-button" type="button" data-action="${escapeHtml(action)}" data-id="${escapeHtml(item.id)}">&rsaquo;</button>`}
-        <span class="time-ago"><span data-icon="clock"></span>${escapeHtml(formatAgo(item.detectedAtUtc))}</span>
-      </div>
-    </article>
-  `;
+  const candidate = item.rowKind === 'signal';
+  const severityKey = String(item.severity || 'unknown').toLowerCase().replace('-', '');
+  const activity = latestActivity(item.timeline);
+  return `<article class="backlog-row" data-row-id="${escapeHtml(item.id)}" data-row-kind="${escapeHtml(item.rowKind)}">
+    <span class="severity severity-${escapeHtml(severityKey)}">${escapeHtml(formatSeverityLabel(item.severity))}</span>
+    <div class="queue-identity"><span class="queue-id" title="${escapeHtml(item.id)}">${escapeHtml(item.incidentNumber)}</span><h3>${candidate ? escapeHtml(formatIncidentTitle(item.title)) : `<button class="queue-title" type="button" data-action="open-ticket" data-id="${escapeHtml(item.id)}">${escapeHtml(formatIncidentTitle(item.title))}</button>`}</h3><p>${escapeHtml(item.serviceName || 'Service not reported')}<span>${escapeHtml(item.environment || 'Environment not reported')}</span></p></div>
+    <div class="queue-status" data-label="Status">${renderStatusText(item.statusKey)}</div>
+    <div class="queue-owner" data-label="Owner">${escapeHtml(responderName(item.assignee))}</div>
+    <div class="queue-activity" data-label="Source / activity"><span>${escapeHtml(item.source || 'Source not reported')}</span><small title="${escapeHtml(activity ? formatTimestamp(activity.occurredAtUtc) : '')}">${escapeHtml(activity?.summary || 'No activity recorded')}</small></div>
+    <time class="time-ago" title="${escapeHtml(formatTimestamp(item.detectedAtUtc))}" datetime="${escapeHtml(item.detectedAtUtc || '')}">${escapeHtml(formatAgo(item.detectedAtUtc) || '—')}</time>
+    ${candidate ? `<div class="candidate-review"><p class="candidate-evidence"><strong>Signal</strong> ${escapeHtml((item.signals || []).join(' · ') || 'No observable signal supplied')}</p><div class="candidate-actions"><button type="button" data-action="confirm" data-id="${escapeHtml(item.id)}">Confirm</button><button class="secondary" type="button" data-action="false_positive" data-id="${escapeHtml(item.id)}">False positive</button><button class="secondary" type="button" data-action="ignored" data-id="${escapeHtml(item.id)}">Ignore</button>${item.duplicateIncidentId ? `<button class="secondary" type="button" data-action="merged" data-id="${escapeHtml(item.id)}">Merge duplicate</button>` : ''}</div></div>` : ''}
+  </article>`;
+}
+
+function latestActivity(events = []) {
+  return events.reduce((latest, event) => !latest || new Date(event.occurredAtUtc) > new Date(latest.occurredAtUtc) ? event : latest, null);
+}
+
+function incidentSources(item) {
+  return [...new Set((item.evidence || []).map(e => e.source).filter(Boolean))].map(formatEvidenceSource).join(', ') || 'Not reported';
 }
 
 function updateCounts() {
-  const rows = buildDashboardRows();
-  $("#newCount").textContent = rows.filter((item) => item.statusKey === "candidate").length;
-  $("#confirmedCount").textContent = rows.filter((item) => item.statusKey === "new").length;
-  $("#investigatingCount").textContent = rows.filter((item) => item.statusKey === "active").length;
-  $("#mitigatedCount").textContent = rows.filter((item) => item.statusKey === "mitigated").length;
-  $("#resolvedCount").textContent = rows.filter((item) => item.statusKey === "resolved").length;
+  publishDashboard({ rows: buildDashboardRows(), incidents: recentAnalyses, project: projectName(activeProjectId), openIncident: renderHistoryDetail });
 }
 
 function loadSampleIncident() {
@@ -869,11 +888,11 @@ function renderAnalysis(result) {
         <div class="confidence-score confidence-${escapeHtml(confidence.toLowerCase())}"><strong>${escapeHtml(confidence)}</strong><span>Confidence</span></div>
       </div>
     </article>
-    ${renderProviderTransparency(provider)}
-    ${renderRecommendedActions(result.recommendedActions)}
+    ${renderAnalysisDisclosure(provider, result.analysisState)}
     ${renderGroundedFacts(result.knownFacts)}
     ${renderHypotheses(result.rootCauseHypotheses)}
     ${renderAnalysisBlock("Unknowns & validation gaps", result.unknowns, "info", "unknowns-card")}
+    ${renderRecommendedActions(result.recommendedActions)}
     ${renderEvidenceBlock(result.retrievedEvidence)}
     ${renderRunbookMatches(result.runbookMatches)}
     ${renderConfidenceBlock(confidenceRows(result, similar))}
@@ -882,26 +901,25 @@ function renderAnalysis(result) {
     ${renderPriorActions(similar)}
     ${renderActionOutcomeBlock(result.actionOutcomes)}
     ${renderFeedbackCard()}
+    <details class="provider-details"><summary>Provider & retrieval diagnostics</summary>${renderProviderTransparency(provider)}</details>
   `;
   hydrateIcons(elements.analysisOutput);
 }
 
 function renderAnalysisBlock(title, rows, icon, className = "") {
-  return `<section class="analysis-card ${escapeHtml(className)}"><h3><span data-icon="${icon}"></span>${escapeHtml(title)}</h3><ul>${(rows || []).slice(0, 6).map((row) => `<li>${escapeHtml(row)}</li>`).join("") || "<li>No data returned.</li>"}</ul></section>`;
+  return `<section class="analysis-card ${escapeHtml(className)}"><h3><span data-icon="${icon}"></span>${escapeHtml(title)}</h3><ul>${(rows || []).map((row) => `<li>${escapeHtml(row)}</li>`).join("") || "<li>No data returned.</li>"}</ul></section>`;
 }
 
 function renderConfidenceBlock(rows) {
-  return `<section class="analysis-card confidence-card"><h3><span data-icon="info"></span>Confidence explanation</h3><div class="confidence-lines">${(rows || []).slice(0, 5).map((row) => `<p><span class="check-dot" data-icon="check"></span>${escapeHtml(row)}</p>`).join("") || `<p><span class="check-dot" data-icon="check"></span>Structured analysis completed with available evidence</p>`}</div></section>`;
+  return `<section class="analysis-card confidence-card"><h3><span data-icon="info"></span>Confidence explanation</h3><div class="confidence-lines">${(rows || []).map((row) => `<p><span class="check-dot" data-icon="check"></span>${escapeHtml(row)}</p>`).join("") || `<p><span class="check-dot" data-icon="check"></span>Structured analysis completed with available evidence</p>`}</div></section>`;
 }
 
 function renderHypotheses(rows) {
-  return `<section class="analysis-card hypothesis-card"><h3><span data-icon="brain"></span>Hypotheses</h3>${(rows || []).slice(0, 5).map((row) => `<div class="grounded-item"><p>${escapeHtml(row.description)}</p><small>${escapeHtml(row.inferenceStrength || "Unknown")} inference · ${escapeHtml(row.confidence || "Low")} confidence · Evidence: ${escapeHtml((row.evidenceReferences || []).join(", "))}</small></div>`).join("") || "<p>No grounded hypothesis is available.</p>"}</section>`;
+  return `<section class="analysis-card hypothesis-card"><h3><span data-icon="search"></span>Hypotheses</h3>${(rows || []).slice(0, 5).map((row) => `<div class="grounded-item"><p>${escapeHtml(row.description)}</p><small>${escapeHtml(row.inferenceStrength || "Unknown")} inference · ${escapeHtml(row.confidence || "Low")} confidence · Evidence: ${escapeHtml((row.evidenceReferences || []).join(", "))}</small></div>`).join("") || "<p>No grounded hypothesis is available.</p>"}</section>`;
 }
 
-function renderHypothesisBlock(rows) { return renderHypotheses((rows || []).map((description) => ({ description }))); }
-
 function renderRecommendedActions(rows, allowRating = true) {
-  return `<section class="analysis-card recommended-card"><h3><span data-icon="wand"></span>Recommended actions</h3><div class="action-lines">${(rows || []).slice(0, 7).map((row) => renderActionLine(row, allowRating)).join("") || "<p>No recommended actions returned.</p>"}</div></section>`;
+  return `<section class="analysis-card recommended-card"><h3><span data-icon="arrow"></span>Recommended actions</h3><div class="action-lines">${(rows || []).map((row) => renderActionLine(row, allowRating)).join("") || "<p>No recommended actions returned.</p>"}</div></section>`;
 }
 
 function renderActionLine(row, allowRating = true) {
@@ -917,7 +935,8 @@ function renderRunbookMatches(matches = []) {
   return `<section class="analysis-card"><h3><span data-icon="book"></span>Runbook matches (${matches.length})</h3>${matches.map((item) => `<div class="grounded-item"><strong>${escapeHtml(item.title)}</strong><p>${escapeHtml(item.summary)}</p><small>${escapeHtml(item.id)}</small></div>`).join("") || `<p>No runbook matched. This is not evidence that no runbook exists.</p>`}</section>`;
 }
 
-function renderAnalysisQuality(quality = {}) {
+function renderAnalysisQuality(quality = {}, state = "completed") {
+  if (state !== "completed") return '<section class="analysis-card quality-card"><h3>Analysis quality</h3><p>Not assessed. No completed analysis is available.</p></section>';
   const missing = quality.missingData || [];
   return `<section class="analysis-card quality-card"><h3><span data-icon="check"></span>Analysis quality</h3><dl class="quality-grid"><div><dt>Evidence coverage</dt><dd>${escapeHtml(quality.evidenceCoverage || "Low")}</dd></div><div><dt>Runbook match</dt><dd>${escapeHtml(quality.runbookMatchQuality || "Low")}</dd></div><div><dt>Recommendation specificity</dt><dd>${escapeHtml(quality.recommendationSpecificity || "Low")}</dd></div><div><dt>Provider used</dt><dd>${escapeHtml(quality.providerUsed || "unknown")}</dd></div><div><dt>Fallback status</dt><dd>${escapeHtml(quality.fallbackStatus || "not used")}</dd></div></dl><h4>Missing data</h4><ul>${missing.map((item) => `<li>${escapeHtml(item)}</li>`).join("") || "<li>No known missing data was identified.</li>"}</ul></section>`;
 }
@@ -929,19 +948,19 @@ function renderProviderTransparency(provider = {}) {
   const modelWarning = cleanStatusMessage(provider.modelResponseWarning);
   const modelTimedOut = /timed out|timeout/i.test(fallbackReason);
   const ragDegraded = Boolean(provider.isDegraded);
-  const embeddingDegraded = /embedding/i.test(degradedReason);
-  const modelState = provider.usedModelFallback ? (modelTimedOut ? "Timed out" : "Failed") : "Completed";
+  const embeddingDegraded = /local|hashing/i.test(String(provider.embeddingProvider || ""));
+  const modelState = provider.usedModelFallback ? (modelTimedOut ? "Timed out" : "Failed") : provider.modelProvider && provider.modelProvider !== "unknown" ? "Completed" : "Not available";
   const attemptedProvider = provider.attemptedModelProvider || (provider.usedModelFallback && /openrouter/i.test(fallbackReason) ? "OpenRouter" : provider.modelProvider) || "unknown";
   const attemptedModel = provider.attemptedModel || (provider.usedModelFallback && provider.model === "local" ? "configured model" : provider.model) || "model not reported";
   const modelTone = provider.usedModelFallback ? "error" : "ok";
   const embeddingName = embeddingDegraded ? "Local embeddings" : (provider.embeddingProvider || "unknown");
-  const embeddingState = embeddingDegraded ? "Primary provider unavailable" : "Available";
-  const ragState = ragDegraded ? "Degraded" : String(provider.ragStatus || "unknown");
+  const embeddingState = provider.ragStatus === "unavailable" ? "Unavailable" : embeddingDegraded ? "Primary provider unavailable" : provider.embeddingProvider ? "Available" : "Not available";
+  const ragState = diagnosticText(provider.ragStatus, ragDegraded ? "Degraded" : "Not available");
   return `<section class="analysis-card provider-card"><h3><span data-icon="database"></span>Provider status</h3><div class="provider-status-list">
     ${renderProviderStatus("Model provider", attemptedProvider, `${attemptedModel} · ${modelState}`, modelTone)}
     ${renderProviderStatus("Embedding provider", embeddingName, embeddingState, embeddingDegraded ? "warning" : "ok")}
-    ${renderProviderStatus("RAG retrieval", provider.vectorStore || "unknown", ragDegraded ? "Available with degraded embeddings" : ragState, ragDegraded || provider.ragStatus !== "available" ? "warning" : "ok")}
-    ${renderProviderStatus("Analysis fallback", provider.usedModelFallback ? "Used" : "Not used", provider.usedModelFallback ? "Local evidence analyzer produced this result" : "The model produced this result", provider.usedModelFallback ? "warning" : "ok")}
+    ${renderProviderStatus("RAG retrieval", provider.vectorStore || "unknown", ragState, ragDegraded || provider.ragStatus !== "available" ? "warning" : "ok")}
+    ${renderProviderStatus("Analysis fallback", provider.usedModelFallback ? "Used" : "Not used", provider.usedModelFallback ? "Local evidence analyzer produced this result" : modelState === "Completed" ? "The model produced this result" : "No successful model execution recorded", provider.usedModelFallback ? "warning" : "ok")}
   </div>
   <div class="provider-notices">
     ${degradedReason ? `<p class="system-notice notice-warning"><strong>RAG degraded</strong><span>${escapeHtml(degradedReason)}</span></p>` : ""}
@@ -952,34 +971,20 @@ function renderProviderTransparency(provider = {}) {
 }
 
 function renderProviderDiagnostics(provider = {}) {
-  const rows = [
-    ["Evidence gathering", provider.evidenceGatheringDurationMilliseconds],
-    ["RAG retrieval", provider.ragDurationMilliseconds],
-    ["Model execution", provider.modelDurationMilliseconds]
-  ].filter(([, value]) => Number(value) > 0);
-  const stage = provider.fallbackStage ? formatDiagnosticValue(provider.fallbackStage) : "not triggered";
-  const timeoutSource = provider.timeoutSource || "none";
-  if (!rows.length && stage === "not triggered" && timeoutSource === "none") return "";
-  return `<details class="provider-diagnostics"><summary>Execution diagnostics</summary><dl>${rows.map(([label, value]) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(`${Number(value)} ms`)}</dd></div>`).join("")}<div><dt>Fallback stage</dt><dd>${escapeHtml(stage)}</dd></div><div><dt>Timeout source</dt><dd>${escapeHtml(timeoutSource)}</dd></div></dl></details>`;
+  const rows = diagnosticRows(provider);
+  return `<details class="provider-diagnostics"><summary>Execution diagnostics</summary>${rows.length ? `<dl>${rows.map(([label, value]) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd></div>`).join("")}</dl>` : `<p>No execution timings were captured for this analysis.</p>`}</details>`;
 }
 
-function formatDiagnosticValue(value) { return String(value || "").replaceAll("_", " "); }
-
 function renderProviderStatus(label, value, detail, tone) {
-  return `<div class="provider-status-row"><span class="provider-status-dot tone-${escapeHtml(tone)}" aria-hidden="true"></span><div><span class="provider-label">${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong><small>${escapeHtml(detail)}</small></div></div>`;
+  return `<div class="provider-status-row"><span class="provider-status-dot tone-${escapeHtml(tone)}" aria-hidden="true"></span><div><span class="provider-label">${escapeHtml(label)}</span><strong>${escapeHtml(diagnosticText(value))}</strong><small>${escapeHtml(diagnosticText(detail))}</small></div></div>`;
 }
 
 function renderEvidenceBlock(evidence) {
-  const visible = (evidence || []).slice(0, 7);
+  const visible = (evidence || []);
   return `<section class="analysis-card evidence-card"><h3><span data-icon="activity"></span>Evidence (${visible.length})</h3>${visible.map((item) => {
     const evidenceTime = formatEvidenceTime(item.details);
     return `<div class="evidence-line"><div class="evidence-meta"><span class="evidence-label evidence-${escapeHtml(evidenceKind(item.source))}">${escapeHtml(formatEvidenceSource(item.source))}</span>${evidenceTime ? `<time>${escapeHtml(evidenceTime)}</time>` : ""}</div><div class="code-row"><code>${escapeHtml(item.summary)}</code><button type="button" class="copy-code-button" data-copy-code aria-label="Copy evidence"><span data-icon="copy"></span></button></div></div>`;
   }).join("") || `<p class="meta">No operational evidence was returned. Incident metadata is intentionally excluded.</p>`}</section>`;
-}
-
-function renderRunbookSteps(actions) {
-  if (actions.length === 0) return "";
-  return `<section class="analysis-card"><h3><span data-icon="book"></span>Runbook-derived steps (${actions.length})</h3>${actions.map((item, index) => `<div class="step-line"><span>${index + 1}</span><div><strong>${escapeHtml(item.description)}</strong><small>Source: ${escapeHtml(item.source)}</small></div></div>`).join("")}</section>`;
 }
 
 function renderSimilarBlock(items) {
@@ -1018,7 +1023,7 @@ function renderFeedbackCard() {
   const reasons = ["shallow", "missing evidence", "hallucinated evidence", "wrong SEV", "wrong root cause", "bad remediation", "ignored runbook", "repeated failed past action", "other"];
   const ratingIcon = (value) => /^(Useful|Correct)$/.test(value) ? "thumbs-up" : /^(Not Useful|Wrong)$/.test(value) ? "thumbs-down" : "minus";
   const ratingButtons = (field, values) => `<div class="rating-choice-row" role="group" aria-label="${field === "usefulness" ? "Analysis usefulness" : "Recommendation correctness"}">${values.map((value) => `<button class="rating-choice" type="button" aria-pressed="false" data-feedback-choice data-feedback-field="${field}" data-feedback-value="${escapeHtml(value)}"><span data-icon="${ratingIcon(value)}"></span>${escapeHtml(value)}</button>`).join("")}</div>`;
-  return `<details class="analysis-card feedback-card" open><summary><span><span data-icon="check"></span><strong data-feedback-heading>Rate this analysis</strong></span><small>Help improve future incident guidance</small></summary><div class="feedback-body">
+  return `<details class="analysis-card feedback-card"><summary><span><span data-icon="check"></span><strong data-feedback-heading>Rate this analysis</strong></span><small>Help improve future incident guidance</small></summary><div class="feedback-body">
     <input type="hidden" data-feedback-usefulness><input type="hidden" data-feedback-correctness>
     <div class="feedback-rating"><span>Was the analysis useful?</span>${ratingButtons("usefulness", ["Useful", "Partially Useful", "Not Useful"])}</div>
     <div class="feedback-rating"><span>Were the recommendations correct?</span>${ratingButtons("correctness", ["Correct", "Partially Correct", "Wrong"])}</div>
@@ -1054,20 +1059,44 @@ async function submitAnalysisFeedback(card) {
   } catch (error) { showToast("Feedback failed", error.message || String(error), "error"); }
 }
 
+function timelineSummary(event) {
+  if (event.type === 'acknowledged') return `Incident acknowledged by ${responderName(event.actor)}.`;
+  if (event.type !== 'assignment changed') return event.summary;
+  return String(event.summary).replace(/assigned to (.+)\.$/, (_, id) => `assigned to ${responderName(id)}.`);
+}
+
+function timelineTone(event) {
+  const type = String(event.type || '').toLowerCase();
+  if (/failed|rejected/.test(type) || (type === 'action recorded' && /failed/i.test(event.summary))) return 'danger';
+  if (/resolved|recovered|approved|completed/.test(type)) return 'success';
+  if (type === 'mitigated') return 'mitigated';
+  if (/confirmed/.test(type)) return 'confirmed';
+  if (/detected|work started/.test(type)) return 'warning';
+  if (/acknowledged|assignment|confirmed|created|started/.test(type)) return 'info';
+  return 'neutral';
+}
+
+function renderAvatar(profile) {
+  const name = profile?.name || 'Responder';
+  const initials = name.split(/[\s@._-]+/).filter(Boolean).slice(0, 2).map(part => part[0]).join('').toUpperCase();
+  const picture = profile?.picture && /^https:\/\//i.test(profile.picture) ? profile.picture : null;
+  return `<span class="user-avatar" aria-hidden="true">${escapeHtml(initials)}${picture ? `<img src="${escapeHtml(picture)}" alt="" width="28" height="28" referrerpolicy="no-referrer">` : ''}</span>`;
+}
+
 function renderTimeline(events = []) {
   if (!events?.length) return "";
-  return `<section class="analysis-card timeline-card"><h3><span data-icon="history"></span>Timeline</h3>${events.map((item) => `<div class="timeline-event"><time>${escapeHtml(new Date(item.occurredAtUtc).toLocaleString())}</time><div><strong>${escapeHtml(item.type)}</strong><p>${escapeHtml(item.summary)}</p>${item.evidenceReference ? `<code>${escapeHtml(item.evidenceReference)}</code>` : ""}</div></div>`).join("")}</section>`;
+  return `<section class="analysis-card timeline-card"><h3><span data-icon="history"></span>Timeline</h3>${events.map((item) => `<div class="timeline-event" data-tone="${timelineTone(item)}"><time>${escapeHtml(new Date(item.occurredAtUtc).toLocaleString())}</time><div><strong>${escapeHtml(item.type)}</strong>${item.actor ? `<small class="timeline-actor">${escapeHtml(responderName(item.actor))}</small>` : ""}<p>${escapeHtml(timelineSummary(item))}</p>${item.evidenceReference ? `<code>${escapeHtml(item.evidenceReference)}</code>` : ""}</div></div>`).join("")}</section>`;
 }
 
-function renderKnowledgeUpdate(incidentId, proposal) {
-  if (!proposal) return "";
-  const pending = proposal.status === "pending";
-  const publishedFile = `approved-${String(proposal.id || "").replaceAll("-", "")}.md`;
-  return `<section class="analysis-card knowledge-card"><div class="knowledge-heading"><div><p class="eyebrow">Resolution learning</p><h3><span data-icon="book"></span>Proposed runbook / postmortem update</h3></div><span class="badge knowledge-status knowledge-${escapeHtml(proposal.status)}">${escapeHtml(proposal.status)}</span></div><p>Review this draft before it can become reusable incident knowledge. Rejected drafts are excluded from RAG and similarity.</p><label>Edit proposed update<textarea data-knowledge-content ${pending ? "" : "readonly"}>${escapeHtml(proposal.content)}</textarea></label>${pending ? `<div class="knowledge-actions"><button type="button" data-knowledge-review="approved" data-incident-id="${escapeHtml(incidentId)}">Approve and publish</button><button class="secondary danger-outline" type="button" data-knowledge-review="rejected" data-incident-id="${escapeHtml(incidentId)}">Reject draft</button></div>` : `<p class="system-notice ${proposal.status === "approved" ? "notice-success" : "notice-neutral"}"><strong>${proposal.status === "approved" ? "Published to runbook knowledge" : "Not published"}</strong><span>${proposal.status === "approved" ? `${escapeHtml(publishedFile)} is stored in the configured runbook knowledge folder and indexed on the next RAG search.` : "This rejected update will not be used by RAG or similarity."}</span></p>${proposal.status === "approved" ? `<button class="secondary compact-button" type="button" data-view-published-knowledge="${escapeHtml(proposal.title)}"><span data-icon="search"></span>View published runbook in RAG</button>` : ""}`}</section>`;
+function renderKnowledgeUpdate() { return '<div data-knowledge-slot></div>'; }
+
+function searchPublishedKnowledge(title) {
+  elements.ragForm.query.value = title;
+  closeHistoryModal();
+  activateTab("rag");
 }
 
-async function reviewKnowledgeUpdate(incidentId, decision) {
-  const content = elements.historyDetail.querySelector("[data-knowledge-content]")?.value || null;
+async function reviewKnowledgeUpdate(incidentId, decision, content) {
   const approving = decision === "approved";
   const confirmed = await showConfirmation({
     title: approving ? "Approve and publish this update?" : "Reject this proposed update?",
@@ -1081,8 +1110,8 @@ async function reviewKnowledgeUpdate(incidentId, decision) {
     await loadRecent();
     const item = recentAnalyses.find((analysis) => analysis.incidentId === incidentId);
     if (item) renderHistoryDetail(item);
-    showToast(approving ? "Knowledge published" : "Draft rejected", approving ? "The approved update is now available to future retrieval." : "The draft will not be used by future retrieval.", "success");
-  } catch (error) { showToast("Review failed", error.message || String(error), "error"); }
+    showToast(approving ? "Knowledge published" : "Draft rejected", approving ? "Markdown was published. Open it in RAG to verify indexing and retrieval." : "The draft will not be used by future retrieval.", "success");
+  } catch (error) { showToast("Review failed", error.message || String(error), "error"); throw error; }
 }
 
 function renderIncidentCompare(incidentId) {
@@ -1103,7 +1132,7 @@ function renderIncidentCompare(incidentId) {
 
 async function loadRecent() {
   const separator = projectQuery("&");
-  recentAnalyses = normalizeArray(await requestJson(`/api/incidents/recent?maxResults=12${separator}`));
+  recentAnalyses = normalizeArray(await requestJson(`/api/incidents/recent?maxResults=100${separator}`));
   historyRows = recentAnalyses.map(toHistoryRow);
   populateHistoryFilters(historyRows);
   renderHistory();
@@ -1155,7 +1184,7 @@ function renderHistoryRow(row) {
   const connected = thread.count > 1;
   const threadStyle = connected ? ` style="--thread-hue:${sessionHue(row.sessionId)}"` : "";
   const relationship = row.sessionTurnNumber > 1 ? `Follow-up ${row.sessionTurnNumber - 1}` : "Original";
-  return `<tr class="${connected ? "session-connected" : ""}"${threadStyle} data-history-id="${escapeHtml(row.incidentId)}" tabindex="0" aria-label="Open ${escapeHtml(row.summary)}"><td><span class="history-id">${escapeHtml(row.displayId)}</span>${connected ? `<span class="thread-marker"><span data-icon="link"></span>${thread.count} linked · ${relationship}</span>` : ""}</td><td><button class="link-button" data-history-id="${escapeHtml(row.incidentId)}">${escapeHtml(trimTitle(row.summary))}</button><p class="history-description">${escapeHtml(row.description || "No description provided.")}</p><small>${row.tags.map((tag) => `<span>#${escapeHtml(tag)}</span>`).join(" ")}</small></td><td>${escapeHtml(row.service)}</td><td><span class="severity severity-${escapeHtml(row.severity)}">${escapeHtml(formatSeverityLabel(row.severity))}</span></td><td>${renderStatusText(row.status)}</td><td><span class="badge provider-${escapeHtml(row.provider)}">${escapeHtml(row.provider)}</span></td><td><span class="confidence-badge confidence-${escapeHtml(row.confidence)}">${escapeHtml(row.confidence)}</span></td></tr>`;
+  return `<tr class="${connected ? "session-connected" : ""}"${threadStyle} data-history-id="${escapeHtml(row.incidentId)}" tabindex="0" aria-label="Open ${escapeHtml(row.summary)}"><td><span class="history-id">${escapeHtml(row.displayId)}</span>${connected ? `<span class="thread-marker"><span data-icon="link"></span>${thread.count} linked · ${relationship}</span>` : ""}</td><td><button class="link-button" data-history-id="${escapeHtml(row.incidentId)}">${escapeHtml(row.summary)}</button><p class="history-description">${escapeHtml(row.description || "No description provided.")}</p><small>${row.tags.map((tag) => `<span>#${escapeHtml(tag)}</span>`).join(" ")}</small></td><td>${escapeHtml(row.service)}</td><td><span class="severity severity-${escapeHtml(row.severity)}">${escapeHtml(formatSeverityLabel(row.severity))}</span></td><td>${renderStatusText(row.status)}</td><td><span class="badge provider-${escapeHtml(row.provider)}">${escapeHtml(row.provider)}</span></td><td><span class="confidence-badge confidence-${escapeHtml(row.confidence)}">${escapeHtml(row.confidence)}</span></td></tr>`;
 }
 
 function getSessionThread(sessionId) {
@@ -1189,7 +1218,7 @@ function sessionHue(sessionId) {
 }
 
 function renderStatusText(currentStatus) {
-  const normalized = normalizeIncidentStatus(currentStatus);
+  const normalized = String(currentStatus || "unknown").toLowerCase();
   return `<span class="ticket-status-text status-text-${escapeHtml(normalized)}">${escapeHtml(formatStatusLabel(normalized))}</span>`;
 }
 
@@ -1198,7 +1227,7 @@ function renderLoadingState(message) {
 }
 
 function renderPendingKnowledgeReviews() {
-  const pending = recentAnalyses.filter(item => item.status === "resolved" && item.proposedKnowledgeUpdate?.status === "pending");
+  const pending = recentAnalyses.filter(item => item.proposedKnowledgeUpdate?.status === "pending");
   if (!pending.length) return "";
   return `<section class="learning-review-banner"><div><strong><span data-icon="book"></span>${pending.length} runbook update${pending.length === 1 ? "" : "s"} awaiting review</strong><p>Open a resolved incident to edit, approve, or reject its proposed reusable knowledge.</p></div><div>${pending.slice(0, 3).map(item => `<button class="secondary compact-button" type="button" data-history-id="${escapeHtml(item.incidentId)}">Review ${escapeHtml(formatHistoryId(item.incidentId, 0))}</button>`).join("")}</div></section>`;
 }
@@ -1231,7 +1260,8 @@ function renderTicketActions(incidentId, currentStatus) {
     resolved: [["active", "Reopen"]]
   };
   const actions = actionsByStatus[normalized] || actionsByStatus.active;
-  return `<div class="ticket-actions">${actions.map(([status, label]) => `<button class="secondary compact-button ticket-action ticket-action-${escapeHtml(status)}" type="button" data-ticket-status="${status}" data-incident-id="${escapeHtml(incidentId)}">${escapeHtml(label)}</button>`).join("")}</div>`;
+  const explanations = { active: 'Investigation is in progress.', mitigated: 'Impact is reduced or contained; investigation remains open.', resolved: 'Recovery is confirmed. Close the incident and generate a draft for administrator review.' };
+  return `<div class="ticket-actions">${actions.map(([status, label]) => `<button class="secondary compact-button ticket-action ticket-action-${escapeHtml(status)}" type="button" title="${escapeHtml(explanations[status])}" data-ticket-status="${status}" data-incident-id="${escapeHtml(incidentId)}">${escapeHtml(label)}</button>`).join("")}</div>`;
 }
 
 async function deleteIncident(incidentId) {
@@ -1274,23 +1304,56 @@ async function updateIncidentStatus(incidentId, status) {
     historyPage = 1;
     const activeItem = recentAnalyses.find((analysis) => analysis.incidentId === incidentId);
     if (activeItem && !elements.historyModal.hidden) renderHistoryDetail(activeItem);
-    showToast("Ticket updated", `Status set to ${formatStatusLabel(normalized)}.`, "success");
+    if (normalized === "resolved" && activeItem) {
+      renderHistoryDetail(activeItem);
+      showToast("Incident resolved", activeItem.proposedKnowledgeUpdate?.status === "pending" ? "Runbook proposal generated · Pending review. Review it in this incident." : "The existing knowledge review is preserved.", "success");
+    } else showToast("Ticket updated", `Status set to ${formatStatusLabel(normalized)}.`, "success");
   } catch (error) {
     showToast("Status not saved", error.message || String(error), "error");
   }
 }
 
 function renderHistoryDetail(item) {
-  if (elements.historyModal.hidden) historyModalReturnFocus = document.activeElement;
-  const actions = item.recommendedActions || [];
-  const hypotheses = item.hypotheses || [];
-  const evidence = item.evidence || [];
-  const linkedAnalyses = recentAnalyses.filter((analysis) => analysis.sessionId === item.sessionId).length;
-  elements.historyDetail.innerHTML = `<p class="eyebrow">${item.sessionTurnNumber > 1 ? `Follow-up analysis ${item.sessionTurnNumber - 1}` : "Original analysis"}</p><div class="modal-title-row"><div><h3 id="historyModalTitle">${escapeHtml(item.incidentTitle || item.incidentSummary)}</h3>${renderStatusText(item.status || "active")}</div>${renderTicketActions(item.incidentId, item.status || "active")}</div><p class="incident-detail-description">${escapeHtml(item.incidentDescription || "No description provided.")}</p>${item.incidentSummary && item.incidentSummary !== item.incidentTitle ? `<p class="analysis-summary"><strong>Analysis summary:</strong> ${escapeHtml(item.incidentSummary)}</p>` : ""}<div class="session-link-row"><div class="session-identity"><span><span class="live-dot"></span>Linked session</span><code title="${escapeHtml(item.sessionId)}">${escapeHtml(item.sessionId)}</code></div><div class="session-count"><strong>Turn ${item.sessionTurnNumber}</strong><span>${linkedAnalyses} linked ${linkedAnalyses === 1 ? "analysis" : "analyses"}</span></div><button class="icon-refresh-button" type="button" data-copy-session="${escapeHtml(item.sessionId)}" aria-label="Copy session ID"><span data-icon="copy"></span></button><button class="secondary compact-button" type="button" data-follow-up-session="${escapeHtml(item.sessionId)}">Continue session</button></div>${renderKnowledgeUpdate(item.incidentId, item.proposedKnowledgeUpdate)}${renderProviderTransparency(item.providerTransparency)}${renderRecommendedActions(actions, false)}${renderGroundedFacts(item.knownFacts)}${renderHypotheses(hypotheses)}${renderAnalysisBlock("Unknowns & validation gaps", item.unknowns, "info")}${renderStoredEvidenceBlock(evidence)}${renderRunbookMatches(item.runbookMatches)}${renderAnalysisQuality(item.quality)}${renderPriorActions(item.similarIncidents)}${renderOutcomeHistory(item.actionOutcomes)}${renderFeedbackHistory(item.feedback)}${renderTimeline(item.timeline)}<section class="danger-zone"><div><strong>Delete incident</strong><p>Remove this incident from history and future similarity matches.</p></div><button class="compact-button delete-incident-button" type="button" data-delete-incident="${escapeHtml(item.incidentId)}"><span data-icon="trash"></span>Delete incident</button></section>`;
-  elements.historyDetail.insertAdjacentHTML("afterbegin", renderCoordination(item) + renderServiceOwnership(item));
+  const opening = elements.historyModal.hidden;
+  if (opening) historyModalReturnFocus = document.activeElement;
+  const focusAttribute = ['data-save-coordination', 'data-ticket-status', 'data-retry-analysis'].find(attribute => document.activeElement?.hasAttribute(attribute));
+  const focusSelector = focusAttribute ? `[${focusAttribute}="${CSS.escape(document.activeElement.getAttribute(focusAttribute))}"]` : null;
+  const activity = latestActivity(item.timeline);
+  const linkedAnalyses = recentAnalyses.filter(analysis => analysis.sessionId === item.sessionId).length;
+  const metadata = [
+    ['Project', projectName(item.projectId)], ['Service', item.serviceName || 'Not reported'],
+    ['Environment', item.environment || 'Not reported'], ['Owner', responderName(item.assignee)],
+    ['Created', formatTimestamp(item.createdAtUtc) || 'Not reported'],
+    ['Last activity', activity ? formatTimestamp(activity.occurredAtUtc) : 'Not recorded'],
+    ['Evidence sources', incidentSources(item)], ['Analysis', item.analysisState || 'Not reported']
+  ];
+  elements.historyDetail.innerHTML = `<header class="detail-header"><div class="detail-identity"><code title="${escapeHtml(item.incidentId)}">${escapeHtml(formatHistoryId(item.incidentId))}</code><span class="severity severity-${escapeHtml(String(item.severity || 'unknown').toLowerCase().replace('-', ''))}">${escapeHtml(formatSeverityLabel(item.severity))}</span>${renderStatusText(item.status)}<span class="meta">${item.sessionTurnNumber > 1 ? `Follow-up analysis ${item.sessionTurnNumber - 1}` : 'Original analysis'}</span></div><div class="modal-title-row"><h2 id="historyModalTitle">${escapeHtml(item.incidentTitle || item.incidentSummary)}</h2>${renderTicketActions(item.incidentId, item.status)}</div><p class="incident-detail-description">${escapeHtml(item.incidentDescription || 'No description provided.')}</p><dl class="incident-properties">${metadata.map(([label, value]) => `<div><dt>${label}</dt><dd>${escapeHtml(value)}</dd></div>`).join('')}</dl></header>
+  <div class="detail-workbench"><div class="investigation-column">
+    <section class="investigation-summary"><h3>Investigation</h3><span class="meta">${item.analysisState === "completed" || !item.analysisState ? `${escapeHtml(normalizeConfidence(item.confidence))} confidence` : "Confidence not assessed"}</span>${item.incidentSummary ? `<p>${escapeHtml(item.incidentSummary)}</p>` : '<p>No analysis summary returned.</p>'}</section>
+    ${renderAnalysisDisclosure(item.providerTransparency, item.analysisState)}
+    ${renderGroundedFacts(item.knownFacts)}${renderHypotheses(item.hypotheses)}${renderAnalysisBlock('Unknowns & validation gaps', item.unknowns, 'info', 'unknowns-card')}
+    ${renderRecommendedActions(item.recommendedActions, false)}${renderStoredEvidenceBlock(item.evidence)}${renderRunbookMatches(item.runbookMatches)}${renderPriorActions(item.similarIncidents)}${renderAnalysisQuality(item.quality, item.analysisState)}${renderFeedbackHistory(item.feedback)}${renderKnowledgeUpdate(item.incidentId, item.proposedKnowledgeUpdate)}
+    <details class="provider-details"><summary>Provider & retrieval diagnostics</summary>${renderProviderTransparency(item.providerTransparency)}</details>
+    <section class="danger-zone" ${isAdmin() ? "" : "hidden"}><div><strong>Delete incident</strong><p>Remove this incident from history and future similarity matches.</p></div><button class="compact-button delete-incident-button" type="button" data-delete-incident="${escapeHtml(item.incidentId)}"><span data-icon="trash"></span>Delete incident</button></section>
+  </div><aside class="response-column" aria-label="Response coordination">
+    ${renderCoordination(item)}${renderServiceOwnership(item)}
+    ${item.sessionId ? `<section class="session-link-row"><div class="session-identity"><span>Investigation session</span><code title="${escapeHtml(item.sessionId)}">${escapeHtml(item.sessionId)}</code></div><div class="session-count"><strong>Turn ${item.sessionTurnNumber}</strong><span>${linkedAnalyses} linked ${linkedAnalyses === 1 ? 'analysis' : 'analyses'}</span></div><button class="icon-refresh-button" type="button" data-copy-session="${escapeHtml(item.sessionId)}" aria-label="Copy session ID"><span data-icon="copy"></span></button><button class="secondary compact-button" type="button" data-follow-up-session="${escapeHtml(item.sessionId)}">Continue session</button></section>` : '<section class="session-link-row"><p>No investigation session yet. A successful analysis starts one.</p></section>'}
+    ${renderOutcomeHistory(item.actionOutcomes) || '<section class="analysis-card"><h3>Actions taken</h3><p>No action outcomes recorded.</p></section>'}${renderTimeline(item.timeline) || '<section class="analysis-card"><h3>Timeline</h3><p>No activity recorded.</p></section>'}
+  </aside></div>`;
+  publishDetail({ target: elements.historyDetail.querySelector("[data-knowledge-slot]"), incident: item, canReview: isAdmin(), onReview: reviewKnowledgeUpdate, onSearch: searchPublishedKnowledge });
   elements.historyModal.hidden = false;
+  document.querySelector('.app-shell').inert = true;
+  document.body.classList.add('detail-open');
   hydrateIcons(elements.historyDetail);
-  requestAnimationFrame(() => elements.historyModalClose.focus());
+  if (opening) requestAnimationFrame(() => elements.historyModalClose.focus());
+  else (focusSelector && elements.historyDetail.querySelector(focusSelector) || elements.historyModalClose).focus();
+}
+
+function renderAnalysisDisclosure(provider = {}, state) {
+  if (state === "pending") return '<p class="analysis-disclosure disclosure-warning">Analysis has not completed. If it was interrupted, retry from response coordination after the request timeout.</p>';
+  const fallback = provider.usedModelFallback;
+  const text = state === 'failed' ? 'Analysis unavailable. The incident is saved; retry from response coordination.' : fallback ? 'Local fallback analysis · ' + (provider.fallbackReason || 'The configured model did not produce this analysis.') : 'Analysis provider: ' + (provider.modelProvider || 'Not reported') + (provider.model ? ' / ' + provider.model : '');
+  return `<p class="analysis-disclosure ${fallback || state === 'failed' ? 'disclosure-warning' : ''}">${escapeHtml(text)}</p>${provider.isDegraded ? `<p class="analysis-disclosure disclosure-warning">RAG degraded: ${escapeHtml(cleanStatusMessage(provider.degradedReason) || 'Retrieval is degraded; inspect provider diagnostics.')}</p>` : ''}`;
 }
 
 function renderFeedbackHistory(feedback = []) {
@@ -1299,22 +1362,28 @@ function renderFeedbackHistory(feedback = []) {
 }
 
 function renderStoredEvidenceBlock(evidence) {
-  const rows = normalizeArray(evidence).slice(0, 8);
+  const rows = normalizeArray(evidence);
   if (!rows.length) return "";
   return `<section class="analysis-card evidence-card"><h3><span data-icon="activity"></span>Saved evidence (${rows.length})</h3>${rows.map((item) => `<div class="stored-evidence-line"><strong>${escapeHtml(formatEvidenceSource(item.source))}</strong><p>${escapeHtml(item.summary || item.description || item.details || "Evidence item")}</p>${item.details ? `<small>${escapeHtml(item.details)}</small>` : ""}</div>`).join("")}</section>`;
 }
 
 function closeHistoryModal() {
+  publishDetail(null);
   elements.historyModal.hidden = true;
+  document.querySelector(".app-shell").inert = false;
+  document.body.classList.remove("detail-open");
   const returnFocus = historyModalReturnFocus;
   historyModalReturnFocus = null;
   if (returnFocus?.isConnected) returnFocus.focus();
 }
 
 function renderCoordination(item) {
-  const acknowledged = item.acknowledgedAtUtc ? `${item.acknowledgedBy || "Responder"} · ${new Date(item.acknowledgedAtUtc).toLocaleString()}` : "Not acknowledged";
-  const retry = item.analysisState === "failed" ? `<button type="button" class="secondary compact-button" data-retry-analysis="${escapeHtml(item.incidentId)}">Retry analysis</button>` : "";
-  return `<section class="analysis-card coordination-card"><h3>Ownership & acknowledgement</h3><div class="outcome-form"><label>Assignee<input data-assignee value="${escapeHtml(item.assignee || "")}" placeholder="Responder name or team"></label><button type="button" data-save-coordination="${escapeHtml(item.incidentId)}">Save assignment</button>${item.acknowledgedAtUtc ? "" : `<button type="button" class="secondary" data-save-coordination="${escapeHtml(item.incidentId)}" data-acknowledge="true">Acknowledge</button>`}${retry}</div><p class="meta">${escapeHtml(acknowledged)} · Analysis: ${escapeHtml(item.analysisState || "completed")}</p></section>`;
+  const acknowledged = item.acknowledgedAtUtc ? `${responderName(item.acknowledgedBy)} · ${new Date(item.acknowledgedAtUtc).toLocaleString()}` : "Not acknowledged";
+  const stalePending = item.analysisState === "pending" && Date.now() - Date.parse(item.createdAtUtc) > 180_000;
+  const retry = item.analysisState === "failed" || stalePending ? `<button type="button" class="secondary compact-button" data-retry-analysis="${escapeHtml(item.incidentId)}">Retry analysis</button>` : "";
+  const options = responders.map(person => `<option value="${escapeHtml(person.id)}" ${person.id === item.assignee ? 'selected' : ''}>${escapeHtml(person.name)}</option>`).join('');
+  const legacy = item.assignee && !responders.some(person => person.id === item.assignee) ? `<option selected value="${escapeHtml(item.assignee)}">${escapeHtml(responderName(item.assignee))} (existing assignment)</option>` : '';
+  return `<section class="analysis-card coordination-card"><h3>Ownership & acknowledgement</h3><div class="outcome-form"><label>Assignee<select data-assignee><option value="">Unassigned</option>${legacy}${options}</select></label><button type="button" data-save-coordination="${escapeHtml(item.incidentId)}">Save assignment</button>${authSession.userId ? `<button type="button" class="secondary" data-save-coordination="${escapeHtml(item.incidentId)}" data-assignment="self">Assign to me</button>` : ''}${item.assignee ? `<button type="button" class="secondary" data-save-coordination="${escapeHtml(item.incidentId)}" data-assignment="clear">Unassign</button>` : ''}${item.acknowledgedAtUtc ? "" : `<button type="button" class="secondary" data-save-coordination="${escapeHtml(item.incidentId)}" data-acknowledge="true">Acknowledge</button>`}${retry}</div><p class="meta">${escapeHtml(acknowledged)} · Analysis: ${escapeHtml(item.analysisState || "completed")}</p><p class="meta">Acknowledge records that you have seen the incident. Ownership and status stay unchanged. The list includes responders who have signed in to this workspace.</p></section>`;
 }
 
 function renderServiceOwnership(item) {
@@ -1324,22 +1393,38 @@ function renderServiceOwnership(item) {
 }
 
 async function updateIncidentCoordination(incidentId, assignee, acknowledge) {
-  await requestJson(`/api/incidents/${encodeURIComponent(incidentId)}/coordination`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ assignee, acknowledge }) });
-  await loadRecent();
-  const item = recentAnalyses.find(row => row.incidentId === incidentId);
-  if (item) renderHistoryDetail(item);
-  showToast(acknowledge ? "Incident acknowledged" : "Assignment saved", assignee || "Assignment cleared", "success");
+  const controls = [...elements.historyDetail.querySelectorAll('[data-save-coordination]')];
+  controls.forEach(button => { button.disabled = true; });
+  try {
+    await requestJson(`/api/incidents/${encodeURIComponent(incidentId)}/coordination`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ assignee, acknowledge }) });
+    await loadRecent();
+    const item = recentAnalyses.find(row => row.incidentId === incidentId);
+    if (item) renderHistoryDetail(item);
+    showToast(acknowledge ? "Incident acknowledged" : "Assignment saved", acknowledge ? "Your acknowledgement was recorded; ownership is unchanged." : responderName(assignee), "success");
+  } catch (error) { showToast('Coordination not saved', error.message || String(error), 'error'); }
+  finally { controls.forEach(button => { button.disabled = false; }); }
 }
 
 async function retryIncidentAnalysis(incidentId) {
+  const controls = [...document.querySelectorAll(`[data-retry-analysis="${CSS.escape(incidentId)}"]`)];
+  if (controls.some(button => button.disabled)) return;
+  controls.forEach(button => { button.disabled = true; button.textContent = "Retrying analysis…"; });
   try {
     const result = await requestJson(`/api/incidents/${encodeURIComponent(incidentId)}/analysis/retry`, { method: "POST" });
     renderAnalysis(result);
     await loadRecent();
     const item = recentAnalyses.find(row => row.incidentId === incidentId);
     if (item) renderHistoryDetail(item);
-    showToast("Analysis completed", "The external provider returned a new analysis.", "success");
-  } catch (error) { showToast("Analysis still unavailable", error.message || String(error), "error"); }
+    showToast("Analysis completed", result.usedFallbackAnalysis ? "Local fallback produced this result; inspect provider diagnostics." : "The configured model returned a new analysis.", "success");
+  } catch (error) {
+    showToast("Analysis still unavailable", error.message || String(error), "error");
+    try {
+      await loadRecent();
+      const saved = recentAnalyses.find(row => row.incidentId === incidentId);
+      if (saved) renderHistoryDetail(saved);
+    } catch { /* The failure toast remains useful when the API itself is unreachable. */ }
+  }
+  finally { controls.forEach(button => { button.disabled = false; button.textContent = "Retry analysis"; }); }
 }
 
 function showConfirmation({ title, message, confirmLabel = "Confirm", destructive = false }) {
@@ -1373,8 +1458,9 @@ function getModalFocusableElements(modal = elements.historyModal) {
 }
 
 function renderSourcesPage(items) {
-  const warning = items.some((item) => item.isDemoMode) ? `<div class="warning-banner"><span data-icon="alert"></span>Sample data active - logs and metrics are bundled sample files. Connect real sources for production use.</div>` : "";
-  const projectCards = projects.map((project) => `<article class="project-source-card"><div><h3>${escapeHtml(project.name || project.id)} <span class="badge project-badge">${escapeHtml(project.id)}</span></h3><p>${escapeHtml(project.sourceHealthEndpoint || "No health endpoint configured")}</p><div class="badge-row"><span class="badge">logs: ${escapeHtml(project.logEntriesPath ? "configured" : "default")}</span><span class="badge">metrics: ${escapeHtml(project.metricSamplesPath ? "configured" : "default")}</span><span class="badge">threshold: errors ${escapeHtml(project.thresholds?.highErrorRateThreshold ?? "?")}</span></div></div>${project.removable ? `<button class="secondary compact-button danger-outline" type="button" data-remove-project="${escapeHtml(project.id)}"><span data-icon="trash"></span>Remove</button>` : `<span class="badge muted">Configured</span>`}</article>`).join("");
+  const sampleSources = items.filter(item => item.isDemoMode).map(item => item.name);
+  const warning = sampleSources.length ? `<div class="warning-banner"><span data-icon="alert"></span>Sample data active for: ${escapeHtml(sampleSources.join(', '))}. Other sources retain their reported status.</div>` : "";
+  const projectCards = projects.map((project) => `<article class="project-source-card"><div><h3>${escapeHtml(project.name || project.id)} <span class="badge project-badge">${escapeHtml(project.id)}</span></h3><p>${escapeHtml(project.sourceHealthEndpoint || "No health endpoint configured")}</p><div class="badge-row"><span class="badge">logs: ${escapeHtml(project.logEntriesPath ? "configured" : "default")}</span><span class="badge">metrics: ${escapeHtml(project.metricSamplesPath ? "configured" : "default")}</span><span class="badge">threshold: errors ${escapeHtml(project.thresholds?.highErrorRateThreshold ?? "Not configured")}</span></div></div>${project.removable && isAdmin() ? `<button class="secondary compact-button danger-outline" type="button" data-remove-project="${escapeHtml(project.id)}"><span data-icon="trash"></span>Remove</button>` : `<span class="badge muted">Configured</span>`}</article>`).join("");
   return `${warning}<section class="project-source-grid">${projectCards}</section>${items.map(renderSourceCard).join("")}<section class="setup-section"><div class="setup-heading"><div><h3><span data-icon="plug"></span>Source configuration</h3><p>Source locations are read-only here because configuration is managed in appsettings or environment variables. Configured means a path is set; connected means the API verified it.</p></div></div><div class="setup-steps"><span><strong>1</strong> Configure paths</span><span><strong>2</strong> Refresh monitor</span><span><strong>3</strong> Verify RAG diagnostics</span></div></section>`;
 }
 
@@ -1408,11 +1494,10 @@ async function searchRag() {
   const query = new FormData(elements.ragForm).get("query");
   if (!String(query || "").trim()) return;
   const result = await requestJson(`/api/runbooks/search?query=${encodeURIComponent(query)}&maxResults=8`);
-  const provider = String(result.vectorStoreProvider || "sqlite");
-  const isQdrant = provider.toLowerCase().includes("qdrant");
-  elements.ragSummary.innerHTML = `<dl class="metric-strip diag-strip"><div><dt>Embedding Provider</dt><dd>${escapeHtml(result.embeddingProvider || "unknown")}</dd><p>${escapeHtml(result.embeddingModel || "model not reported")}</p></div><div><dt>Vector Store</dt><dd>${escapeHtml(provider)}</dd><p>${escapeHtml(result.databasePath || "path not reported")}</p></div><div><dt>RAG Status</dt><dd><span class="${result.isDegraded ? "idle-dot" : "live-dot"}"></span> ${escapeHtml(result.ragStatus || "unknown")}</dd><p>${escapeHtml(result.knowledgeBasePath || "knowledge base not reported")}</p></div></dl>${result.isDegraded ? `<div class="warning-banner"><span data-icon="alert"></span>RAG degraded: ${escapeHtml(result.degradedReason || "retrieval fallback active")}</div>` : ""}`;
+  const provider = diagnosticText(result.vectorStoreProvider);
+  elements.ragSummary.innerHTML = `<dl class="metric-strip diag-strip"><div><dt>Embedding Provider</dt><dd>${escapeHtml(result.embeddingProvider || "unknown")}</dd><dd class="diagnostic-location">${escapeHtml(result.embeddingModel || "model not reported")}</dd></div><div><dt>Vector Store</dt><dd>${escapeHtml(provider)}</dd><dd class="diagnostic-location">${escapeHtml(vectorStoreLocation(result))}</dd></div><div><dt>RAG Status</dt><dd><span class="${result.isDegraded ? "idle-dot" : "live-dot"}"></span> ${escapeHtml(result.ragStatus || "unknown")}</dd><dd class="diagnostic-location">${escapeHtml(result.knowledgeBasePath || "knowledge base not reported")}</dd></div></dl>${result.isDegraded ? `<div class="warning-banner"><span data-icon="alert"></span>RAG degraded: ${escapeHtml(result.degradedReason || "The retrieval provider reported degraded availability.")}</div>` : ""}`;
   const rows = normalizeArray(result.matches);
-  elements.ragResults.innerHTML = `<div class="section-title stacked rag-title"><h3><span data-icon="search"></span>Match Scores</h3><span class="meta">Actual runbook chunks returned by the retrieval API for this query</span></div>${rows.map((item) => renderRagMatch(item)).join("") || `<div class="empty-state">No runbook chunks matched the current query.</div>`}`;
+  elements.ragResults.innerHTML = `<div class="section-title stacked rag-title"><h3><span data-icon="search"></span>Match Scores</h3><span class="meta">Actual runbook chunks returned by the retrieval API for this query</span></div>${rows.map((item) => renderRagMatch(item)).join("") || `<div class="empty-state">${result.ragStatus === "unavailable" ? "Retrieval is unavailable. Restore the reported dependency and search again." : "No runbook chunks matched the current query."}</div>`}`;
   hydrateIcons(elements.ragSummary);
   hydrateIcons(elements.ragResults);
 }
@@ -1426,17 +1511,8 @@ function renderRagMatch(item) {
 
 async function loadEvaluation() {
   const scenarios = normalizeArray(await requestJson("/api/evaluation/scenarios"));
-  const defaults = [
-    ["eval-001", "DB pool exhaustion - known pattern", "Checkout service pool exhaustion with clear logs and metrics"],
-    ["eval-002", "Ambiguous CPU spike - weak signal", "CPU spike with only metric data, no logs"],
-    ["eval-003", "Memory leak - model fallback path", "Triggers local fallback due to model timeout"],
-    ["eval-004", "Invalid model JSON - structured fallback", "Model returns malformed JSON response"]
-  ];
-  const rows = defaults.map((fallback, index) => {
-    const item = scenarios[index] || {};
-    return { id: item.id || fallback[0], title: item.title || fallback[1], subtitle: item.description || item.name || fallback[2] };
-  });
-  elements.evaluation.innerHTML = rows.map((item, index) => `<article class="evaluation-card"><div><small>${escapeHtml(item.id)}</small><h3>${escapeHtml(item.title)}</h3><p>${escapeHtml(item.subtitle)}</p></div><button class="compact-button" type="button" data-evaluation-run="${index}" data-icon="play">Run</button></article>`).join("");
+  const rows = scenarios.map(item => ({ ...item, id: item.name, subtitle: item.description }));
+  elements.evaluation.innerHTML = rows.length ? rows.map((item, index) => `<article class="evaluation-card"><div><small>${escapeHtml(item.id)}</small><h3>${escapeHtml(item.title)}</h3><p>${escapeHtml(item.subtitle)}</p></div><button class="compact-button" type="button" data-evaluation-run="${index}" data-icon="play">Run</button></article>`).join("") : `<p class="empty-state">No evaluation scenarios are available.</p>`;
   hydrateIcons(elements.evaluation);
   elements.evaluation.querySelectorAll("[data-evaluation-run]").forEach((button) => button.addEventListener("click", () => runEvaluationScenario(rows[Number(button.dataset.evaluationRun)])));
 }
@@ -1446,10 +1522,10 @@ async function runEvaluationScenario(item) {
   activateTab("analysis");
   elements.incidentForm.title.value = item.title;
   elements.incidentForm.description.value = item.subtitle;
-  elements.incidentForm.severity.value = item.title.includes("DB") ? "sev1" : "sev2";
-  elements.incidentForm.serviceName.value = item.title.includes("CPU") ? "worker-service" : "checkout-service";
-  elements.incidentForm.environment.value = "prod";
-  elements.incidentForm.tags.value = item.title.toLowerCase().replace(/[^a-z0-9]+/g, ", ").replace(/^, |, $/g, "");
+  elements.incidentForm.severity.value = String(item.severity).toLowerCase();
+  elements.incidentForm.serviceName.value = item.serviceName || "";
+  elements.incidentForm.environment.value = item.environment || "";
+  elements.incidentForm.tags.value = (item.tags || []).join(", ");
   await analyzeCurrentIncident();
 }
 
@@ -1477,7 +1553,7 @@ function renderConfig() {
   const authMessage = authSession.authenticated
     ? `Signed in as ${escapeHtml(authSession.name || "authenticated user")}${escapeHtml(roles)}.`
     : authSession.browserLoginEnabled
-      ? "Sign in through your organization's identity provider. Credentials and refresh tokens are never exposed to this page."
+      ? "Sign in with your account through Auth0. Credentials and refresh tokens are never exposed to this page."
       : "Browser login is not configured. Set the Auth0 domain, browser client ID, and browser client secret to enable sign-in.";
   const authAction = authSession.browserLoginEnabled
     ? authSession.authenticated
@@ -1497,7 +1573,7 @@ function renderMonitorSummary(items) {
     durationSeconds: 0,
     scannedAt: null
   };
-  const active = polling && state.connectedSources > 0;
+  const active = polling;
   const lastScanTime = state.scannedAt ? state.scannedAt.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "Not run";
   return `<dl class="metric-strip monitor-strip"><div><dt>Monitor Status</dt><dd><span class="${active ? "live-dot" : "idle-dot"}"></span>${active ? "Active" : "Paused"}</dd></div><div><dt>Polling Interval</dt><dd class="interval-value">${escapeHtml(elements.pollingSlider.value)}s</dd></div><div><dt>Last Scan</dt><dd>${escapeHtml(lastScanTime)}</dd></div></dl><article class="scan-result"><h3><span data-icon="activity"></span>Last Scan Result</h3><p>Scanned ${state.scannedSources} sources - found ${state.signalsFound} signals, ${state.errors} errors.</p><p class="scan-stat-line"><span>Signals found: <strong>${state.signalsFound}</strong></span><span>Errors: <strong class="${state.errors ? "danger-text" : "success-text"}">${state.errors}</strong></span><span>Duration: <strong>${state.durationSeconds.toFixed(1)}s</strong></span></p></article>`;
 }
@@ -1524,17 +1600,10 @@ function formatProviderMessage(result, mode) {
 async function loadRunbookSources() {
   try {
     const sources = normalizeArray(await requestJson("/api/runbooks/sources"));
-    elements.runbookSources.innerHTML = sources.map(renderRunbookSource).join("") || `<div class="empty-state">No runbook sources are connected.</div>`;
-    hydrateIcons(elements.runbookSources);
+    publishSources({ sources, loaded: true, error: null, canManage: isAdmin(), onAction: handleRunbookSourceAction });
   } catch (error) {
-    elements.runbookSources.innerHTML = `<div class="error-box">${escapeHtml(error.message || String(error))}</div>`;
+    publishSources({ error: error.message || String(error), loaded: true });
   }
-}
-
-function renderRunbookSource(source) {
-  const statusClass = source.reachable ? "status-connected" : "status-missing";
-  const enabledLabel = source.enabled ? "Enabled" : "Disabled";
-  return `<article class="runbook-source-card"><div><div class="badge-row"><strong>${escapeHtml(source.name)}</strong><span class="badge">${escapeHtml(source.type)}</span><span class="badge ${statusClass}">${source.reachable ? "Reachable" : "Unavailable"}</span><span class="badge">${enabledLabel}</span></div><p>${escapeHtml(source.path)}</p><small>${Number(source.documentCount) || 0} documents · ${Number(source.sectionCount) || 0} indexed sections · Last synchronized ${source.lastSynchronizedAtUtc ? escapeHtml(formatTimestamp(source.lastSynchronizedAtUtc)) : "not yet"}</small>${source.lastError ? `<div class="error-box compact-error">${escapeHtml(source.lastError)}</div>` : ""}</div><div class="runbook-source-actions"><button class="secondary compact-button" type="button" data-runbook-source-action="sync" data-source-id="${escapeHtml(source.id)}"><span data-icon="refresh"></span>Sync</button>${source.removable ? `<button class="secondary compact-button" type="button" data-runbook-source-action="toggle" data-enabled="${source.enabled}" data-source-id="${escapeHtml(source.id)}">${source.enabled ? "Disable" : "Enable"}</button><button class="secondary compact-button danger-outline" type="button" data-runbook-source-action="remove" data-source-id="${escapeHtml(source.id)}"><span data-icon="trash"></span>Remove</button>` : ""}</div></article>`;
 }
 
 async function connectRunbookSource() {
@@ -1547,22 +1616,26 @@ async function connectRunbookSource() {
   } catch (error) { showToast("Source connection failed", error.message || String(error), "error"); }
 }
 
-async function handleRunbookSourceAction(button) {
-  const id = button.dataset.sourceId;
-  const action = button.dataset.runbookSourceAction;
+async function handleRunbookSourceAction(source, action) {
+  const id = source.id;
   if (action === "remove") {
     const confirmed = await showConfirmation({ title: "Remove this runbook source?", message: "Its indexed sections will be removed during the next synchronization. Source files will not be deleted.", confirmLabel: "Remove source", destructive: true });
     if (!confirmed) return;
   }
-  button.disabled = true;
   try {
-    if (action === "sync") await requestJson(`/api/runbooks/sources/${encodeURIComponent(id)}/synchronize`, { method: "POST" });
-    if (action === "toggle") await requestJson(`/api/runbooks/sources/${encodeURIComponent(id)}/enabled`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: button.dataset.enabled !== "true" }) });
+    if (action === "sync") {
+      const synchronized = await requestJson(`/api/runbooks/sources/${encodeURIComponent(id)}/synchronize`, { method: "POST" });
+      if (synchronized.lastError || !synchronized.reachable) {
+        await loadRunbookSources();
+        throw new Error(synchronized.lastError || "The source is unavailable. Check its path and try again.");
+      }
+    }
+    if (action === "toggle") await requestJson(`/api/runbooks/sources/${encodeURIComponent(id)}/enabled`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: !source.enabled }) });
     if (action === "remove") await requestJson(`/api/runbooks/sources/${encodeURIComponent(id)}`, { method: "DELETE" });
     await loadRunbookSources();
     if (action === "sync") await searchRag();
     showToast("Runbook sources updated", action === "sync" ? "Source content was re-indexed." : "Source configuration was saved.", "success");
-  } catch (error) { button.disabled = false; showToast("Runbook source update failed", error.message || String(error), "error"); }
+  } catch (error) { showToast("Runbook source update failed", error.message || String(error), "error"); throw error; }
 }
 
 function confidenceRows(result, similar) {
@@ -1604,80 +1677,14 @@ function hydrateIcons(root = document) {
   });
 }
 
-async function requestJson(url, options = {}) {
-  const headers = new Headers(options.headers || {});
-  if (authSession.csrfToken && !["GET", "HEAD", "OPTIONS", "TRACE"].includes(String(options.method || "GET").toUpperCase())) headers.set("X-CSRF-TOKEN", authSession.csrfToken);
-  const response = await fetch(url, { ...options, headers });
-  const text = await response.text();
-  const data = text ? JSON.parse(text) : null;
-  if (!response.ok) throw new Error(data?.detail || data?.title || response.statusText);
-  return data;
-}
 
-function normalizeArray(value) { return Array.isArray(value) ? value : Array.isArray(value?.value) ? value.value : []; }
-function cleanStatusMessage(value) {
-  const sentences = String(value || "").split(/(?<=[.!?])\s+/).map((item) => item.trim()).filter(Boolean);
-  return [...new Map(sentences.map((item) => [item.toLowerCase(), item])).values()].join(" ");
-}
-function splitTags(value) { return String(value || "").split(",").map((tag) => tag.trim()).filter(Boolean); }
-function emptyToNull(value) { const text = String(value || "").trim(); return text ? text : null; }
-function escapeHtml(value) { return String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#039;"); }
-function formatTime(value) { return value ? new Date(value).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : ""; }
-function formatTimestamp(value) { return value ? new Date(value).toLocaleString() : ""; }
-function formatReadableTime(value) {
-  if (!value) return "";
-  return new Date(value).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" });
-}
-function formatEvidenceTime(details) {
-  const match = String(details || "").match(/\d{4}-\d{2}-\d{2}T[^\s]+/);
-  return match ? formatReadableTime(match[0]) : "";
-}
-function formatAgo(value) {
-  if (!value) return "not run";
-  const timestamp = new Date(value).getTime();
-  if (!Number.isFinite(timestamp)) return "not run";
-  const minutes = Math.max(0, Math.round((Date.now() - timestamp) / 60000));
-  if (minutes < 1) return "just now";
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  if (days < 30) return `${days}d ago`;
-  const months = Math.floor(days / 30);
-  if (months < 12) return `${months}mo ago`;
-  return `${Math.floor(days / 365)}y ago`;
-}
-function shortenId(value) { const text = String(value || ""); return text.length > 12 ? `${text.slice(0, 8)}...` : text || "none"; }
-function formatIncidentTitle(title) { return String(title || "").replace("request error rate threshold breached", "error rate threshold").replace("queue depth threshold breached", "queue depth threshold").replace("suspicious log pattern", "log signal"); }
-function formatEvidenceSource(source) { return String(source || "evidence").replace("tool.logs", "LOG").replace("tool.metrics", "METRIC").replace("incident.description", "INCIDENT").replace(/^rag\.runbook\./, "RUNBOOK ").replace(/^history\.incident\./, "HISTORY "); }
-function evidenceKind(source) { return String(source || "").includes("metrics") ? "metric" : String(source || "").includes("logs") ? "log" : "generic"; }
-function formatNotes(value) { return String(value || "No notes captured.").trim(); }
-function trimTitle(value) { const text = String(value || "Untitled incident"); return text.length > 31 ? `${text.slice(0, 31)}...` : text; }
-function normalizeAction(value) { return String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim(); }
-function inferService(value) { const text = String(value || "").toLowerCase(); if (text.includes("auth")) return "auth-service"; if (text.includes("notification")) return "notification-worker"; if (text.includes("cdn")) return "cdn-edge"; if (text.includes("user")) return "user-service"; return "checkout-service"; }
-function inferEnvironment(value) { const text = String(value || "").toLowerCase(); if (/\bstaging\b|\bstage\b/.test(text)) return "staging"; if (/\bdev\b|\bdevelopment\b/.test(text)) return "dev"; if (/\btest\b|\bqa\b/.test(text)) return "test"; return "prod"; }
-function shortRunbookName(value) { const text = String(value || "runbook/checkout-db.md").replaceAll("\\", "/"); const match = text.match(/KnowledgeBase\/(.+)$/i); return match ? `runbook/${match[1]}` : text.split("/").slice(-2).join("/"); }
-function parseJson(value) { try { return JSON.parse(value); } catch { return null; } }
-function similarPercent(score, index) { return Math.round((Number(score) || [0.94, 0.81, 0.71][index] || 0.64) * 100); }
-function scoreColor(percent) { return percent >= 90 ? "green" : percent >= 75 ? "yellow" : "red"; }
-function formatHistoryId(value, index) { const text = String(value || ""); return text ? `INC-${text.replace(/-/g, "").slice(0, 4).toUpperCase()}` : `INC-${2847 - index}`; }
-function inferSeverity(summary, parsed) { const text = `${summary || ""} ${JSON.stringify(parsed || {})}`.toLowerCase(); if (text.includes("critical")) return "sev1"; if (text.includes("5xx") || text.includes("latency")) return "sev2"; return "sev3"; }
-function formatSeverityLabel(value) { const key = String(value || "").toLowerCase().replace("-", ""); return ({ sev1: "SEV-1", sev2: "SEV-2", sev3: "SEV-3", sev4: "SEV-4", sev5: "SEV-5" })[key] || "SEV-3"; }
-function formatStatusLabel(value) { return ({ candidate: "Candidate", false_positive: "False positive", ignored: "Ignored", merged: "Merged", recovered: "Recovered", new: "Confirmed", active: "Active", mitigated: "Mitigated", resolved: "Resolved" })[String(value || "").toLowerCase()] || "Active"; }
-function normalizeIncidentStatus(value) {
-  const status = String(value || "active").toLowerCase();
-  if (status === "ack") return "active";
-  return ["new", "active", "mitigated", "resolved"].includes(status) ? status : "active";
-}
-function inferHistoryTags(value) {
-  const text = String(value || "").toLowerCase();
-  const tags = [];
-  if (text.includes("latency") || text.includes("p95")) tags.push("latency");
-  if (text.includes("checkout")) tags.push("checkout");
-  if (text.includes("database") || text.includes("db") || text.includes("pool")) tags.push("database");
-  if (text.includes("auth") || text.includes("token")) tags.push("auth");
-  if (text.includes("cdn") || text.includes("cache")) tags.push("cache");
-  return tags.length ? tags.slice(0, 3) : ["incident"];
+function endSession() {
+  if (sessionEnded) return;
+  sessionEnded = true;
+  stopPolling();
+  window.clearInterval(analysisWaitTimer);
+  document.querySelector("[data-react-console]")?.setAttribute("hidden", "");
+  location.replace(`/login?reason=expired&returnUrl=${encodeURIComponent("/" + location.hash)}`);
 }
 function toHistoryRow(item, index) {
   const parsed = parseJson(item.analysisText) || {};
@@ -1690,12 +1697,12 @@ function toHistoryRow(item, index) {
     description: item.incidentDescription || "",
     notes: formatNotes(item.notes),
     tags: item.tags?.length ? item.tags : inferHistoryTags(sourceText),
-    service: item.serviceName || inferService(sourceText),
-    environment: item.environment || inferEnvironment(sourceText),
-    severity: String(item.severity || inferSeverity(item.incidentSummary, parsed)).toLowerCase(),
+    service: item.serviceName || "Not reported",
+    environment: item.environment || "Not reported",
+    severity: String(item.severity || "unknown").toLowerCase(),
     status: normalizeIncidentStatus(item.status),
-    provider: item.usedFallbackAnalysis ? "local" : "model",
-    confidence: String(item.confidence || parsed.confidence || "medium").toLowerCase(),
+    provider: item.analysisState === "failed" ? "unavailable" : item.analysisState === "pending" ? "pending" : item.usedFallbackAnalysis ? "local" : "model",
+    confidence: item.analysisState && item.analysisState !== "completed" ? "not assessed" : String(item.confidence || parsed.confidence || "unknown").toLowerCase(),
     actionOutcomes: item.actionOutcomes || [],
     sessionId: item.sessionId,
     sessionTurnNumber: item.sessionTurnNumber,
@@ -1725,7 +1732,7 @@ function setSelectOptions(select, label, values, formatLabel = (value) => value)
 }
 function renderError(target, error) { target.innerHTML = `<div class="error-box">${escapeHtml(error.message || String(error))}</div>`; }
 function setFeedback(target, title, message, status) { target.innerHTML = `<span class="status-pill status-${status}">${escapeHtml(title)}</span><span>${escapeHtml(message)}</span>`; }
-function showToast(title, message, tone = "info") { const toast = document.createElement("div"); toast.className = `toast toast-${tone}`; toast.setAttribute("role", tone === "error" ? "alert" : "status"); toast.innerHTML = `<strong>${escapeHtml(title)}</strong><span>${escapeHtml(message)}</span>`; elements.toast.appendChild(toast); setTimeout(() => toast.remove(), 4200); }
+function showToast(title, message, tone = "info") { const toast = document.createElement("div"); toast.className = `toast toast-${tone}`; toast.setAttribute("role", tone === "error" ? "alert" : "status"); toast.innerHTML = `<strong>${escapeHtml(title)}</strong><span>${escapeHtml(message)}</span>`; const dismiss = document.createElement("button"); dismiss.type = "button"; dismiss.className = "secondary compact-button"; dismiss.textContent = "Dismiss"; dismiss.setAttribute("aria-label", `Dismiss ${title}`); dismiss.addEventListener("click", () => toast.remove()); toast.appendChild(dismiss); elements.toast.appendChild(toast); setTimeout(() => toast.remove(), 4200); }
 async function copyCodeText(button) {
   const text = button.closest(".code-row")?.querySelector("code")?.textContent || "";
   if (!text) return;
@@ -1746,12 +1753,6 @@ async function copyText(text, successTitle = "Copied") {
     textarea.remove();
     showToast(successTitle, "Copied to clipboard.", "success");
   }
-}
-function normalizeConfidence(value) {
-  const text = String(value || "Medium").toLowerCase();
-  if (text.includes("high")) return "High";
-  if (text.includes("low")) return "Low";
-  return "Medium";
 }
 function renderAnalysisMeta(header, meta) {
   const parts = [];
@@ -1777,10 +1778,17 @@ async function initialize() {
   hydrateIcons();
   await checkHealth();
   try {
-    const response = await fetch("/auth/session");
+    const response = await fetch("/auth/session", { cache: "no-store" });
     if (response.ok) authSession = await response.json();
-  } catch { /* Config view reports unavailable authentication state. */ }
+    else throw new Error("Session unavailable");
+  } catch { location.replace("/login"); return; }
+  if (!authSession.authenticated || !authSession.canAccess) { endSession(); return; }
+  $("#accountSummary").innerHTML = `<span>Signed in</span><div class="account-person">${renderAvatar(authSession)}<strong>${escapeHtml(displayIdentity(authSession.name))}</strong></div>${authSession.browserLoginEnabled ? `<form method="post" action="/auth/logout"><input type="hidden" name="__RequestVerificationToken" value="${escapeHtml(authSession.csrfToken || "")}"><button type="submit" class="secondary">Sign out</button></form>` : ""}`;
+  document.documentElement.dataset.role = isAdmin() ? 'admin' : 'responder';
+  document.querySelectorAll('#projectForm, #runbookSourceForm').forEach(form => { form.closest('details').hidden = !isAdmin(); });
+  document.addEventListener('error', event => { if (event.target instanceof HTMLImageElement && event.target.closest('.user-avatar')) event.target.remove(); }, true);
   try {
+    responders = normalizeArray(await requestJson("/api/responders"));
     await loadProjects();
     serviceCatalog = normalizeArray(await requestJson("/api/services"));
     await loadSources();
@@ -1788,7 +1796,7 @@ async function initialize() {
   } catch (error) {
     renderConfig();
     activateTab("config");
-    showToast("Authentication required", authSession.browserLoginEnabled ? "Sign in through your identity provider to load incident data." : "Browser OIDC login is not configured.", "warning");
+    showToast("Workspace could not load", error.message || "Check service availability and try again.", "error");
     return;
   }
   elements.lastScan.innerHTML = renderMonitorSummary(detectedCandidates);

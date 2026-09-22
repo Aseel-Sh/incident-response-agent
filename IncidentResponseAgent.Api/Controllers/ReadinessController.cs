@@ -27,7 +27,8 @@ public sealed class ReadinessController(
 		var operational = operationalOptions.Value;
 		var storage = storageOptions.Value;
 		var modelConfigured = HasValue(agent.ApiKey, "IRA_AGENT_API_KEY", "OPENROUTER_API_KEY") && !string.IsNullOrWhiteSpace(agent.Model);
-		var embeddingsConfigured = HasValue(runbooks.ApiKey, "HF_TOKEN", "HF_API_TOKEN");
+		var embeddingsConfigured = runbooks.EmbeddingProvider.Equals("OpenRouter", StringComparison.OrdinalIgnoreCase)
+			? HasValue(runbooks.ApiKey, "OPENROUTER_API_KEY") : HasValue(runbooks.ApiKey, "HF_TOKEN", "HF_API_TOKEN");
 		var vectorStore = runbooks.VectorStoreProvider.Equals("Qdrant", StringComparison.OrdinalIgnoreCase)
 			? (!string.IsNullOrWhiteSpace(runbooks.QdrantEndpoint) ? "configured" : "unconfigured")
 			: "local-selected";
@@ -44,7 +45,7 @@ public sealed class ReadinessController(
 			{
 				authentication = new { status = authenticationConfigured ? "oidc-configured" : authenticationOptions.Value.AllowDevelopmentIdentity ? "development-identity" : "unconfigured", authority = authenticationOptions.Value.Authority, audience = authenticationOptions.Value.Audience },
 				model = new { status = modelConfigured ? "configured" : "unconfigured", provider = agent.Provider, agent.Model },
-				embeddings = new { status = embeddingsConfigured ? "configured" : "unconfigured", runbooks.Model },
+				embeddings = new { status = embeddingsConfigured ? "configured" : "unconfigured", provider = runbooks.EmbeddingProvider, runbooks.Model },
 				vectorStore = new { status = vectorStore, provider = runbooks.VectorStoreProvider, endpoint = runbooks.VectorStoreProvider.Equals("Qdrant", StringComparison.OrdinalIgnoreCase) ? runbooks.QdrantEndpoint : null },
 				persistence = new { status = persistenceConfigured ? "configured" : "default-local", incidentRecords = storage.IncidentRecordsPath, sessions = storage.SessionDatabasePath },
 				telemetry = new { status = logs == "available" && metrics == "available" ? "available" : "degraded", logs, metrics },

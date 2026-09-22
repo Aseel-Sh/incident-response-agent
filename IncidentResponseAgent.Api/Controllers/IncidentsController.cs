@@ -256,12 +256,19 @@ public sealed class IncidentsController : ControllerBase
     }
 
     [HttpPut("{incidentId:guid}/coordination")]
-    public async Task<ActionResult<object>> UpdateCoordinationAsync(Guid incidentId, [FromBody] IncidentCoordinationRequest request, CancellationToken cancellationToken)
+    public async Task<ActionResult<object>> UpdateCoordinationAsync(Guid incidentId, [FromBody] IncidentCoordinationRequest request, [FromServices] IncidentResponseAgent.Api.Services.ResponderDirectory responders, CancellationToken cancellationToken)
     {
         try
         {
             var actor = User.Identity?.Name ?? throw new InvalidOperationException("Authenticated responder identity is unavailable.");
-            var record = await _incidentRecordStore.UpdateCoordinationAsync(incidentId, request.Assignee, actor, request.Acknowledge, cancellationToken);
+            var existing = await _incidentRecordStore.GetByIncidentIdAsync(incidentId, cancellationToken);
+            if (existing is null) return NotFound();
+            await responders.RegisterAsync(User, cancellationToken);
+            var assignee = request.Acknowledge ? existing.Assignee : string.IsNullOrWhiteSpace(request.Assignee) ? null : request.Assignee.Trim();
+            if (!request.Acknowledge && assignee is not null && assignee != existing.Assignee
+                && !(await responders.ListAsync(cancellationToken)).Any(profile => profile.Id == assignee))
+                return BadRequest("Select a responder who has signed in to this workspace.");
+            var record = await _incidentRecordStore.UpdateCoordinationAsync(incidentId, assignee, actor, request.Acknowledge, cancellationToken);
             return Ok(new { record.Assignee, record.AcknowledgedBy, record.AcknowledgedAtUtc });
         }
         catch (KeyNotFoundException) { return NotFound(); }
@@ -362,7 +369,7 @@ public sealed class IncidentsController : ControllerBase
 
     private static IncidentTimelineEventResponse ToTimelineResponse(IncidentTimelineEvent item) => new(item.Type, item.OccurredAtUtc, item.Summary, item.Actor, item.EvidenceReference);
 
-    private static ProposedKnowledgeUpdateResponse ToKnowledgeResponse(ProposedKnowledgeUpdate item) => new(item.Id, item.Title, item.Content, item.Status, item.GeneratedAtUtc, item.ReviewedAtUtc, item.ReviewNotes);
+    private static ProposedKnowledgeUpdateResponse ToKnowledgeResponse(ProposedKnowledgeUpdate item) => new(item.Id, item.Title, item.Content, item.Status, item.GeneratedAtUtc, item.ReviewedAtUtc, item.ReviewNotes, item.PublicationStatus, item.PublicationError);
 
     private static AnalysisFeedbackResponse ToFeedbackResponse(IncidentAnalysisFeedback item) => new(item.Id, item.AnalysisUsefulness, item.RecommendationCorrectness, item.ReasonTags, item.RecommendationDescription, item.Comments, item.SubmittedAtUtc);
 

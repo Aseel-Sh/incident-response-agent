@@ -329,16 +329,33 @@ public sealed class FileIncidentRecordStore : IIncidentRecordStore
 			if (record.ProposedKnowledgeUpdate is null) throw new InvalidOperationException("No proposed knowledge update exists.");
 			var now = DateTimeOffset.UtcNow;
 			var updatedProposal = record.ProposedKnowledgeUpdate with { Status = normalized, Content = string.IsNullOrWhiteSpace(content) ? record.ProposedKnowledgeUpdate.Content : content.Trim(), ReviewNotes = notes?.Trim(), ReviewedAtUtc = now };
-			if (_approvedKnowledgePublisher is not null && normalized == "rejected")
+			try
 			{
-				await _approvedKnowledgePublisher.RemoveAsync(updatedProposal.Id, cancellationToken);
+				if (_approvedKnowledgePublisher is not null)
+				{
+					if (normalized == "approved")
+						await _approvedKnowledgePublisher.PublishAsync(updatedProposal.Id, incidentId, updatedProposal.Title, updatedProposal.Content, cancellationToken);
+					else await _approvedKnowledgePublisher.RemoveAsync(updatedProposal.Id, cancellationToken);
+				}
 			}
+			catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+			{
+				var reason = "The runbook file could not be published or removed. Check the knowledge folder permissions and available disk space, then retry.";
+				records[incidentId] = record with { ProposedKnowledgeUpdate = record.ProposedKnowledgeUpdate with { PublicationStatus = "failed", PublicationError = reason }, UpdatedAtUtc = now };
+				await WriteRecordsAsync(records.Values, cancellationToken);
+				throw new InvalidOperationException(reason, exception);
+			}
+			updatedProposal = updatedProposal with { PublicationStatus = normalized == "approved" && _approvedKnowledgePublisher is not null ? "published" : "not_published", PublicationError = null };
 			records[incidentId] = record with { ProposedKnowledgeUpdate = updatedProposal, UpdatedAtUtc = now, Timeline = record.Timeline.Append(Event($"runbook update {normalized}", $"Proposed knowledge update {normalized} by a human.", now, actor: "user")).ToArray() };
-			await WriteRecordsAsync(records.Values, cancellationToken);
-			if (_approvedKnowledgePublisher is not null && normalized == "approved")
+			try { await WriteRecordsAsync(records.Values, cancellationToken); }
+			catch
 			{
-				await _approvedKnowledgePublisher.PublishAsync(updatedProposal.Id, incidentId, updatedProposal.Title, updatedProposal.Content, cancellationToken);
+				// Do not leave newly published knowledge trusted when its approval was not saved.
+				if (_approvedKnowledgePublisher is not null && normalized == "approved" && record.ProposedKnowledgeUpdate.Status != "approved")
+					await _approvedKnowledgePublisher.RemoveAsync(updatedProposal.Id, CancellationToken.None);
+				throw;
 			}
+
 			return updatedProposal;
 		}
 		finally { _fileLock.Release(); }
@@ -665,7 +682,7 @@ public sealed class FileIncidentRecordStore : IIncidentRecordStore
 				timeline.Add(Event("assignment changed", normalizedAssignee is null ? "Incident assignment cleared." : $"Incident assigned to {normalizedAssignee}.", now, actor: normalizedActor ?? "user"));
 			if (acknowledge && record.AcknowledgedAtUtc is null)
 				timeline.Add(Event("acknowledged", $"Incident acknowledged by {normalizedActor ?? normalizedAssignee ?? "user"}.", now, actor: normalizedActor ?? normalizedAssignee ?? "user"));
-			var updated = record with { Assignee = normalizedAssignee, AcknowledgedBy = acknowledge ? normalizedActor ?? normalizedAssignee ?? "user" : record.AcknowledgedBy, AcknowledgedAtUtc = acknowledge ? record.AcknowledgedAtUtc ?? now : record.AcknowledgedAtUtc, UpdatedAtUtc = now, Timeline = timeline };
+			var updated = record with { Assignee = normalizedAssignee, AcknowledgedBy = acknowledge && record.AcknowledgedAtUtc is null ? normalizedActor ?? normalizedAssignee ?? "user" : record.AcknowledgedBy, AcknowledgedAtUtc = acknowledge ? record.AcknowledgedAtUtc ?? now : record.AcknowledgedAtUtc, UpdatedAtUtc = now, Timeline = timeline };
 			records[incidentId] = updated;
 			await WriteRecordsAsync(records.Values, cancellationToken);
 			return updated;

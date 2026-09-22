@@ -27,12 +27,13 @@ for (const scenario of scenarios) {
       })
     });
     const evidenceSources = (analysis.retrievedEvidence || []).map(item => String(item.source || ''));
+    const evidenceSourceSet = new Set(evidenceSources);
     const required = scenario.expectedEvidenceSignals || [];
     const evidenceHits = required.filter(expected => evidenceSources.some(source => source.includes(expected))).length;
     const claimCount = (analysis.knownFacts || []).length;
-    const unsupportedClaims = (analysis.knownFacts || []).filter(claim => !(claim.evidenceReferences || []).every(reference => evidenceSources.includes(reference))).length;
+    const unsupportedClaims = (analysis.knownFacts || []).filter(claim => !(claim.evidenceReferences || []).every(reference => evidenceSourceSet.has(reference))).length;
     const recommendations = analysis.recommendedActions || [];
-    const groundedRecommendations = recommendations.filter(action => (action.supportingSignals || []).length > 0 && action.supportingSignals.every(signal => evidenceSources.includes(signal))).length;
+    const groundedRecommendations = recommendations.filter(action => (action.supportingSignals || []).length > 0 && action.supportingSignals.every(signal => evidenceSourceSet.has(signal))).length;
     const provider = analysis.providerTransparency || {};
     results.push({
       scenario: scenario.name, passed: true,

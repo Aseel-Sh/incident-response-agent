@@ -96,7 +96,8 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 		var agentResult = await _incidentAnalysisAgent.AnalyzeAsync(incident, sessionContext, agentContext, cancellationToken);
 		var analysisText = agentResult.AnalysisText;
 		var structuredAnalysis = AgentStructuredAnalysisParser.TryParse(analysisText);
-		var usedDeterministicStructuredFallback = structuredAnalysis is null && !agentResult.UsedFallback;
+		if (structuredAnalysis is null && !agentResult.UsedFallback)
+			throw new IncidentAnalysisUnavailableException("The external model returned invalid structured analysis. No analysis was accepted. Retry with a model that supports the incident JSON schema.");
 		var confidence = structuredAnalysis?.Confidence ?? ExtractConfidence(analysisText) ?? "Low";
 		var nextSessionContext = sessionContext with
 		{
@@ -123,15 +124,10 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 			IncidentSummary = BuildSummary(incident),
 			Severity = FormatSeverity(incident.Severity),
 			AnalysisText = analysisText,
-			AnalysisProvider = usedDeterministicStructuredFallback
-				? $"{agentResult.Provider}/deterministic-structured-fallback"
-				: agentResult.Provider,
+			AnalysisProvider = agentResult.Provider,
 			AnalysisModel = agentResult.Model,
-			UsedFallbackAnalysis = agentResult.UsedFallback || usedDeterministicStructuredFallback,
-			FallbackReason = agentResult.FallbackReason
-				?? (usedDeterministicStructuredFallback
-					? "Model returned unstructured or invalid JSON; deterministic structured fields were used."
-					: null),
+			UsedFallbackAnalysis = agentResult.UsedFallback,
+			FallbackReason = agentResult.FallbackReason,
 			Evidence = MergeEvidence(groundedEvidence, structuredAnalysis?.Evidence),
 			KnownFacts = BuildKnownFacts(groundedEvidence),
 			Unknowns = missingData,
@@ -142,15 +138,15 @@ public sealed class AnalyzeIncidentUseCase : IAnalyzeIncidentUseCase
 			Quality = BuildQuality(groundedEvidence, runbookResult, recommendations, missingData) with
 			{
 				ProviderUsed = agentResult.Provider,
-				FallbackStatus = agentResult.UsedFallback || usedDeterministicStructuredFallback ? "used" : "not used"
+				FallbackStatus = agentResult.UsedFallback ? "used" : "not used"
 			},
 			ProviderTransparency = new AnalysisProviderTransparency
 			{
 				ModelProvider = agentResult.Provider, Model = agentResult.Model, EmbeddingProvider = runbookResult.EmbeddingProvider,
 				AttemptedModelProvider = agentResult.AttemptedProvider, AttemptedModel = agentResult.AttemptedModel,
 				VectorStore = runbookResult.VectorStoreProvider, RagStatus = runbookResult.RagStatus,
-				UsedModelFallback = agentResult.UsedFallback || usedDeterministicStructuredFallback,
-				FallbackReason = agentResult.FallbackReason ?? (usedDeterministicStructuredFallback ? "Model returned invalid structured output." : null),
+				UsedModelFallback = agentResult.UsedFallback,
+				FallbackReason = agentResult.FallbackReason,
 				IsDegraded = runbookResult.IsDegraded, DegradedReason = runbookResult.DegradedReason,
 				UsedStructuredOutputRetry = agentResult.UsedStructuredOutputRetry,
 				StructuredOutputRetryReason = agentResult.StructuredOutputRetryReason,

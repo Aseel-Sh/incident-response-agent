@@ -136,13 +136,13 @@ public sealed class ResilientIncidentAnalysisAgent : IIncidentAnalysisAgent
 		if (message.Contains("empty message", StringComparison.OrdinalIgnoreCase)
 		    || message.Contains("empty analysis response", StringComparison.OrdinalIgnoreCase))
 		{
-			return "Model returned empty output; local analysis used the gathered runbooks, logs, metrics, and incident history.";
+			return "Model returned empty output.";
 		}
 
 		if (message.Contains("429", StringComparison.OrdinalIgnoreCase)
 		    || message.Contains("Too Many Requests", StringComparison.OrdinalIgnoreCase))
 		{
-			return "Model provider is rate-limited; local analysis used the gathered runbooks, logs, metrics, and incident history.";
+			return "Model provider is rate-limited. Retry after the provider quota resets.";
 		}
 
 		if (message.Length > 220)
@@ -150,6 +150,6 @@ public sealed class ResilientIncidentAnalysisAgent : IIncidentAnalysisAgent
 			message = string.Concat(message.AsSpan(0, 217), "...");
 		}
 
-		return $"{exception.GetType().Name} - {message}.";
+		return message;
 	}
 }

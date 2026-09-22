@@ -1,0 +1,22 @@
+import {test,expect} from '@playwright/test';
+test('background scanning continues without a browser, pauses, resumes, and deduplicates',async({request})=>{
+  test.setTimeout(60_000);
+  const state=async()=> (await request.get('/api/monitoring/state')).json();
+  await request.put('/api/monitoring/interval',{data:{seconds:5}});
+  await request.post('/api/monitoring/resume');
+  await expect.poll(async()=> (await state()).lastScan?.id,{timeout:20_000,intervals:[1000]}).toBeTruthy();
+  const first=await state();
+  await expect.poll(async()=> (await state()).lastScan?.id,{timeout:20_000,intervals:[1000]}).not.toBe(first.lastScan.id);
+  const response=await request.get('/api/incidents/detected');
+  const body=await response.json();
+  const candidates=Array.isArray(body)?body:body.candidates;
+  expect(candidates.length).toBeGreaterThan(0);
+  expect(new Set(candidates.map((c:any)=>c.candidateId || c.id)).size).toBe(candidates.length);
+  await request.post('/api/monitoring/pause');
+  await expect.poll(async()=> (await state()).scanInProgress).toBeFalsy();
+  const paused=await state();
+  await new Promise(resolve=>setTimeout(resolve,6500));
+  expect((await state()).lastScan.id).toBe(paused.lastScan.id);
+  await request.post('/api/monitoring/resume');
+  await expect.poll(async()=> (await state()).lastScan.id,{timeout:15_000,intervals:[1000]}).not.toBe(paused.lastScan.id);
+});

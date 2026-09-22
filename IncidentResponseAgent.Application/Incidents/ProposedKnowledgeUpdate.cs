@@ -15,4 +15,8 @@ public sealed record ProposedKnowledgeUpdate
 	public DateTimeOffset? ReviewedAtUtc { get; init; }
 
 	public string? ReviewNotes { get; init; }
+
+	public string PublicationStatus { get; init; } = "not_published";
+
+	public string? PublicationError { get; init; }
 }

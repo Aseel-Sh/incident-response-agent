@@ -38,7 +38,8 @@ internal sealed class QdrantRunbookVectorStore
 		}
 	}
 
-	public string ProviderName => _available ? "qdrant" : "qdrant-unavailable/sqlite-fallback";
+	public string ProviderName => _available ? "qdrant" : "qdrant-unavailable";
+	public bool IsAvailable => _available;
 
 	public string Endpoint => _httpClient.BaseAddress?.ToString().TrimEnd('/') ?? _options.QdrantEndpoint;
 
@@ -46,7 +47,7 @@ internal sealed class QdrantRunbookVectorStore
 
 	public async Task<bool> EnsureCollectionAsync(int vectorSize, CancellationToken cancellationToken)
 	{
-		if (!_available || vectorSize <= 0)
+		if (vectorSize <= 0)
 		{
 			return false;
 		}
@@ -58,12 +59,13 @@ internal sealed class QdrantRunbookVectorStore
 			{
 				if (existingState.VectorSize is null || existingState.VectorSize == vectorSize)
 				{
+					_available = true;
 					return true;
 				}
 
 				_available = false;
 				_logger.LogWarning(
-					"Qdrant collection {CollectionName} vector size is {ExistingVectorSize}, expected {ExpectedVectorSize}. Falling back to SQLite vector search.",
+					"Qdrant collection {CollectionName} vector size is {ExistingVectorSize}, expected {ExpectedVectorSize}. The retrieval service will apply the configured fallback policy.",
 					CollectionName,
 					existingState.VectorSize,
 					vectorSize);
@@ -88,10 +90,11 @@ internal sealed class QdrantRunbookVectorStore
 			{
 				_available = false;
 				_logger.LogWarning("Vector store failed. Provider={Provider} Operation={Operation} StatusCode={StatusCode}.", "qdrant", "collection-setup", response.StatusCode);
-				_logger.LogWarning("Qdrant collection setup failed with status {StatusCode}. Falling back to SQLite vector search.", response.StatusCode);
+				_logger.LogWarning("Qdrant collection setup failed with status {StatusCode}. The retrieval service will apply the configured fallback policy.", response.StatusCode);
 				return false;
 			}
 
+			_available = true;
 			return true;
 		}
 		catch (OperationCanceledException)
@@ -102,7 +105,7 @@ internal sealed class QdrantRunbookVectorStore
 		{
 			_available = false;
 			_logger.LogWarning(exception, "Vector store failed. Provider={Provider} Operation={Operation}.", "qdrant", "collection-setup");
-			_logger.LogWarning(exception, "Qdrant collection setup failed. Falling back to SQLite vector search.");
+			_logger.LogWarning(exception, "Qdrant collection setup failed. The retrieval service will apply the configured fallback policy.");
 			return false;
 		}
 	}
@@ -147,7 +150,7 @@ internal sealed class QdrantRunbookVectorStore
 			{
 				_available = false;
 				_logger.LogWarning("Vector store failed. Provider={Provider} Operation={Operation} StatusCode={StatusCode}.", "qdrant", "search", response.StatusCode);
-				_logger.LogWarning("Qdrant upsert failed with status {StatusCode}. SQLite vector search remains available.", response.StatusCode);
+				_logger.LogWarning("Qdrant upsert failed with status {StatusCode}. The retrieval service will apply the configured fallback policy.", response.StatusCode);
 				return false;
 			}
 
@@ -162,7 +165,7 @@ internal sealed class QdrantRunbookVectorStore
 		{
 			_available = false;
 			_logger.LogWarning(exception, "Vector store failed. Provider={Provider} Operation={Operation}.", "qdrant", "search");
-			_logger.LogWarning(exception, "Qdrant upsert failed. SQLite vector search remains available.");
+			_logger.LogWarning(exception, "Qdrant upsert failed. The retrieval service will apply the configured fallback policy.");
 			return false;
 		}
 	}
@@ -241,7 +244,7 @@ internal sealed class QdrantRunbookVectorStore
 			if (!response.IsSuccessStatusCode)
 			{
 				_available = false;
-				_logger.LogWarning("Qdrant search failed with status {StatusCode}. Falling back to SQLite vector search.", response.StatusCode);
+				_logger.LogWarning("Qdrant search failed with status {StatusCode}. The retrieval service will apply the configured fallback policy.", response.StatusCode);
 				return Array.Empty<QdrantRunbookMatch>();
 			}
 
@@ -257,7 +260,7 @@ internal sealed class QdrantRunbookVectorStore
 		catch (Exception exception)
 		{
 			_available = false;
-			_logger.LogWarning(exception, "Qdrant search failed. Falling back to SQLite vector search.");
+			_logger.LogWarning(exception, "Qdrant search failed. The retrieval service will apply the configured fallback policy.");
 			return Array.Empty<QdrantRunbookMatch>();
 		}
 	}
@@ -297,7 +300,7 @@ internal sealed class QdrantRunbookVectorStore
 		if (!response.IsSuccessStatusCode)
 		{
 			_available = false;
-			_logger.LogWarning("Qdrant collection state check failed with status {StatusCode}. Falling back to SQLite vector search.", response.StatusCode);
+			_logger.LogWarning("Qdrant collection state check failed with status {StatusCode}. The retrieval service will apply the configured fallback policy.", response.StatusCode);
 			return new QdrantCollectionState(false, null);
 		}
 

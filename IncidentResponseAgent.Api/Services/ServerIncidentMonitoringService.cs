@@ -148,7 +148,12 @@ public sealed class ServerIncidentMonitoringService : BackgroundService, IIncide
 	private PersistedState? LoadState()
 	{
 		try { return File.Exists(StatePath) ? JsonSerializer.Deserialize<PersistedState>(File.ReadAllText(StatePath), JsonOptions) : null; }
-		catch { return null; }
+		catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException)
+		{
+			_logger.LogWarning(exception, "Monitoring settings could not be loaded; configured defaults are in use.");
+			_lastError = "Saved monitoring settings could not be read. Configured defaults are in use.";
+			return null;
+		}
 	}
 
 	private async Task SaveEnabledStateAsync(CancellationToken cancellationToken)

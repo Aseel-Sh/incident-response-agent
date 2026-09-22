@@ -84,10 +84,10 @@ internal sealed class ResilientRunbookEmbeddingProvider : IRunbookEmbeddingProvi
 				return await _fallback.GenerateEmbeddingAsync(text, cancellationToken).ConfigureAwait(false);
 			}
 
-			throw new InvalidOperationException("External embedding provider is not configured. Set Runbooks:SemanticRetrieval:ApiKey or HF_TOKEN, or explicitly enable AllowLocalEmbeddingFallback for offline demo mode.");
+			throw new InvalidOperationException("External embedding provider is not configured. Set Runbooks:SemanticRetrieval:ApiKey, or OPENROUTER_API_KEY for OpenRouter / HF_TOKEN for HuggingFace. Local embedding fallback is disabled.");
 		}
 
-		if (_useFallbackOnly)
+		if (_useFallbackOnly && _allowFallback)
 		{
 			if (_allowFallback)
 			{
@@ -102,6 +102,8 @@ internal sealed class ResilientRunbookEmbeddingProvider : IRunbookEmbeddingProvi
 			var embedding = await _primary.GenerateEmbeddingAsync(text, cancellationToken).ConfigureAwait(false);
 			if (embedding.Length > 0)
 			{
+				_useFallbackOnly = false;
+				_failureReason = null;
 				return embedding;
 			}
 
@@ -141,5 +143,31 @@ internal sealed class ResilientRunbookEmbeddingProvider : IRunbookEmbeddingProvi
 		var message = string.IsNullOrWhiteSpace(exception.Message) ? exception.GetType().Name : exception.Message.ReplaceLineEndings(" ").Trim();
 		if (message.Length > 300) message = string.Concat(message.AsSpan(0, 297), "...");
 		return $"{exception.GetType().Name}: {message}";
+	}
+
+	public async Task<IReadOnlyList<float[]>> GenerateEmbeddingsAsync(IReadOnlyList<string> texts, CancellationToken cancellationToken = default)
+	{
+		if (_primary is null || (_useFallbackOnly && _allowFallback))
+		{
+			var vectors = new List<float[]>();
+			foreach (var text in texts) vectors.Add(await GenerateEmbeddingAsync(text, cancellationToken));
+			return vectors;
+		}
+		try
+		{
+			var vectors = await _primary.GenerateEmbeddingsAsync(texts, cancellationToken);
+			if (vectors.Count != texts.Count || vectors.Any(vector => vector.Length == 0)) throw new InvalidOperationException("Invalid embedding batch.");
+			_useFallbackOnly = false;
+			_failureReason = null;
+			return vectors;
+		}
+		catch (OperationCanceledException) { throw; }
+		catch (Exception exception)
+		{
+			_failureReason = SanitizeFailure(exception);
+			_useFallbackOnly = true;
+			if (!_allowFallback) throw new InvalidOperationException(DegradedReason, exception);
+			return await _fallback.GenerateEmbeddingsAsync(texts, cancellationToken);
+		}
 	}
 }

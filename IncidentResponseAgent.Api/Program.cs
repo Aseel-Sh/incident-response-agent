@@ -16,6 +16,7 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.Antiforgery;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.IdentityModel.Tokens;
 using IncidentResponseAgent.Infrastructure.Services;
 
@@ -37,11 +38,14 @@ builder.Services.AddApplication();
 builder.Services.AddInfrastructure();
 builder.Services.AddAgent();
 builder.Services.AddSingleton<ServerIncidentMonitoringService>();
+builder.Services.AddSingleton<ResponderDirectory>();
 builder.Services.AddSingleton<IIncidentMonitoringCoordinator>(provider => provider.GetRequiredService<ServerIncidentMonitoringService>());
 builder.Services.AddHostedService(provider => provider.GetRequiredService<ServerIncidentMonitoringService>());
 builder.Services.AddProblemDetails();
 builder.Services.AddAntiforgery(options => options.HeaderName = "X-CSRF-TOKEN");
 var authentication = builder.Configuration.GetSection("Authentication").Get<IncidentAuthenticationOptions>() ?? new();
+if (authentication.AllowDevelopmentIdentity && !builder.Environment.IsDevelopment() && !builder.Environment.IsEnvironment("Testing"))
+    throw new InvalidOperationException("Development identity is only allowed in Development or Testing. Configure browser authentication for deployed environments.");
 var browserOidcEnabled = !authentication.AllowDevelopmentIdentity
     && !string.IsNullOrWhiteSpace(authentication.BrowserClientId)
     && !string.IsNullOrWhiteSpace(authentication.BrowserClientSecret);
@@ -107,10 +111,28 @@ else
                 context.ProtocolMessage.SetParameter("audience", authentication.Audience);
                 return Task.CompletedTask;
             };
+            options.Events.OnRemoteFailure = context =>
+            {
+                context.HandleResponse();
+                context.Response.Redirect("/login?reason=failed");
+                return Task.CompletedTask;
+            };
+            options.Events.OnRedirectToIdentityProviderForSignOut = context =>
+            {
+                context.ProtocolMessage.ClientId = authentication.BrowserClientId;
+                context.ProtocolMessage.PostLogoutRedirectUri = $"{context.Request.Scheme}://{context.Request.Host}{context.Request.PathBase}/";
+                return Task.CompletedTask;
+            };
+            options.Events.OnAccessDenied = context =>
+            {
+                context.HandleResponse();
+                context.Response.Redirect("/login?reason=cancelled");
+                return Task.CompletedTask;
+            };
         });
     }
 }
-builder.Services.AddAuthorizationBuilder().SetDefaultPolicy(new Microsoft.AspNetCore.Authorization.AuthorizationPolicyBuilder()
+var responderPolicy = new AuthorizationPolicyBuilder()
     .RequireAuthenticatedUser()
     .RequireAssertion(context =>
     {
@@ -119,7 +141,11 @@ builder.Services.AddAuthorizationBuilder().SetDefaultPolicy(new Microsoft.AspNet
         var scopes = context.User.FindAll("scp").Concat(context.User.FindAll("scope")).SelectMany(claim => claim.Value.Split(' ', StringSplitOptions.RemoveEmptyEntries));
         return scopes.Contains(authentication.RequiredScope, StringComparer.Ordinal);
     })
-    .Build());
+    .Build();
+builder.Services.AddAuthorizationBuilder()
+    .SetDefaultPolicy(responderPolicy)
+    .SetFallbackPolicy(responderPolicy)
+    .AddPolicy("SignedIn", policy => policy.RequireAuthenticatedUser());
 
 var app = builder.Build();
 
@@ -150,15 +176,19 @@ app.UseExceptionHandler(errorApp =>
     });
 });
 
+app.UseHttpsRedirection();
+
+// Only the login document and compiled UI assets are public; they contain no incident data.
 app.UseDefaultFiles();
 app.UseStaticFiles();
-
-app.UseHttpsRedirection();
 
 app.UseAuthentication();
 app.Use(async (context, next) =>
 {
-    var usesBrowserCookie = context.User.Identities.Any(identity => identity.IsAuthenticated && identity.AuthenticationType == CookieAuthenticationDefaults.AuthenticationScheme);
+    context.Response.Headers.CacheControl = "no-store";
+    var usesBrowserCookie = browserOidcEnabled
+        && !context.Request.Headers.Authorization.ToString().StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)
+        && (await context.AuthenticateAsync(CookieAuthenticationDefaults.AuthenticationScheme)).Succeeded;
     var unsafeMethod = !HttpMethods.IsGet(context.Request.Method) && !HttpMethods.IsHead(context.Request.Method) && !HttpMethods.IsOptions(context.Request.Method) && !HttpMethods.IsTrace(context.Request.Method);
     if (usesBrowserCookie && unsafeMethod)
     {
@@ -173,35 +203,49 @@ app.MapGet("/health", () => Results.Ok(new
         status = "Healthy",
         version = typeof(Program).Assembly.GetName().Version?.ToString(3) ?? "1.0.0"
     }))
-    .WithName("Health");
+    .WithName("Health").AllowAnonymous();
 
-app.MapGet("/auth/session", (HttpContext context, IAntiforgery antiforgery) =>
+app.MapGet("/auth/session", async (HttpContext context, IAntiforgery antiforgery, IAuthorizationService authorization, ResponderDirectory responders) =>
 {
-    var cookieIdentity = context.User.Identities.FirstOrDefault(identity => identity.IsAuthenticated && identity.AuthenticationType == CookieAuthenticationDefaults.AuthenticationScheme);
-    var csrfToken = cookieIdentity is null ? null : antiforgery.GetAndStoreTokens(context).RequestToken;
+    var hasBrowserCookie = browserOidcEnabled && (await context.AuthenticateAsync(CookieAuthenticationDefaults.AuthenticationScheme)).Succeeded;
+    var csrfToken = hasBrowserCookie ? antiforgery.GetAndStoreTokens(context).RequestToken : null;
     var roleClaimType = (context.User.Identity as System.Security.Claims.ClaimsIdentity)?.RoleClaimType ?? System.Security.Claims.ClaimTypes.Role;
+    var canAccess = (await authorization.AuthorizeAsync(context.User, null, responderPolicy)).Succeeded;
+    var profile = canAccess ? await responders.RegisterAsync(context.User, context.RequestAborted) : null;
     return Results.Ok(new
     {
         browserLoginEnabled = browserOidcEnabled,
         authenticated = context.User.Identity?.IsAuthenticated == true,
-        name = context.User.Identity?.Name,
+        canAccess,
+        userId = profile?.Id,
+        picture = profile?.Picture,
+        name = profile?.Name,
         roles = context.User.Claims.Where(claim => claim.Type == roleClaimType).Select(claim => claim.Value).ToArray(),
         csrfToken
     });
 }).AllowAnonymous();
 
+app.MapGet("/api/responders", async (HttpContext context, ResponderDirectory responders) =>
+{
+    await responders.RegisterAsync(context.User, context.RequestAborted);
+    return Results.Ok(await responders.ListAsync(context.RequestAborted));
+}).RequireAuthorization();
+
 app.MapGet("/auth/login", (string? returnUrl) =>
 {
     if (!browserOidcEnabled) return Results.Problem("Browser OIDC login requires Authentication:BrowserClientId and Authentication:BrowserClientSecret.", statusCode: StatusCodes.Status503ServiceUnavailable);
-    var safeReturnUrl = !string.IsNullOrWhiteSpace(returnUrl) && Uri.IsWellFormedUriString(returnUrl, UriKind.Relative) && returnUrl.StartsWith('/') && !returnUrl.StartsWith("//") ? returnUrl : "/";
+    // The console uses hash routes. Never accept external URLs or callback/login loops.
+    var safeReturnUrl = returnUrl is not null && (returnUrl == "/" || returnUrl.StartsWith("/#", StringComparison.Ordinal))
+        && !returnUrl.Any(char.IsControl) ? returnUrl : "/";
     return Results.Challenge(new AuthenticationProperties { RedirectUri = safeReturnUrl }, [OpenIdConnectDefaults.AuthenticationScheme]);
 }).AllowAnonymous();
 
 app.MapPost("/auth/logout", () => browserOidcEnabled
     ? Results.SignOut(new AuthenticationProperties { RedirectUri = "/" }, [CookieAuthenticationDefaults.AuthenticationScheme, OpenIdConnectDefaults.AuthenticationScheme])
-    : Results.Redirect("/"));
+    : Results.Redirect("/")).RequireAuthorization("SignedIn");
 
 app.MapControllers();
+app.MapGet("/login", () => Results.File(Path.Combine(app.Environment.WebRootPath, "index.html"), "text/html")).AllowAnonymous();
 
 app.Run();
 

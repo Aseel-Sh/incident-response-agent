@@ -11,6 +11,13 @@ namespace IncidentResponseAgent.Tests;
 
 public sealed class IncidentAnalysisEvaluationUseCaseTests
 {
+    [Fact]
+    public async Task InvalidExternalOutputCannotTriggerImplicitFallback()
+    {
+        var useCase = new AnalyzeIncidentUseCase(new UnstructuredAgent(false), new InMemorySessionStore(), new InMemoryIncidentRecordStore(), new ScenarioLogSearchProvider(), new ScenarioMetricsProvider(), new ScenarioRunbookRetrievalService(), NullLogger<AnalyzeIncidentUseCase>.Instance);
+        await Assert.ThrowsAsync<IncidentAnalysisUnavailableException>(() => useCase.AnalyzeAsync(IncidentAnalysisEvaluationScenarioCatalog.BuiltInScenarios[0].Incident));
+    }
+
 	[Fact]
 	public async Task RagFailureDoesNotForceModelFallback()
 	{
@@ -110,7 +117,7 @@ public sealed class IncidentAnalysisEvaluationUseCaseTests
 		Assert.All(result.RecommendedActions, item => Assert.Empty(item.SupportingSignals));
 	}
 
-	private sealed class UnstructuredAgent : IIncidentAnalysisAgent
+	private sealed class UnstructuredAgent(bool fallback = true) : IIncidentAnalysisAgent
 	{
 		public Task<IncidentAgentExecutionResult> AnalyzeAsync(
 			Incident incident,
@@ -121,9 +128,9 @@ public sealed class IncidentAnalysisEvaluationUseCaseTests
 			return Task.FromResult(new IncidentAgentExecutionResult
 			{
 				AnalysisText = "unstructured model response",
+				UsedFallback = fallback,
 				Provider = "test-agent",
-				Model = "deterministic",
-				UsedFallback = false
+				Model = "deterministic"
 			});
 		}
 	}

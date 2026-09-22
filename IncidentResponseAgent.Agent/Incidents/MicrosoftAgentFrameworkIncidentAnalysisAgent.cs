@@ -122,7 +122,7 @@ Return compact JSON only, without Markdown, using the requested schema.
 		ILoggerFactory? loggerFactory = null)
 	{
 		_options = options.Value ?? new IncidentAnalysisAgentOptions();
-		_httpClient = httpClient ?? SharedHttpClient;
+		_httpClient = new HttpClient(new CompletionResponseHandler(httpClient ?? SharedHttpClient, logger)) { Timeout = Timeout.InfiniteTimeSpan };
 		_logSearchProvider = logSearchProvider;
 		_metricsProvider = metricsProvider;
 		_runbookRetrievalService = runbookRetrievalService;
@@ -175,6 +175,7 @@ Return compact JSON only, without Markdown, using the requested schema.
 		var expectedSeverity = FormatSeverity(incident.Severity);
 		string? content = null;
 		string retryReason;
+		var strictSchemaAccepted = true;
 		string? modelResponseWarning = null;
 		try
 		{
@@ -183,23 +184,32 @@ Return compact JSON only, without Markdown, using the requested schema.
 		}
 		catch (HttpRequestException exception) when (exception.StatusCode is HttpStatusCode.BadRequest or HttpStatusCode.UnprocessableEntity)
 		{
+			strictSchemaAccepted = false;
 			retryReason = $"Strict JSON schema request was rejected with HTTP {(int)exception.StatusCode.Value}.";
 		}
 		catch (ClientResultException exception) when (exception.Status is 400 or 422)
 		{
+			strictSchemaAccepted = false;
 			retryReason = $"Strict JSON schema request was rejected with HTTP {exception.Status}.";
+		}
+		catch (ModelStructuredOutputException exception)
+		{
+			retryReason = exception.Message;
 		}
 
 		if (!string.IsNullOrWhiteSpace(retryReason))
 		{
 			_logger.LogWarning("Model response validation failed. IncidentId={IncidentId} Attempt={Attempt} Reason={Reason}.", incident.Id, "strict-json-schema", retryReason);
-			_logger.LogInformation("Structured output retry started. IncidentId={IncidentId} Mode={Mode} Reason={Reason}.", incident.Id, "prompt-only-json", retryReason);
-			content = await RunFrameworkAgentAsync(frameworkAgent, prompt, useStrictSchema: false, "prompt-only-json", cancellationToken).ConfigureAwait(false);
+			_logger.LogInformation("Structured output retry started. IncidentId={IncidentId} Mode={Mode} Reason={Reason}.", incident.Id, strictSchemaAccepted ? "strict-json-schema-retry" : "prompt-only-json", retryReason);
+			var repairPrompt = JsonNode.Parse(prompt)!.AsObject();
+			repairPrompt["validationFeedback"] = "Your previous response failed validation: " + retryReason
+				+ " Return a new complete JSON object matching outputSchema exactly. Include every required nested field; no extra fields. Do not invent missing evidence; use empty arrays when evidence is absent.";
+			content = await RunFrameworkAgentAsync(frameworkAgent, repairPrompt.ToJsonString(SerializerOptions), useStrictSchema: strictSchemaAccepted, strictSchemaAccepted ? "strict-json-schema-retry" : "prompt-only-json", cancellationToken).ConfigureAwait(false);
 
 			if (!ValidateStructuredResponse(content, out var retryFailure))
 			{
 				_logger.LogWarning("Structured output retry failed. IncidentId={IncidentId} Reason={Reason}.", incident.Id, retryFailure);
-				throw new InvalidOperationException($"Model structured response validation failed after retry: {retryFailure}");
+				throw new ModelStructuredOutputException($"Model structured response validation failed after retry: {retryFailure}");
 			}
 
 			_logger.LogInformation("Structured output retry passed. IncidentId={IncidentId}.", incident.Id);
@@ -262,10 +272,23 @@ Return compact JSON only, without Markdown, using the requested schema.
 	{
 		var chatOptions = new ChatOptions
 		{
-			MaxOutputTokens = Math.Clamp(useStrictSchema ? _options.MaxOutputTokens : _options.MaxOutputTokens * 2, 256, 4096),
+			MaxOutputTokens = Math.Clamp(attempt == "strict-json-schema" ? _options.MaxOutputTokens : _options.MaxOutputTokens * 2, 256, 4096),
 			Temperature = (float)_options.Temperature,
-			ResponseFormat = useStrictSchema
-				? Microsoft.Extensions.AI.ChatResponseFormat.ForJsonSchema(JsonSerializer.SerializeToElement(AnalysisResponseSchema, SerializerOptions), "incident_analysis", "Evidence-grounded incident analysis")
+			// The generic schema format does not send OpenAI's strict flag in this adapter version.
+			RawRepresentationFactory = useStrictSchema
+				? _ =>
+				{
+					var nativeOptions = new ChatCompletionOptions
+					{
+						ResponseFormat = OpenAI.Chat.ChatResponseFormat.CreateJsonSchemaFormat(
+						"incident_analysis", BinaryData.FromObjectAsJson(AnalysisResponseSchema, SerializerOptions),
+						"Evidence-grounded incident analysis", jsonSchemaIsStrict: true)
+					};
+#pragma warning disable SCME0001 // OpenRouter routing is an extension to the OpenAI request contract.
+					nativeOptions.Patch.Set("$.provider.require_parameters"u8, true);
+#pragma warning restore SCME0001
+					return nativeOptions;
+				}
 				: null
 		};
 		_logger.LogInformation(
@@ -282,6 +305,19 @@ Return compact JSON only, without Markdown, using the requested schema.
 				"Model response received. Provider={Provider} Framework={Framework} Attempt={Attempt} DurationMs={DurationMs} HasContent={HasContent}.",
 				"OpenRouter", "Microsoft Agent Framework", attempt, requestStopwatch.ElapsedMilliseconds, !string.IsNullOrWhiteSpace(content));
 			return content;
+		}
+		catch (JsonException exception)
+		{
+			_logger.LogWarning(exception, "Provider or framework JSON decoding failed. Attempt={Attempt}.", attempt);
+			throw new ModelStructuredOutputException("The model provider returned malformed structured data. No analysis was accepted.", exception);
+		}
+		catch (ArgumentOutOfRangeException exception) when (
+			exception.StackTrace?.Contains("OpenAI.Chat.ChatCompletion.get_Role", StringComparison.Ordinal) == true)
+		{
+			// The OpenAI adapter reads choices[0] before exposing an empty completion to validation.
+			// Keep this filter specific so unrelated tool/application indexing bugs are not hidden.
+			_logger.LogWarning(exception, "Provider returned an empty completion envelope. Attempt={Attempt}.", attempt);
+			throw new ModelStructuredOutputException("The model provider returned no completion choices. No analysis was accepted.", exception);
 		}
 		catch (OperationCanceledException)
 		{
@@ -322,20 +358,26 @@ Return compact JSON only, without Markdown, using the requested schema.
 			if (confidence is not ("High" or "Medium" or "Low")) return Fail($"Confidence '{confidence}' is invalid.", out failureReason);
 			if (root.GetProperty("summary").ValueKind != JsonValueKind.String || root.GetProperty("notes").ValueKind != JsonValueKind.String) return Fail("Summary and notes must be strings.", out failureReason);
 			if (root.GetProperty("evidence").ValueKind != JsonValueKind.Array || root.GetProperty("hypotheses").ValueKind != JsonValueKind.Array || root.GetProperty("recommendedActions").ValueKind != JsonValueKind.Array) return Fail("Evidence, hypotheses, and recommendedActions must be arrays.", out failureReason);
+			var evidenceIndex = 0;
 			foreach (var item in root.GetProperty("evidence").EnumerateArray())
 			{
-				if (!HasExactProperties(item, "summary", "source", "details")) return Fail("An evidence item is schema-invalid.", out failureReason);
+				var path = $"evidence[{evidenceIndex++}]";
+				if (!HasExactProperties(item, "summary", "source", "details")) return Fail($"{path} must be an object with exactly summary, source, details (all strings).", out failureReason);
+				foreach (var field in new[] { "summary", "source", "details" })
+					if (item.GetProperty(field).ValueKind != JsonValueKind.String) return Fail($"{path}.{field} must be a string.", out failureReason);
 			}
 			foreach (var item in root.GetProperty("hypotheses").EnumerateArray())
 			{
 				if (!HasExactProperties(item, "description", "inferenceStrength", "confidence", "supportingEvidence", "evidenceReferences")) return Fail("A hypothesis item is schema-invalid.", out failureReason);
 				if (item.GetProperty("inferenceStrength").GetString() is not ("Strong" or "Medium" or "Weak")) return Fail("A hypothesis has invalid inferenceStrength.", out failureReason);
 				if (item.GetProperty("confidence").GetString() is not ("High" or "Medium" or "Low")) return Fail("A hypothesis has invalid confidence.", out failureReason);
+				if (item.GetProperty("description").ValueKind != JsonValueKind.String || !IsStringArray(item.GetProperty("supportingEvidence")) || !IsStringArray(item.GetProperty("evidenceReferences"))) return Fail("Hypothesis description must be a string; supportingEvidence and evidenceReferences must be string arrays.", out failureReason);
 			}
 			foreach (var item in root.GetProperty("recommendedActions").EnumerateArray())
 			{
 				if (!HasExactProperties(item, "description", "priority", "rationale", "supportingSignals")) return Fail("A recommended action is schema-invalid.", out failureReason);
 				if (item.GetProperty("priority").GetString() is not ("Critical" or "High" or "Medium" or "Low")) return Fail("A recommended action has invalid priority.", out failureReason);
+				if (item.GetProperty("description").ValueKind != JsonValueKind.String || item.GetProperty("rationale").ValueKind != JsonValueKind.String || !IsStringArray(item.GetProperty("supportingSignals"))) return Fail("Action description and rationale must be strings; supportingSignals must be a string array.", out failureReason);
 			}
 			if (string.IsNullOrWhiteSpace(failureReason))
 			{
@@ -343,14 +385,14 @@ Return compact JSON only, without Markdown, using the requested schema.
 			}
 			return true;
 		}
-		catch (JsonException exception)
+		catch (JsonException)
 		{
-			failureReason = $"Response is invalid JSON: {exception.Message}";
+			failureReason = "The model returned invalid JSON. A complete JSON object matching the incident analysis schema is required.";
 			return false;
 		}
-		catch (InvalidOperationException exception)
+		catch (InvalidOperationException)
 		{
-			failureReason = $"Response has an invalid value type: {exception.Message}";
+			failureReason = "The model returned a field with an incorrect JSON value type.";
 			return false;
 		}
 	}
@@ -395,6 +437,8 @@ Return compact JSON only, without Markdown, using the requested schema.
 
 	private static bool HasExactProperties(JsonElement item, params string[] properties) =>
 		item.ValueKind == JsonValueKind.Object && properties.All(property => item.TryGetProperty(property, out _)) && HasOnlyProperties(item, properties);
+
+	private static bool IsStringArray(JsonElement item) => item.ValueKind == JsonValueKind.Array && item.EnumerateArray().All(value => value.ValueKind == JsonValueKind.String);
 
 	private static bool HasOnlyProperties(JsonElement item, IReadOnlyCollection<string> properties) =>
 		item.EnumerateObject().All(property => properties.Contains(property.Name, StringComparer.Ordinal));
@@ -476,11 +520,7 @@ Return compact JSON only, without Markdown, using the requested schema.
 					item.Score, item.SharedSignals, item.SuccessfulActions, item.FailedActions, item.CreatedAtUtc
 				}).ToArray()
 			},
-			outputSchema = new
-			{
-				summary = "string", severity = "SEV-1 through SEV-5", evidence = "array", hypotheses = "array",
-				recommendedActions = "array", confidence = "High, Medium, or Low", notes = "string"
-			}
+			outputSchema = AnalysisResponseSchema
 		}, SerializerOptions);
 	}
 

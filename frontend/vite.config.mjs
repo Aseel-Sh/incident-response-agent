@@ -2,6 +2,15 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { resolve } from "node:path";
 
+// Only the local development proxy uses the self-signed ASP.NET certificate.
+// This configuration is not used by the production ASP.NET-hosted frontend.
+const localApiProxy = {
+  target: "https://localhost:7104",
+  // OIDC must use the registered HTTPS API origin for callbacks and cookies.
+  changeOrigin: true,
+  secure: false
+};
+
 export default defineConfig({
   root: resolve(import.meta.dirname),
   plugins: [react()],
@@ -9,10 +18,10 @@ export default defineConfig({
     port: 5173,
     strictPort: true,
     proxy: {
-      "/api": "https://localhost:7104",
-      "/auth": "https://localhost:7104",
-      "/health": "https://localhost:7104",
-      "/ready": "https://localhost:7104"
+      "/api": { ...localApiProxy },
+      "/auth": { ...localApiProxy },
+      "/health": { ...localApiProxy },
+      "/ready": { ...localApiProxy }
     }
   },
   build: {

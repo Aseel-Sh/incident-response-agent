@@ -10,6 +10,56 @@ public sealed class SemanticRunbookRetrievalServiceTests : IDisposable
 	private readonly string _rootPath = Path.Combine(Path.GetTempPath(), "ira-rag-tests", Guid.NewGuid().ToString("N"));
 
 	[Fact]
+	public async Task QdrantOutageRecoversAndEmptyRemoteResultsDoNotUseLocalMatches()
+	{
+		var knowledge = Path.Combine(_rootPath, "qdrant-recovery");
+		Directory.CreateDirectory(knowledge);
+		await File.WriteAllTextAsync(Path.Combine(knowledge, "checkout.md"), "# Checkout\n\n## Recovery\n\nInspect checkout database timeouts.");
+		var handler = new RecoveringQdrantHandler();
+		var service = new SemanticRunbookRetrievalService(Options.Create(new RunbookRetrievalOptions
+		{
+			VectorStoreProvider = "Qdrant", QdrantEndpoint = "https://qdrant.example.test",
+			KnowledgeBasePath = knowledge, DatabasePath = Path.Combine(_rootPath, "qdrant-recovery.sqlite"),
+			AllowLocalEmbeddingFallback = true, AllowLocalVectorStoreFallback = false, MinimumRelevanceScore = 0
+		}), new RecoveringQdrantFactory(handler), NullLoggerFactory.Instance, NullLogger<SemanticRunbookRetrievalService>.Instance);
+		var request = new RunbookRetrievalDiagnosticsRequest { Query = "checkout database timeouts" };
+		var failed = await service.SearchAsync(request);
+		Assert.Equal("unavailable", failed.RagStatus);
+		Assert.Equal("qdrant-unavailable", failed.VectorStoreProvider);
+		Assert.DoesNotContain("InvalidOperationException", failed.DegradedReason);
+		handler.Available = true;
+		var recovered = await service.SearchAsync(request);
+		Assert.Equal("no matches", recovered.RagStatus);
+		Assert.Equal("qdrant", recovered.VectorStoreProvider);
+		Assert.Empty(recovered.Matches);
+		Assert.True(handler.Upserts > 0);
+		Assert.True(handler.Queries > 0);
+	}
+
+	private sealed class RecoveringQdrantFactory(RecoveringQdrantHandler handler) : IHttpClientFactory
+	{
+		public HttpClient CreateClient(string name) => new(handler, disposeHandler: false);
+	}
+
+	private sealed class RecoveringQdrantHandler : HttpMessageHandler
+	{
+		public bool Available { get; set; }
+		public int Upserts { get; private set; }
+		public int Queries { get; private set; }
+		protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+		{
+			if (!Available) throw new HttpRequestException("Qdrant is offline");
+			var query = request.RequestUri!.AbsolutePath.EndsWith("/query");
+			if (query) Queries++;
+			if (request.Method == HttpMethod.Put) Upserts++;
+			return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+			{
+				Content = new StringContent(query ? "{\"result\":{\"points\":[]}}" : "{\"result\":{}}", System.Text.Encoding.UTF8, "application/json")
+			});
+		}
+	}
+
+	[Fact]
 	public async Task RetrieveAsyncReportsUnavailableWhenExternalEmbeddingsAreMissingAndLocalFallbackIsDisabled()
 	{
 		var knowledgeBasePath = Path.Combine(_rootPath, "strict-external-knowledge-base");

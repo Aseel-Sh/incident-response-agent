@@ -31,7 +31,9 @@ public sealed class SemanticRunbookRetrievalService : IRunbookRetrievalService, 
 		_options = options.Value ?? new RunbookRetrievalOptions();
 		_logger = logger;
 		var fallback = new LocalHashingRunbookEmbeddingProvider(_options);
-		var primary = HuggingFaceRunbookEmbeddingProvider.IsConfigured(_options)
+		IRunbookEmbeddingProvider? primary = _options.EmbeddingProvider.Equals("OpenRouter", StringComparison.OrdinalIgnoreCase)
+			? OpenRouterRunbookEmbeddingProvider.IsConfigured(_options) ? new OpenRouterRunbookEmbeddingProvider(_options, httpClientFactory) : null
+			: HuggingFaceRunbookEmbeddingProvider.IsConfigured(_options)
 			? new HuggingFaceRunbookEmbeddingProvider(
 				_options,
 				httpClientFactory,
@@ -277,6 +279,9 @@ public sealed class SemanticRunbookRetrievalService : IRunbookRetrievalService, 
 			return new ScoredRetrieval(DiversifyBySection(matches).Take(limit).ToArray(), "qdrant", false, null);
 		}
 
+		if (_qdrantVectorStore?.IsAvailable == true)
+			return new ScoredRetrieval([], "qdrant", false, null);
+
 		if (_qdrantVectorStore is not null
 			&& _qdrantVectorStore.ProviderName.Contains("unavailable", StringComparison.OrdinalIgnoreCase)
 			&& !_options.AllowLocalVectorStoreFallback)
@@ -305,7 +310,7 @@ public sealed class SemanticRunbookRetrievalService : IRunbookRetrievalService, 
 	private async Task EnsureInitializedAsync(CancellationToken cancellationToken)
 	{
 		var sourceFingerprint = ComputeSourceFingerprint();
-		if (_isInitialized && string.Equals(_sourceFingerprint, sourceFingerprint, StringComparison.Ordinal))
+		if (_isInitialized && _qdrantVectorStore?.IsAvailable != false && string.Equals(_sourceFingerprint, sourceFingerprint, StringComparison.Ordinal))
 		{
 			return;
 		}
@@ -314,7 +319,7 @@ public sealed class SemanticRunbookRetrievalService : IRunbookRetrievalService, 
 		try
 		{
 			sourceFingerprint = ComputeSourceFingerprint();
-			if (_isInitialized && string.Equals(_sourceFingerprint, sourceFingerprint, StringComparison.Ordinal))
+			if (_isInitialized && _qdrantVectorStore?.IsAvailable != false && string.Equals(_sourceFingerprint, sourceFingerprint, StringComparison.Ordinal))
 			{
 				return;
 			}
@@ -364,9 +369,13 @@ public sealed class SemanticRunbookRetrievalService : IRunbookRetrievalService, 
 			await DeleteChunksAsync(connection, transaction, document.Id, cancellationToken).ConfigureAwait(false);
 			var vectorPoints = new List<RunbookVectorPoint>();
 
-			foreach (var chunk in MarkdownRunbookChunker.Chunk(document))
+			var chunks = MarkdownRunbookChunker.Chunk(document).ToArray();
+			var embeddings = new List<float[]>();
+			foreach (var batch in chunks.Chunk(Math.Clamp(_options.BatchSize, 1, 64)))
+				embeddings.AddRange(await _embeddingProvider.GenerateEmbeddingsAsync(batch.Select(chunk => chunk.SearchText).ToArray(), cancellationToken).ConfigureAwait(false));
+			foreach (var (chunk, index) in chunks.Select((chunk, index) => (chunk, index)))
 			{
-				var embedding = await _embeddingProvider.GenerateEmbeddingAsync(chunk.SearchText, cancellationToken).ConfigureAwait(false);
+				var embedding = embeddings[index];
 				await InsertChunkAsync(connection, transaction, document, chunk, embedding, cancellationToken).ConfigureAwait(false);
 				vectorPoints.Add(new RunbookVectorPoint(
 					document.Id,
@@ -965,6 +974,7 @@ create index if not exists ix_runbook_documents_content_hash on runbook_document
 		var reachable = Directory.Exists(registration.Path) && (registration.Type != "git" || Directory.Exists(Path.Combine(registration.Path, ".git")));
 		var documents = reachable ? EnumerateMarkdownFiles(registration.Path).ToArray() : [];
 		var sectionCount = 0;
+		string? readError = null;
 		foreach (var path in documents)
 		{
 			try
@@ -972,7 +982,7 @@ create index if not exists ix_runbook_documents_content_hash on runbook_document
 				var source = new RunbookSource(registration.Id, registration.Path, path, File.ReadAllText(path), registration.Removable);
 				sectionCount += MarkdownRunbookChunker.Chunk(ParseDocument(source)).Count;
 			}
-			catch { }
+			catch (Exception exception) when (exception is IOException or UnauthorizedAccessException) { readError = "One or more Markdown files could not be read. Check file permissions and synchronize again."; }
 		}
 		return new RunbookSourceStatus
 		{
@@ -980,7 +990,7 @@ create index if not exists ix_runbook_documents_content_hash on runbook_document
 			Enabled = registration.Enabled, Reachable = reachable, Removable = registration.Removable,
 			DocumentCount = documents.Length, SectionCount = sectionCount,
 			LastSynchronizedAtUtc = registration.LastSynchronizedAtUtc,
-			LastError = reachable ? registration.LastError : registration.Type == "git" ? "Path is missing or is not a Git working tree." : "Directory is unavailable."
+			LastError = reachable ? readError ?? registration.LastError : registration.Type == "git" ? "Path is missing or is not a Git working tree." : "Directory is unavailable."
 		};
 	}
 
@@ -999,8 +1009,10 @@ create index if not exists ix_runbook_documents_content_hash on runbook_document
 
 	private static string BuildUnavailableReason(Exception exception)
 	{
+		if (exception.GetBaseException() is HttpRequestException providerFailure && providerFailure.Message.StartsWith("OpenRouter embeddings returned HTTP", StringComparison.Ordinal))
+			return $"Runbook retrieval unavailable: {providerFailure.Message}";
 		var message = string.IsNullOrWhiteSpace(exception.Message)
-			? exception.GetType().Name
+			? "The configured retrieval provider could not complete the request."
 			: exception.Message.ReplaceLineEndings(" ").Trim();
 		if (message.Contains("External embedding provider is not configured", StringComparison.OrdinalIgnoreCase))
 		{
@@ -1013,7 +1025,7 @@ create index if not exists ix_runbook_documents_content_hash on runbook_document
 		}
 
 		if (message.Length > 260) message = string.Concat(message.AsSpan(0, 257), "...");
-		return $"Runbook retrieval unavailable: {exception.GetType().Name}: {message}";
+		return $"Runbook retrieval unavailable: {message}";
 	}
 
 	private static string ResolveSourceDirectory(string? path)

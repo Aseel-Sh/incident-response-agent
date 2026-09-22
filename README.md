@@ -202,7 +202,7 @@ Set it with environment variables:
 
 ```powershell
 $env:OPENROUTER_API_KEY = "your-openrouter-key"
-$env:OPENROUTER_MODEL = "nvidia/nemotron-3-super-120b-a12b:free"
+$env:OPENROUTER_MODEL = "liquid/lfm-2.5-2.6b:free"
 $env:OPENROUTER_TIMEOUT_SECONDS = "75"
 $env:OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 $env:OPENROUTER_SITE_URL = "https://your-app.example" # optional
@@ -216,7 +216,7 @@ Or in `IncidentResponseAgent.Api/appsettings.Development.json`:
   "Agent": {
     "IncidentAnalysis": {
       "Provider": "OpenRouter",
-      "Model": "nvidia/nemotron-3-super-120b-a12b:free",
+      "Model": "liquid/lfm-2.5-2.6b:free",
       "Endpoint": "https://openrouter.ai/api/v1",
       "ApiKey": "your-openrouter-key"
     }
@@ -258,7 +258,7 @@ node evaluation/run-evaluation.mjs http://127.0.0.1:5155
 
 For offline/local validation without real model or telemetry credentials, run the API with `Tools__OperationalData__UseDeterministicFallbacks=true`. The evaluator reports candidate-classification and prior-outcome reuse as `not measured` unless those campaigns are exercised separately; it does not fabricate those metrics.
 
-During live testing on June 20, 2026, `nvidia/nemotron-3-super-120b-a12b:free` returned valid structured JSON in about 1.2 seconds. The previous `nex-agi/nex-n2-pro:free` route took about 31.5 seconds for a minimal request and repeatedly exceeded the incident-analysis timeout. Free model availability changes over time, so the model id remains configurable.
+During live testing on September 16, 2026, `liquid/lfm-2.5-2.6b:free` returned schema-valid incident analysis on its first attempt in about 16 seconds. On the same live QA incident, `nvidia/nemotron-3-super-120b-a12b:free` produced malformed or truncated JSON and an upstream 502, while `nex-agi/nex-n2.5-mini:free` exceeded the 75-second application timeout. Free model availability changes over time, so the model id remains configurable.
 
 ## Local Operational Data
 
@@ -430,7 +430,11 @@ http://localhost:5155
 
 ## Authentication and responder identity
 
-> Deferred setup: the authentication implementation remains in the API, but live Auth0 tenant configuration and end-to-end provider validation are intentionally paused until after the frontend migration. Development/test identity remains the supported local workflow in the meantime.
+The home page is the sign-in entry point. The workspace and its controller are loaded only after `/auth/session` confirms both authentication and responder authorization. Anonymous deep links show sign-in, expired sessions return to sign-in, and authenticated accounts without responder permission see an access-required page. Account identity and sign-out are available in the sidebar and Configuration.
+
+An Auth0 Organization is not required. For individual use, enable an Auth0 database connection for the browser application, create your email/password user in that connection, and assign that user the `responder` role (or `admin` if you manage this instance). The configured Post Login Action below supplies the role claims. The application still needs user-delegated access to its API as described below. See [Auth0 database connections](https://auth0.com/docs/authenticate/database-connections).
+
+API endpoints and readiness diagnostics require responder authorization by default. The login page, compiled frontend assets, authentication entry/session endpoints, and minimal `/health` liveness response are public; they expose no incident data. Session and API responses use `Cache-Control: no-store`. Cookie-authenticated mutations, including logout, require an antiforgery token.
 
 Production authentication is configured for the Auth0 Free hosted tier. Create one Auth0 **Regular Web Application** and one Auth0 API whose identifier is `https://incident-response-agent-api`. The repository already supplies the audience, scopes, claim names, PKCE flow, secure cookie, and CSRF handling; only the account-specific Auth0 values remain external:
 
@@ -451,6 +455,8 @@ Allowed Logout URL:   https://localhost:7104/
 Allowed Web Origin:   https://localhost:7104
 ```
 
+Authorize this browser application for **User-Delegated Access** to the API whose identifier is `https://incident-response-agent-api`. In the Auth0 Dashboard, open **Applications → APIs → your API → Application Access** and edit the browser application's access. With per-application authorization enabled, a missing grant causes Auth0 to return `Client is not authorized to access resource server` before showing login. Use a grant for this application rather than allowing every application. See [Auth0's API access policy guide](https://auth0.com/blog/developers-guide-api-access-policies-auth0/).
+
 Create the `incident_response` permission on the Auth0 API and create `responder` and `admin` roles. Add this Auth0 Post Login Action to the Login flow so roles are available to both browser sessions and bearer clients:
 
 ```javascript
@@ -462,7 +468,7 @@ exports.onExecutePostLogin = async (event, api) => {
 };
 ```
 
-Assign each operator at least `responder`; use `admin` only for operators who may delete incidents, modify projects/runbook sources, and approve knowledge. The browser uses Authorization Code with PKCE and sends Auth0 the configured API audience. The server holds the session in a secure HTTP-only cookie and validates antiforgery tokens for mutations, so tokens are not stored in JavaScript. JWT bearer authentication remains available for API clients. Development identity is disabled in base settings and should only be enabled by an explicit local/test override.
+Assign each operator at least `responder`; use `admin` only for operators who may delete incidents, modify projects/runbook sources, and approve knowledge. The browser uses Authorization Code with PKCE and sends Auth0 the configured API audience. The server holds the session in a secure HTTP-only cookie and validates antiforgery tokens for mutations, so authentication tokens are not stored in JavaScript. JWT bearer authentication remains available for API clients. Development identity is disabled in both base and Development settings. An explicit override is accepted only in Development or Testing; deployed environments reject it at startup. Automated workflow suites explicitly use Testing with a local test identity, while authentication integration tests exercise signed bearer tokens, protected browser cookies, authorization and CSRF.
 
 Service ownership is configured under `ServiceCatalog:Services`. A matching incident service automatically receives its on-call target or owning team as the initial assignee:
 
@@ -484,6 +490,8 @@ Service ownership is configured under `ServiceCatalog:Services`. A matching inci
 Rotate any provider credentials that were previously stored in plaintext development configuration and move them to user-secrets, environment variables, or a secret manager.
 
 ## Frontend
+
+Current cleanup and verification: [engineering report](docs/reliability-2026-09-16.md). Full user walkthrough: [112-case manual QA guide](docs/manual-qa.md), including an isolated local test environment and a PASS/FAIL checklist.
 
 The incident console is a React 19 application under `frontend/`, built with Vite and served by ASP.NET Core at:
 
@@ -521,6 +529,10 @@ npm.cmd run dev
 ```
 
 Vite serves the development UI at `http://localhost:5173` and proxies API, authentication, health, and readiness requests to ASP.NET Core. End-to-end preparation builds React automatically.
+
+The development proxy targets `https://localhost:7104` and accepts the local ASP.NET self-signed certificate. This exception is scoped to the localhost Vite proxy; production hosting keeps its normal TLS configuration. Run the HTTPS launch profile above so that target is listening. A 401 response means sign-in is required, while `/ready` can return 503 with component details even when `/health` is healthy.
+
+The proxy preserves the registered HTTPS API origin for OIDC. After hosted sign-in, Auth0 returns to `https://localhost:7104/signin-oidc` and the built console on that origin. Run `npm.cmd run build` before testing that full round trip. Use Vite for hot-reload development; use the HTTPS API origin for the complete browser authentication flow.
 
 ## Endpoints
 
@@ -771,3 +783,33 @@ Good next engineering upgrades:
 - `appsettings.Development.json` is ignored by git.
 - Treat model output as untrusted.
 - Keep tool behavior bounded and read-only unless deliberately adding controlled write actions.
+
+
+### External OpenRouter embeddings
+
+Hugging Face remains supported. To use the existing OpenRouter account for embeddings, select it explicitly in local User Secrets:
+
+```powershell
+dotnet user-secrets set "Runbooks:SemanticRetrieval:EmbeddingProvider" "OpenRouter" --project IncidentResponseAgent.Api
+dotnet user-secrets set "Runbooks:SemanticRetrieval:Endpoint" "https://openrouter.ai/api/v1" --project IncidentResponseAgent.Api
+dotnet user-secrets set "Runbooks:SemanticRetrieval:Model" "nvidia/nemotron-3-embed-1b:free" --project IncidentResponseAgent.Api
+dotnet user-secrets set "Runbooks:SemanticRetrieval:BatchSize" "32" --project IncidentResponseAgent.Api
+dotnet user-secrets set "Runbooks:SemanticRetrieval:QdrantCollectionName" "incident_runbook_nemotron3_2048" --project IncidentResponseAgent.Api
+```
+
+The provider reads `Runbooks:SemanticRetrieval:ApiKey` or `OPENROUTER_API_KEY`. No secret belongs in frontend code. Both local analysis and embedding fallbacks remain disabled by default. Use a new Qdrant collection when changing embedding dimensions; old vectors must not be mixed with the new model. Indexing batches sections, validates response indexes and dimensions, and retries the external provider on the next search after an outage. OpenRouter free models share account quotas; HTTP 429 means wait for the quota reset or change the account plan/limits yourself. Provider reference: https://openrouter.ai/docs/api/api-reference/embeddings/create-embeddings.
+
+### Incident coordination
+
+The assignee picker contains authenticated responders who have signed into this instance. It persists stable subject IDs in `responders.json` beside the configured incident-record file; names and optional HTTPS profile pictures come from authenticated claims. This is a local directory, not an Auth0 role-management API. Provision roles in Auth0; a newly authorized person appears after signing in. Existing service-catalog team assignments remain visible. Assignment never grants application access.
+
+Acknowledge records the first responder who saw the incident without changing its assignment or status. Start work means investigation is active. Mitigated means impact is contained but investigation remains open. Resolve closes the incident and generates a proposed knowledge update; an administrator must review it before it becomes reusable knowledge. Responders can investigate, coordinate, record outcomes and resolve; admin-only source/project changes, deletion and knowledge publication are hidden and remain protected by the API.
+
+Additional validation suites:
+
+```powershell
+npx playwright test -c playwright.autoscan.config.ts --retries=0
+npx playwright test -c playwright.batched-rag.config.ts --retries=0
+```
+
+See `docs/validation-2026-09-14.md` for the workflow coverage and live-provider verification boundaries.

@@ -11,7 +11,7 @@ async function createViaApi(request: APIRequestContext, fixture: any, sessionId?
 }
 
 async function createViaUi(page: Page, fixture: any, sessionId?: string) {
-  await page.getByRole('button', { name: 'Dashboard', exact: true }).click();
+  await page.getByRole('button', { name: 'Incidents', exact: true }).click();
   await page.getByRole('button', { name: 'Create Incident' }).click();
   await page.locator('#incidentForm [name="title"]').fill(fixture.title);
   await page.locator('#incidentForm [name="description"]').fill(fixture.description);
@@ -64,6 +64,7 @@ test.describe.serial('@learning safe feedback, outcomes, knowledge approval, and
       });
       feedbackIncidentIds.push(incident.incidentId);
       const card = page.locator('#analysisOutput .feedback-card');
+      await card.locator('summary').click();
       if (index === 0) {
         const recommendation = page.getByRole('button', { name: 'Rate this recommendation' }).first();
         await recommendation.click();

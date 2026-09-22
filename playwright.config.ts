@@ -31,7 +31,7 @@ export default defineConfig({
     stderr: 'ignore',
     env: {
       ASPNETCORE_URLS: baseURL,
-      ASPNETCORE_ENVIRONMENT: 'Production',
+      ASPNETCORE_ENVIRONMENT: 'Testing',
       'Authentication__AllowDevelopmentIdentity': 'true',
       'ServiceCatalog__Services__0__ServiceName': 'checkout-api',
       'ServiceCatalog__Services__0__OwningTeam': 'checkout-team',
@@ -68,7 +68,7 @@ export default defineConfig({
   projects: [
     {
       name: 'chromium-core',
-      testIgnore: [/mobile\.spec\.ts/, /ai-analysis-rag\.spec\.ts/, /learning-loop\.spec\.ts/],
+      testIgnore: [/batched-rag\.spec\.ts/, /autonomous-scan\.spec\.ts/, /mobile\.spec\.ts/, /ai-analysis-rag\.spec\.ts/, /learning-loop\.spec\.ts/],
       use: { ...devices['Desktop Chrome'] }
     },
     {

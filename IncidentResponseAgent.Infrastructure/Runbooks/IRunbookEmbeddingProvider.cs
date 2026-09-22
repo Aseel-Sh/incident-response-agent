@@ -13,4 +13,11 @@ internal interface IRunbookEmbeddingProvider
 	string? DegradedReason => null;
 
 	Task<float[]> GenerateEmbeddingAsync(string text, CancellationToken cancellationToken = default);
+
+	async Task<IReadOnlyList<float[]>> GenerateEmbeddingsAsync(IReadOnlyList<string> texts, CancellationToken cancellationToken = default)
+	{
+		var vectors = new List<float[]>();
+		foreach (var text in texts) vectors.Add(await GenerateEmbeddingAsync(text, cancellationToken));
+		return vectors;
+	}
 }

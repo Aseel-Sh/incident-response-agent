@@ -120,7 +120,7 @@ test.describe.serial('@monitoring source ingestion and automatic detection', () 
     const unavailable = await (await request.get('/api/operations/sources')).json();
     expect(unavailable.find((source: any) => source.name === 'Metrics').status).toBe('missing');
     await page.getByRole('button', { name: 'Sources', exact: true }).click();
-    await page.getByRole('button', { name: 'Dashboard', exact: true }).click();
+    await page.getByRole('button', { name: 'Incidents', exact: true }).click();
     await page.getByRole('button', { name: 'Sources', exact: true }).click();
     const metricCard = page.locator('#sourcesOutput .source-card').filter({ hasText: 'Metrics' });
     await expect(metricCard).toContainText('missing');
@@ -227,12 +227,13 @@ test.describe.serial('@monitoring source ingestion and automatic detection', () 
     expect(duplicate.similarIncidents.some((item: any) => item.incidentId === duplicateIncidentId)).toBeTruthy();
     expect(await recentIncidents(request)).toHaveLength(incidentsBefore.length);
 
-    await page.getByRole('button', { name: 'Dashboard', exact: true }).click();
+    await page.getByRole('button', { name: 'Incidents', exact: true }).click();
     for (const candidate of [errorRate, latency, health, warning, duplicate]) {
       const row = page.locator(`[data-row-id="${candidate.id}"]`);
       await expect(row).toBeVisible();
       await expect(row.locator('.severity')).toHaveText(/^SEV-[1-5]$/);
-      await expect(row).toContainText('rule');
+      await expect(row).toContainText(candidate.source);
+      await expect(row.locator('.queue-status')).toHaveText('Candidate');
       await expect(row.locator('.candidate-evidence')).toContainText(candidate.signals[0]);
     }
   });
@@ -252,7 +253,7 @@ test.describe.serial('@monitoring source ingestion and automatic detection', () 
     await page.locator(`[data-row-id="${errorRate.id}"]`).getByRole('button', { name: 'Confirm' }).click();
     confirmedIncidentId = (await (await confirmResponse).json()).incidentId;
 
-    await page.getByRole('button', { name: 'Dashboard', exact: true }).click();
+    await page.getByRole('button', { name: 'Incidents', exact: true }).click();
     for (const [candidate, action] of [[warning, 'False positive'], [health, 'Ignore'], [duplicate, 'Merge duplicate']] as const) {
       await page.locator(`[data-row-id="${candidate.id}"]`).getByRole('button', { name: action }).click();
       const confirmation = page.getByRole('alertdialog');

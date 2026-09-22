@@ -1,7 +1,7 @@
 import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
 
-const providerPort = 5199;
+const providerPort = Number(process.env.FIXTURE_PROVIDER_PORT || 5199);
 const requests = [];
 
 function json(response, status, body) {
@@ -88,6 +88,13 @@ const provider = createServer((request, response) => {
     try { payload = body ? JSON.parse(body) : {}; }
     catch { return json(response, 400, { error: 'invalid fixture request JSON' }); }
 
+    if (request.url === '/v1/embeddings') {
+      const inputs = Array.isArray(payload.input) ? payload.input : [payload.input];
+      requests.push({kind:'embedding-batch',count:inputs.length});
+      if (inputs.some(input => String(input).includes('RAG_OUTAGE_TEST'))) return json(response,429,{error:{message:'rate limit fixture'}});
+      return json(response,200,{data:inputs.map((input,index)=>({index,embedding:embeddingFor(input)})).reverse()});
+    }
+
     if (request.url === '/embeddings/fixture-embedding') {
       if (String(payload.inputs || '').toLowerCase().includes('rag unavailable')) {
         return json(response, 503, { error: 'deterministic embedding outage' });
@@ -104,11 +111,14 @@ const provider = createServer((request, response) => {
       const strict = payload.response_format?.type === 'json_schema';
       const title = String(context.incident?.title || '');
       requests.push({ model: payload.model, strict, title, authorizationPresent: Boolean(request.headers.authorization) });
+      if (/empty completion choices/i.test(title)) return json(response, 200, { id: 'fixture-empty', object: 'chat.completion', model: 'fixture/model-v1', choices: [] });
+      if (/model timeout/i.test(title)) { setTimeout(() => { if (!response.destroyed) json(response, 200, { model: 'fixture/model-v1', choices: [{ message: { content: JSON.stringify(responseFor(context)) } }] }); }, 15000); return; }
       if (/model unavailable|both unavailable/i.test(title)) return json(response, 503, { error: 'deterministic model outage' });
-      if (/empty model output/i.test(title) && strict) {
+      if (/empty model output/i.test(title) && !context.validationFeedback) {
         return json(response, 200, { model: 'fixture/model-v1', choices: [{ message: { content: '' } }] });
       }
-      const content = JSON.stringify(responseFor(context));
+      const malformed = /malformed always/i.test(title) || (/malformed once/i.test(title) && !context.validationFeedback);
+      const content = malformed ? '{\n{invalid}' : JSON.stringify(responseFor(context));
       return json(response, 200, { model: 'fixture/model-v1', choices: [{ message: { content } }] });
     }
 
@@ -119,7 +129,7 @@ const provider = createServer((request, response) => {
 provider.listen(providerPort, '127.0.0.1');
 const defaults = {
   ASPNETCORE_URLS: 'http://127.0.0.1:5198',
-  ASPNETCORE_ENVIRONMENT: 'Production',
+  ASPNETCORE_ENVIRONMENT: 'Testing',
   'Agent__IncidentAnalysis__Provider': 'OpenRouter',
   'Agent__IncidentAnalysis__Model': 'fixture/model-v1',
   'Agent__IncidentAnalysis__Endpoint': 'http://127.0.0.1:5199/v1',

@@ -4,7 +4,7 @@ public sealed record IncidentTimelineEventResponse(string Type, DateTimeOffset O
 
 public sealed record SimilarIncidentResponse(Guid IncidentId, string IncidentSummary, string ServiceName, string Environment, DateTimeOffset CreatedAtUtc, double Score, string ResolutionSummary, IReadOnlyList<string> SharedSignals, IReadOnlyList<string> SuccessfulActions, IReadOnlyList<string> FailedActions);
 
-public sealed record ProposedKnowledgeUpdateResponse(Guid Id, string Title, string Content, string Status, DateTimeOffset GeneratedAtUtc, DateTimeOffset? ReviewedAtUtc, string? ReviewNotes);
+public sealed record ProposedKnowledgeUpdateResponse(Guid Id, string Title, string Content, string Status, DateTimeOffset GeneratedAtUtc, DateTimeOffset? ReviewedAtUtc, string? ReviewNotes, string PublicationStatus, string? PublicationError);
 
 public sealed record CandidateDecisionRequest
 {

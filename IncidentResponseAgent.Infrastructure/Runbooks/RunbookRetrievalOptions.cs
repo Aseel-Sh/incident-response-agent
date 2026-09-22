@@ -2,6 +2,7 @@ namespace IncidentResponseAgent.Infrastructure.Runbooks;
 
 public sealed class RunbookRetrievalOptions
 {
+	public string EmbeddingProvider { get; init; } = "HuggingFace";
 	public string VectorStoreProvider { get; init; } = "Qdrant";
 
 	public string? DatabasePath { get; init; }

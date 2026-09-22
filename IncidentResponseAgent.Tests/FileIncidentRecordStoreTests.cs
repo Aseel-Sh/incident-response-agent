@@ -286,6 +286,25 @@ public sealed class FileIncidentRecordStoreTests : IDisposable
 		Assert.Contains(failed.Timeline, item => item.Type == "analysis failed");
 	}
 
+    [Fact]
+    public async Task PublicationFailureKeepsProposalPendingAndCanBeRetried()
+    {
+        var publisher = new RecordingKnowledgePublisher { FailPublication = true };
+        var store = new FileIncidentRecordStore(Options.Create(new IncidentStorageOptions { IncidentRecordsPath = Path.Combine(_rootPath, "failure.json") }), publisher);
+        var incident = new Incident(Guid.NewGuid(), "Publication test", "A test incident", IncidentSeverity.Sev3);
+        await store.SaveAsync(incident, new IncidentAnalysisResult { IncidentId = incident.Id, IncidentSummary = incident.Title, AnalysisText = "{}", AnalysisProvider = "test", SessionId = "test" });
+        await store.UpdateStatusAsync(incident.Id, "resolved");
+        await Assert.ThrowsAsync<InvalidOperationException>(() => store.ReviewKnowledgeUpdateAsync(incident.Id, "approved", null, null));
+        var failed = (await store.GetRecentAsync(10)).Single().ProposedKnowledgeUpdate!;
+        Assert.Equal("pending", failed.Status);
+        Assert.Equal("failed", failed.PublicationStatus);
+        Assert.NotNull(failed.PublicationError);
+        publisher.FailPublication = false;
+        var approved = await store.ReviewKnowledgeUpdateAsync(incident.Id, "approved", null, null);
+        Assert.Equal("published", approved.PublicationStatus);
+        Assert.Null(approved.PublicationError);
+    }
+
 	public void Dispose()
 	{
 		if (Directory.Exists(_rootPath))
@@ -296,11 +315,13 @@ public sealed class FileIncidentRecordStoreTests : IDisposable
 
 	private sealed class RecordingKnowledgePublisher : IApprovedKnowledgePublisher
 	{
+		public bool FailPublication { get; set; }
 		public Guid? PublishedId { get; private set; }
 		public Guid? RemovedId { get; private set; }
 		public string? PublishedContent { get; private set; }
 		public Task PublishAsync(Guid proposalId, Guid incidentId, string title, string content, CancellationToken cancellationToken = default)
 		{
+			if (FailPublication) throw new IOException("test disk failure");
 			PublishedId = proposalId;
 			PublishedContent = content;
 			return Task.CompletedTask;

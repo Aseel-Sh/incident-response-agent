@@ -16,7 +16,7 @@ public static class AgentStructuredAnalysisParser
 			return null;
 		}
 
-		var json = ExtractJsonObject(analysisText);
+		var json = analysisText.Trim();
 		if (json is null)
 		{
 			return null;
@@ -33,15 +33,4 @@ public static class AgentStructuredAnalysisParser
 		}
 	}
 
-	private static string? ExtractJsonObject(string text)
-	{
-		var start = text.IndexOf('{');
-		var end = text.LastIndexOf('}');
-		if (start < 0 || end <= start)
-		{
-			return null;
-		}
-
-		return text[start..(end + 1)];
-	}
 }

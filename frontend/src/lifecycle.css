@@ -1,0 +1,42 @@
+:root {
+  --mitigated: #006779;
+  --mitigated-soft: #d7f1f6;
+  --confirmed: #684098;
+  --confirmed-soft: #efe4fc;
+}
+:root[data-theme="dark"] {
+  --mitigated: #7cdeed;
+  --mitigated-soft: #153e49;
+  --confirmed: #d3b4f5;
+  --confirmed-soft: #352647;
+}
+.lifecycle-candidate { --lifecycle: var(--blue); --lifecycle-soft: var(--blue-soft); }
+.lifecycle-new { --lifecycle: var(--confirmed); --lifecycle-soft: var(--confirmed-soft); }
+.lifecycle-active { --lifecycle: var(--yellow); --lifecycle-soft: var(--yellow-soft); }
+.lifecycle-mitigated { --lifecycle: var(--mitigated); --lifecycle-soft: var(--mitigated-soft); }
+.lifecycle-resolved, .lifecycle-recovered { --lifecycle: var(--green); --lifecycle-soft: var(--green-soft); }
+.lifecycle-neutral { --lifecycle: var(--muted); --lifecycle-soft: var(--soft); }
+#dashboardView .dashboard-stats [class^="lifecycle-"] dd { color: var(--lifecycle); }
+:root[data-theme] .status-text-mitigated { color: var(--mitigated); }
+:root[data-theme] .status-text-new { color: var(--confirmed); }
+:root[data-theme] .status-text-candidate { color: var(--blue); }
+:root[data-theme] .status-mitigated,
+:root[data-theme] button.secondary.ticket-action-mitigated { color: var(--mitigated); background: var(--mitigated-soft); border-color: var(--mitigated); }
+:root[data-theme] .status-new { color: var(--confirmed); background: var(--confirmed-soft); border-color: var(--confirmed); }
+.filter-chip[data-status="mitigated"] { color: var(--mitigated); }
+.filter-chip[data-status="resolved"] { color: var(--green); }
+.filter-chip[data-status="new"] { color: var(--confirmed); }
+.filter-chip[data-status="active"] { color: var(--yellow); }
+.filter-chip[data-status="candidate"] { color: var(--blue); }
+.timeline-event[data-tone="mitigated"] { --event-color: var(--mitigated); }
+.timeline-event[data-tone="confirmed"] { --event-color: var(--confirmed); }
+.operational-analytics { margin: 0 0 18px; padding: 12px 0; border-block: 1px solid var(--line); }
+.operational-analytics summary { font-weight: 600; cursor: pointer; }
+.analytics-grid { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 1fr); gap: 24px; }
+.distribution h3 { font-size: 12px; margin: 8px 0; }
+.distribution ul { list-style: none; padding: 0; margin: 0; max-height: 160px; overflow: auto; }
+.distribution li { display: grid; grid-template-columns: minmax(90px, 1fr) minmax(35px, 1.2fr) 25px; align-items: center; gap: 8px; font-size: 12px; margin-block: 7px; font-variant-numeric: tabular-nums; }
+.distribution-track { background: var(--soft); height: 7px; }
+.distribution-track > span { display: block; height: 100%; background: var(--lifecycle, var(--blue)); }
+.help-button { width: auto; padding-inline: 10px; border-radius: 4px; font-size: 12px; }
+@media (max-width: 720px) { .analytics-grid { grid-template-columns: 1fr; gap: 8px; } }

@@ -29,7 +29,7 @@ export default defineConfig({
     stderr: 'pipe',
     env: {
       ASPNETCORE_URLS: baseURL,
-      ASPNETCORE_ENVIRONMENT: 'Production',
+      ASPNETCORE_ENVIRONMENT: 'Testing',
       'Authentication__AllowDevelopmentIdentity': 'true',
       'Logging__EventLog__LogLevel__Default': 'None',
       'Agent__IncidentAnalysis__Provider': 'OpenRouter',

@@ -378,17 +378,7 @@ svg { width: 13px; height: 13px; stroke-width: 2; flex: 0 0 auto; }
   order: -1;
 }
 
-.dashboard-stats .stat-new dd { color: var(--blue); }
-.dashboard-stats .stat-confirmed dd { color: var(--confirmed); }
-.dashboard-stats .stat-active dd { color: var(--yellow); }
-.dashboard-stats .stat-mitigated dd { color: #0f766e; }
-.dashboard-stats .stat-resolved dd { color: var(--green); }
 
-.dashboard-stats .stat-new { box-shadow: inset 3px 0 0 var(--blue), var(--shadow); }
-.dashboard-stats .stat-confirmed { box-shadow: inset 3px 0 0 var(--confirmed), var(--shadow); }
-.dashboard-stats .stat-active { box-shadow: inset 3px 0 0 var(--yellow), var(--shadow); }
-.dashboard-stats .stat-mitigated { box-shadow: inset 3px 0 0 #0f766e, var(--shadow); }
-.dashboard-stats .stat-resolved { box-shadow: inset 3px 0 0 var(--green), var(--shadow); }
 
 .metric-strip p {
   margin: 0;
@@ -669,13 +659,7 @@ textarea {
 
 .dashboard-stats { grid-template-columns: repeat(5, minmax(0, 1fr)); }
 
-.severity::before {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: currentColor;
-  content: "";
-}
+
 
 :root[data-theme="dark"] .severity-sev1 { color: var(--sev1); background: var(--sev1-soft); }
 :root[data-theme="dark"] .severity-sev2 { color: var(--sev2); background: var(--sev2-soft); }
@@ -2428,26 +2412,25 @@ label {
 }
 
 .ticket-action-active {
-  color: #fff !important;
-  background: var(--accent) !important;
-  border-color: var(--accent) !important;
+  color: #fff;
+  background: var(--accent);
+  border-color: var(--accent);
 }
 
 .ticket-action-mitigated {
-  color: #064e3b !important;
-  background: #a7f3d0 !important;
-  border-color: #34d399 !important;
+  color: var(--green);
+  background: var(--green-soft);
+  border-color: var(--green);
 }
 
 .ticket-action-resolved {
-  color: #fff !important;
-  background: var(--green) !important;
-  border-color: var(--green) !important;
+  color: var(--green);
+  background: var(--green-soft);
+  border-color: var(--green);
 }
 
 .ticket-action:hover {
   filter: brightness(0.96);
-  transform: translateY(-1px);
 }
 
 .delete-incident-button {
@@ -2489,12 +2472,6 @@ label {
   margin: 3px 0 0;
   color: var(--muted);
   font-size: 11px;
-}
-
-:root[data-theme="dark"] .ticket-action-mitigated {
-  color: #d1fae5 !important;
-  background: #065f46 !important;
-  border-color: #10b981 !important;
 }
 
 .pagination-bar {

@@ -90,6 +90,7 @@ test.describe.serial('@ai evidence-grounded analysis, RAG, and fallback honesty'
     await fs.writeFile(path.join(sourcePath, 'inventory-recovery.md'), '# Inventory dependency recovery\n\n## Purpose\n\nRecover inventory-api when a warehouse dependency timeout occurs.\n\n## Mitigation\n\nFail over the warehouse dependency and verify inventory request latency.\n');
     await page.goto('/#rag');
     await page.getByRole('button', { name: 'RAG' }).click();
+    await page.getByText('Connect a runbook source', { exact: true }).click();
     await page.locator('#runbookSourceForm [name="name"]').fill('Inventory operations');
     await page.locator('#runbookSourceForm [name="type"]').selectOption('directory');
     await page.locator('#runbookSourceForm [name="path"]').fill(sourcePath);
@@ -153,7 +154,7 @@ test.describe.serial('@ai evidence-grounded analysis, RAG, and fallback honesty'
     await expect(page.locator('#analysisOutput')).not.toContainText('confirmed outage');
   });
 
-  test('empty strict-model output retries prompt-only JSON and persists the retry disclosure', async ({ page, request }) => {
+  test('empty strict-model output retries with strict JSON schema and persists the retry disclosure', async ({ page, request }) => {
     const fixture = goldenFixtures.emptyModelRetry;
     const { response, body } = await analyzeThroughUi(page, fixture);
     expect(response.ok()).toBeTruthy();
@@ -162,7 +163,7 @@ test.describe.serial('@ai evidence-grounded analysis, RAG, and fallback honesty'
     expect(body.providerTransparency.structuredOutputRetryReason).toContain('empty content');
     await expect(page.locator('#analysisOutput')).toContainText('Structured-output retry');
     const calls = await (await request.get('http://127.0.0.1:5199/__requests')).json();
-    expect(calls.filter((item: any) => item.title === fixture.title).map((item: any) => item.strict).slice(-2)).toEqual([true, false]);
+    expect(calls.filter((item: any) => item.title === fixture.title).map((item: any) => item.strict).slice(-2)).toEqual([true, true]);
     expect(calls.find((item: any) => item.title === fixture.title)).toEqual(expect.objectContaining({
       model: 'fixture/model-v1', authorizationPresent: true
     }));
@@ -216,3 +217,21 @@ test.describe.serial('@ai evidence-grounded analysis, RAG, and fallback honesty'
     });
   });
 });
+
+for (const scenario of [
+  { title: 'Malformed once database latency', fallback: false },
+  { title: 'Malformed always database latency', fallback: true },
+  { title: 'Model timeout database latency', fallback: true }
+]) {
+  test(`structured reliability: ${scenario.title}`, async ({ page, request }) => {
+    const { response, body } = await analyzeThroughUi(page, { ...goldenFixtures.clearDatabaseLatency, title: scenario.title });
+    expect(response.ok()).toBeTruthy();
+    expect(body.providerTransparency.usedModelFallback).toBe(scenario.fallback);
+    expect(JSON.stringify(body)).not.toMatch(/BytePositionInLine|JsonReaderException|invalid start of a property/);
+    const calls = await (await request.get('http://127.0.0.1:5199/__requests')).json();
+    const attempts = calls.filter((item: any) => item.title === scenario.title);
+    if (scenario.title.startsWith('Malformed')) expect(attempts).toHaveLength(2);
+    if (scenario.fallback) await expect(page.locator('#analysisOutput')).toContainText('Local fallback');
+    else expect(body.providerTransparency.usedStructuredOutputRetry).toBe(true);
+  });
+}

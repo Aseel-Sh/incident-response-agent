@@ -39,7 +39,7 @@ test.describe.serial('incident response core flows', () => {
     await themeButton.click();
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
 
-    for (const [tab, view] of Object.entries({ Dashboard: 'dashboard', Analysis: 'analysis', History: 'history', Sources: 'sources', Diagnostics: 'ingestion', RAG: 'rag', Evaluation: 'evaluation', Monitor: 'monitor', Config: 'config' })) {
+    for (const [tab, view] of Object.entries({ Incidents: 'dashboard', Analysis: 'analysis', History: 'history', Sources: 'sources', Diagnostics: 'ingestion', RAG: 'rag', Evaluation: 'evaluation', Monitor: 'monitor', Config: 'config' })) {
       await page.getByRole('button', { name: tab, exact: true }).click();
       await expect(page.locator(`#${view}View`)).toHaveClass(/active/);
     }
@@ -50,7 +50,7 @@ test.describe.serial('incident response core flows', () => {
     await page.getByRole('button', { name: 'RAG', exact: true }).click();
     await expect(page.locator('#ragSummary')).toContainText(/RAG Status|RAG degraded/i);
     await expect(page.locator('#ragSummary')).toContainText(/unavailable|degraded|available|no matches/i);
-    await page.getByRole('button', { name: 'Dashboard', exact: true }).click();
+    await page.getByRole('button', { name: 'Incidents', exact: true }).click();
     await page.getByRole('button', { name: 'Create Incident' }).click();
     await page.getByRole('button', { name: 'Sample' }).click();
     await expect(page.locator('#incidentForm [name="title"]')).not.toHaveValue('');
@@ -65,6 +65,7 @@ test.describe.serial('incident response core flows', () => {
     const projectName = 'Payments E2E';
     await page.goto('/');
     await page.getByRole('button', { name: 'Sources', exact: true }).click();
+    await page.getByText('Add a project workspace', { exact: true }).click();
     const projectForm = page.locator('#projectForm');
     await projectForm.getByLabel('Project ID').fill(projectId);
     await projectForm.getByLabel('Name', { exact: true }).fill(projectName);
@@ -139,7 +140,7 @@ test.describe.serial('incident response core flows', () => {
     await expect(page.locator('#analysisOutput .confidence-score')).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
     await expect(page.locator('#incidentForm input[name="sessionId"]')).toHaveValue(primary.sessionId);
 
-    await page.getByRole('button', { name: 'Dashboard', exact: true }).click();
+    await page.getByRole('button', { name: 'Incidents', exact: true }).click();
     await expect(page.locator('#detectedOutput').getByText(manualLatencyIncident.title, { exact: true })).toBeVisible();
     await page.getByRole('searchbox', { name: 'Search incidents' }).fill('checkout-api');
     await expect(page.locator('#detectedOutput').getByText(manualLatencyIncident.title, { exact: true })).toBeVisible();
@@ -193,7 +194,7 @@ test.describe.serial('incident response core flows', () => {
       return { color: style.color, background: style.backgroundColor, border: style.borderStyle };
     });
     expect(badgeStyle.color).not.toBe(badgeStyle.background);
-    expect(badgeStyle.border).toBe('none');
+    expect(badgeStyle.border).toBe('solid');
     await page.getByRole('button', { name: 'Toggle theme' }).click();
     const semanticColors = await page.evaluate(() => {
       const classes = ['severity-sev1', 'severity-sev2', 'severity-sev3', 'severity-sev4', 'severity-sev5', 'provider-model', 'provider-local', 'status-new'];
@@ -207,7 +208,8 @@ test.describe.serial('incident response core flows', () => {
         return [className, value];
       }));
     });
-    expect(new Set(Object.values(semanticColors)).size).toBe(Object.keys(semanticColors).length);
+    // Severity levels must remain distinct; unrelated statuses may share a semantic hue.
+    expect(new Set(Object.entries(semanticColors).filter(([name]) => name.startsWith('severity-')).map(([, color]) => color)).size).toBe(5);
     const confidenceRadius = await page.locator('#recentOutput .confidence-badge').first().evaluate(element => getComputedStyle(element).borderRadius);
     expect(confidenceRadius).toBe('4px');
     await page.getByLabel('Search history').fill('payment authorization');
@@ -219,9 +221,15 @@ test.describe.serial('incident response core flows', () => {
   test('lifecycle transitions persist and append timeline events', async ({ page, request }) => {
     await page.goto('/');
     await openIncident(page, manualLatencyIncident.title, primary.incidentId);
-    await page.getByPlaceholder('Responder name or team').fill('checkout-oncall');
+    await page.getByRole('button', { name: 'Assign to me', exact: true }).click();
+    await expect.poll(async () => (await recentIncidents(request)).find(item => item.incidentId === primary.incidentId)?.assignee).toBe('development:local-operator');
     await page.getByRole('button', { name: 'Acknowledge' }).click();
-    await expect(page.getByRole('dialog')).toContainText('checkout-oncall');
+    await expect(page.getByRole('dialog')).toContainText('local-operator');
+    await page.getByRole('button', { name: 'Unassign', exact: true }).click();
+    await expect.poll(async () => (await recentIncidents(request)).find(item => item.incidentId === primary.incidentId)?.assignee).toBeNull();
+    await page.getByRole('combobox', {name:'Assignee', exact:true}).selectOption('development:local-operator');
+    await page.getByRole('button', { name: 'Save assignment', exact:true }).click();
+    await expect.poll(async () => (await recentIncidents(request)).find(item => item.incidentId === primary.incidentId)?.assignee).toBe('development:local-operator');
     await expect.poll(async () => (await recentIncidents(request)).find(item => item.incidentId === primary.incidentId)?.acknowledgedBy).toBe('local-operator');
     await page.getByRole('button', { name: 'Start work' }).click();
     await expect(page.getByRole('dialog')).toContainText('work started');
@@ -302,7 +310,7 @@ test.describe.serial('incident response core flows', () => {
     await expect(page.locator('.history-heading #historyResultCount')).toBeVisible();
     await expect(page.locator('.history-heading #historyReloadButton')).toBeVisible();
     await expect(page.locator('#historyStatusFilter option')).toHaveText(['All statuses', 'Confirmed', 'Active', 'Mitigated', 'Resolved', 'Recovered']);
-    await page.route('**/api/incidents/recent?maxResults=12', async route => {
+    await page.route('**/api/incidents/recent?maxResults=100', async route => {
       await new Promise(resolve => setTimeout(resolve, 250));
       await route.continue();
     });
@@ -311,11 +319,13 @@ test.describe.serial('incident response core flows', () => {
     await expect(page.locator('#toastRegion')).toContainText('History refreshed');
     await expect(refreshButton).toBeEnabled();
     await expect(refreshButton).toBeEnabled();
-    await page.unroute('**/api/incidents/recent?maxResults=12');
+    await page.unroute('**/api/incidents/recent?maxResults=100');
     await expect(page.locator('#recentOutput .confidence-badge').first()).toHaveCSS('border-top-style', 'none');
     await expect(page.locator('[data-history-page="2"]')).toBeVisible();
     await page.locator('[data-history-page="2"]').click();
-    await expect(page.locator('#recentOutput .pagination-bar')).toContainText('11-12 of 12');
+    const total = Number(await page.locator('#historyTotal').innerText());
+    expect(total).toBeGreaterThan(12);
+    await expect(page.locator('#recentOutput .pagination-bar')).toContainText(`11-${Math.min(20, total)} of ${total}`);
 
     await page.getByLabel('Service filter').selectOption('checkout-api');
     await page.getByLabel('Status filter').selectOption('resolved');

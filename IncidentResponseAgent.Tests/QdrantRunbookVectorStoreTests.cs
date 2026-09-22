@@ -9,6 +9,22 @@ namespace IncidentResponseAgent.Tests;
 public sealed class QdrantRunbookVectorStoreTests
 {
 	[Fact]
+	public async Task CollectionProbeRecoversAfterAnOutageWithoutClaimingFallback()
+	{
+		var available = false;
+		var handler = new RecordingHandler(_ => available
+			? new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("{\"result\":{\"config\":{\"params\":{\"vectors\":{\"size\":384}}}}}", Encoding.UTF8, "application/json") }
+			: throw new HttpRequestException("Qdrant is offline"));
+		var store = new QdrantRunbookVectorStore(new RunbookRetrievalOptions { QdrantEndpoint = "https://qdrant.example.test" },
+			new StaticHttpClientFactory(handler), NullLogger<QdrantRunbookVectorStore>.Instance);
+		Assert.False(await store.EnsureCollectionAsync(384, CancellationToken.None));
+		Assert.Equal("qdrant-unavailable", store.ProviderName);
+		available = true;
+		Assert.True(await store.EnsureCollectionAsync(384, CancellationToken.None));
+		Assert.Equal("qdrant", store.ProviderName);
+	}
+
+	[Fact]
 	public async Task EnsureCollectionAsyncUsesExistingCollectionAndApiKeyHeader()
 	{
 		var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
