@@ -32,7 +32,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - uses: millionco/react-doctor@0a2629b8dabe659935e08e12e3bef0d0ea2d53aa # v2
+      - uses: millionco/react-doctor@013f7373f91a3b9e68bd1dc7d4d354f4b041b117 # v2
         with:
           comment: false
           review-comments: false
