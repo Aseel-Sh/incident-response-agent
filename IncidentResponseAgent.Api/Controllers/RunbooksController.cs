@@ -1,3 +1,4 @@
+using IncidentResponseAgent.Api.Security;
 using IncidentResponseAgent.Application.Runbooks;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Authorization;
@@ -23,6 +24,7 @@ public sealed class RunbooksController : ControllerBase
 		Ok(await _sourceManagementService.GetSourcesAsync(cancellationToken));
 
 	[HttpPost("sources")]
+    [RequestBudget("Expensive")]
 	[Authorize(Roles = "admin")]
 	public async Task<ActionResult<RunbookSourceStatus>> AddSourceAsync([FromBody] RunbookSourceInput input, CancellationToken cancellationToken)
 	{
@@ -36,6 +38,7 @@ public sealed class RunbooksController : ControllerBase
 		Ok(await _sourceManagementService.SetEnabledAsync(sourceId, request.Enabled, cancellationToken));
 
 	[HttpPost("sources/{sourceId}/synchronize")]
+    [RequestBudget("Expensive")]
 	[Authorize(Roles = "admin")]
 	public async Task<ActionResult<RunbookSourceStatus>> SynchronizeSourceAsync(string sourceId, CancellationToken cancellationToken) =>
 		Ok(await _sourceManagementService.SynchronizeAsync(sourceId, cancellationToken));
@@ -46,6 +49,7 @@ public sealed class RunbooksController : ControllerBase
 		await _sourceManagementService.RemoveSourceAsync(sourceId, cancellationToken) ? NoContent() : NotFound();
 
 	[HttpGet("search")]
+    [RequestBudget("Expensive")]
 	[ProducesResponseType(typeof(RunbookRetrievalDiagnosticsResult), StatusCodes.Status200OK)]
 	[ProducesResponseType(StatusCodes.Status400BadRequest)]
 	public async Task<ActionResult<RunbookRetrievalDiagnosticsResult>> SearchAsync(
@@ -55,9 +59,9 @@ public sealed class RunbooksController : ControllerBase
 		[FromQuery] int maxResults = 5,
 		CancellationToken cancellationToken = default)
 	{
-		if (string.IsNullOrWhiteSpace(query))
+		if (string.IsNullOrWhiteSpace(query) || query.Length > 2000 || maxResults is < 1 or > 20)
 		{
-			return BadRequest("Query is required.");
+			return BadRequest("Query must contain 1-2000 characters and maxResults must be 1-20.");
 		}
 
 		var result = await _diagnosticsService.SearchAsync(

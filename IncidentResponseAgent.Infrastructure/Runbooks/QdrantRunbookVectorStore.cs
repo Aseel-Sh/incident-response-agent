@@ -101,11 +101,11 @@ internal sealed class QdrantRunbookVectorStore
 		{
 			throw;
 		}
-		catch (Exception exception)
+		catch (Exception)
 		{
 			_available = false;
-			_logger.LogWarning(exception, "Vector store failed. Provider={Provider} Operation={Operation}.", "qdrant", "collection-setup");
-			_logger.LogWarning(exception, "Qdrant collection setup failed. The retrieval service will apply the configured fallback policy.");
+			_logger.LogWarning("Vector store failed. Provider={Provider} Operation={Operation}.", "qdrant", "collection-setup");
+			_logger.LogWarning("Qdrant collection setup failed. The retrieval service will apply the configured fallback policy.");
 			return false;
 		}
 	}
@@ -161,11 +161,11 @@ internal sealed class QdrantRunbookVectorStore
 		{
 			throw;
 		}
-		catch (Exception exception)
+		catch (Exception)
 		{
 			_available = false;
-			_logger.LogWarning(exception, "Vector store failed. Provider={Provider} Operation={Operation}.", "qdrant", "search");
-			_logger.LogWarning(exception, "Qdrant upsert failed. The retrieval service will apply the configured fallback policy.");
+			_logger.LogWarning("Vector store failed. Provider={Provider} Operation={Operation}.", "qdrant", "search");
+			_logger.LogWarning("Qdrant upsert failed. The retrieval service will apply the configured fallback policy.");
 			return false;
 		}
 	}
@@ -212,9 +212,9 @@ internal sealed class QdrantRunbookVectorStore
 		{
 			throw;
 		}
-		catch (Exception exception)
+		catch (Exception)
 		{
-			_logger.LogWarning(exception, "Qdrant stale runbook cleanup failed. SQLite vector search remains authoritative.");
+			_logger.LogWarning("Qdrant stale runbook cleanup failed. SQLite vector search remains authoritative.");
 			return false;
 		}
 	}
@@ -257,10 +257,10 @@ internal sealed class QdrantRunbookVectorStore
 		{
 			throw;
 		}
-		catch (Exception exception)
+		catch (Exception)
 		{
 			_available = false;
-			_logger.LogWarning(exception, "Qdrant search failed. The retrieval service will apply the configured fallback policy.");
+			_logger.LogWarning("Qdrant search failed. The retrieval service will apply the configured fallback policy.");
 			return Array.Empty<QdrantRunbookMatch>();
 		}
 	}

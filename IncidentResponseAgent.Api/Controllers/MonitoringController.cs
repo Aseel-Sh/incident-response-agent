@@ -1,3 +1,4 @@
+using IncidentResponseAgent.Api.Security;
 using IncidentResponseAgent.Application.Incidents;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Authorization;
@@ -22,6 +23,7 @@ public sealed class MonitoringController(IIncidentMonitoringCoordinator coordina
 	public async Task<ActionResult<IncidentMonitoringState>> SetIntervalAsync([FromBody] MonitoringIntervalRequest request, CancellationToken cancellationToken) => Ok(await coordinator.SetPollingIntervalAsync(request.Seconds, cancellationToken));
 
 	[HttpPost("scan")]
+    [RequestBudget("Expensive")]
 	public async Task<ActionResult<IncidentMonitoringState>> ScanAsync([FromQuery] string? projectId, CancellationToken cancellationToken) => Ok(await coordinator.ScanNowAsync(projectId, cancellationToken));
 }
 

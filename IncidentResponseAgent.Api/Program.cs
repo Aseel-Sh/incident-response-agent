@@ -21,13 +21,19 @@ using Microsoft.IdentityModel.Tokens;
 using IncidentResponseAgent.Infrastructure.Services;
 
 var builder = WebApplication.CreateBuilder(args);
+// Optional runtime-mounted secret files; filenames use double underscores for configuration sections.
+if (builder.Configuration["SecretsDirectory"] is { Length: > 0 } secretsDirectory)
+    builder.Configuration.AddKeyPerFile(secretsDirectory, optional: false);
 builder.Logging.ClearProviders();
 builder.Logging.AddConsole();
 
 // Add services to the container.
 
+builder.AddDeploymentSecurity();
 builder.Services.AddControllers();
 builder.Services.AddHttpClient();
+builder.Services.AddHttpClient("readiness").ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
+builder.Services.AddSingleton<DependencyReadinessProbe>();
 builder.Services.Configure<IncidentAnalysisAgentOptions>(builder.Configuration.GetSection("Agent:IncidentAnalysis"));
 builder.Services.Configure<RunbookRetrievalOptions>(builder.Configuration.GetSection("Runbooks:SemanticRetrieval"));
 builder.Services.Configure<OperationalDataOptions>(builder.Configuration.GetSection("Tools:OperationalData"));
@@ -90,6 +96,7 @@ else
             options.Cookie.SameSite = SameSiteMode.Lax;
             options.Cookie.SecurePolicy = CookieSecurePolicy.Always;
             options.SlidingExpiration = false;
+            options.ExpireTimeSpan = TimeSpan.FromHours(8);
             options.Events.OnRedirectToLogin = context => { context.Response.StatusCode = StatusCodes.Status401Unauthorized; return Task.CompletedTask; };
             options.Events.OnRedirectToAccessDenied = context => { context.Response.StatusCode = StatusCodes.Status403Forbidden; return Task.CompletedTask; };
         }).AddOpenIdConnect(OpenIdConnectDefaults.AuthenticationScheme, options =>
@@ -159,7 +166,7 @@ app.UseExceptionHandler(errorApp =>
         if (exception is not null)
         {
             var logger = context.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("IncidentResponseAgent.Api.ExceptionHandler");
-            logger.LogError(exception, "Unhandled request failure. TraceId={TraceId} Path={Path} StatusCode={StatusCode}", context.TraceIdentifier, context.Request.Path, statusCode);
+            logger.LogError("Unhandled request failure. Type={ExceptionType} TraceId={TraceId} StatusCode={StatusCode}", exception.GetType().Name, context.TraceIdentifier, statusCode);
         }
         context.Response.StatusCode = statusCode;
 
@@ -176,12 +183,15 @@ app.UseExceptionHandler(errorApp =>
     });
 });
 
-app.UseHttpsRedirection();
+app.UseDeploymentSecurity();
+if (app.Configuration.GetValue("Security:HttpsRedirection", true)) app.UseHttpsRedirection();
 
 // Only the login document and compiled UI assets are public; they contain no incident data.
 app.UseDefaultFiles();
 app.UseStaticFiles();
 
+app.UseRouting();
+app.UseRequestTimeouts();
 app.UseAuthentication();
 app.Use(async (context, next) =>
 {
@@ -197,6 +207,7 @@ app.Use(async (context, next) =>
     await next();
 });
 app.UseAuthorization();
+app.UseRateLimiter();
 
 app.MapGet("/health", () => Results.Ok(new
     {
@@ -244,7 +255,7 @@ app.MapPost("/auth/logout", () => browserOidcEnabled
     ? Results.SignOut(new AuthenticationProperties { RedirectUri = "/" }, [CookieAuthenticationDefaults.AuthenticationScheme, OpenIdConnectDefaults.AuthenticationScheme])
     : Results.Redirect("/")).RequireAuthorization("SignedIn");
 
-app.MapControllers();
+app.MapControllers().WithRequestTimeout("request");
 app.MapGet("/login", () => Results.File(Path.Combine(app.Environment.WebRootPath, "index.html"), "text/html")).AllowAnonymous();
 
 app.Run();
@@ -268,15 +279,17 @@ static (int StatusCode, string Title, string Detail) MapException(Exception? exc
         InvalidOperationException invalidOperationException => (
             StatusCodes.Status503ServiceUnavailable,
             "Service is not configured",
-            invalidOperationException.Message),
+            "The service could not complete the operation. Verify configuration and dependency status."),
         HttpRequestException httpRequestException => (
             StatusCodes.Status503ServiceUnavailable,
             "External service is unavailable",
-            httpRequestException.Message),
+            "The external service could not complete the request."),
         _ when exception?.GetType().Name.Contains("ClientResultException", StringComparison.OrdinalIgnoreCase) == true => (
             StatusCodes.Status502BadGateway,
             "Model provider request failed",
             "The configured model provider rejected or failed the request. Check API key, model access, and provider status."),
+        BadHttpRequestException badRequest => (badRequest.StatusCode, "Invalid HTTP request", "The request exceeds server limits or is malformed."),
+        OperationCanceledException => (StatusCodes.Status504GatewayTimeout, "Request timed out", "The operation did not complete within its deadline."),
         _ => (
             StatusCodes.Status500InternalServerError,
             "Unexpected server error",

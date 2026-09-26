@@ -924,9 +924,9 @@ create index if not exists ix_runbook_documents_content_hash on runbook_document
 			var custom = JsonSerializer.Deserialize<RunbookSourceRegistration[]>(json, SerializerOptions) ?? [];
 			return [configured, .. custom.Select(item => item with { Removable = true })];
 		}
-		catch (Exception exception)
+		catch (Exception)
 		{
-			_logger.LogWarning(exception, "Could not read the runbook source registry. The configured primary source remains available.");
+			_logger.LogWarning("Could not read the runbook source registry. The configured primary source remains available.");
 			return [configured];
 		}
 	}
@@ -1024,8 +1024,7 @@ create index if not exists ix_runbook_documents_content_hash on runbook_document
 			return "Runbook retrieval unavailable: primary embedding provider failed and local embedding fallback is disabled.";
 		}
 
-		if (message.Length > 260) message = string.Concat(message.AsSpan(0, 257), "...");
-		return $"Runbook retrieval unavailable: {message}";
+		return "Runbook retrieval unavailable. Check provider configuration and availability.";
 	}
 
 	private static string ResolveSourceDirectory(string? path)

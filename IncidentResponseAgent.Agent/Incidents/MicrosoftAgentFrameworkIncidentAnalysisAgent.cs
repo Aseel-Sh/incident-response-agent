@@ -308,7 +308,7 @@ Return compact JSON only, without Markdown, using the requested schema.
 		}
 		catch (JsonException exception)
 		{
-			_logger.LogWarning(exception, "Provider or framework JSON decoding failed. Attempt={Attempt}.", attempt);
+			_logger.LogWarning("Provider or framework JSON decoding failed. Attempt={Attempt}.", attempt);
 			throw new ModelStructuredOutputException("The model provider returned malformed structured data. No analysis was accepted.", exception);
 		}
 		catch (ArgumentOutOfRangeException exception) when (
@@ -316,7 +316,7 @@ Return compact JSON only, without Markdown, using the requested schema.
 		{
 			// The OpenAI adapter reads choices[0] before exposing an empty completion to validation.
 			// Keep this filter specific so unrelated tool/application indexing bugs are not hidden.
-			_logger.LogWarning(exception, "Provider returned an empty completion envelope. Attempt={Attempt}.", attempt);
+			_logger.LogWarning("Provider returned an empty completion envelope. Attempt={Attempt}.", attempt);
 			throw new ModelStructuredOutputException("The model provider returned no completion choices. No analysis was accepted.", exception);
 		}
 		catch (OperationCanceledException)

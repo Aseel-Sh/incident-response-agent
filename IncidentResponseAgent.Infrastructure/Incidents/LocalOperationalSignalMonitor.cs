@@ -218,7 +218,7 @@ public sealed class LocalOperationalSignalMonitor : IIncidentSignalMonitor
 		}
 		catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException)
 		{
-			throw new HttpRequestException($"Telemetry health check failed for project {projectOptions.ProjectId}: {exception.GetType().Name}: {exception.Message}", exception);
+			throw new HttpRequestException($"Telemetry health check failed for project {projectOptions.ProjectId}: {exception.GetType().Name}", exception);
 		}
 	}
 

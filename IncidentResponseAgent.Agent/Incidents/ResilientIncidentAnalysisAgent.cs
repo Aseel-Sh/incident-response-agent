@@ -145,11 +145,8 @@ public sealed class ResilientIncidentAnalysisAgent : IIncidentAnalysisAgent
 			return "Model provider is rate-limited. Retry after the provider quota resets.";
 		}
 
-		if (message.Length > 220)
-		{
-			message = string.Concat(message.AsSpan(0, 217), "...");
-		}
-
-		return message;
+        var status = System.Text.RegularExpressions.Regex.Match(message, @"\b[45]\d{2}\b");
+        return status.Success ? $"Model provider failed with HTTP {status.Value}. Check model access and provider availability."
+            : $"Model provider failed ({exception.GetType().Name}). Check provider configuration and availability.";
 	}
 }

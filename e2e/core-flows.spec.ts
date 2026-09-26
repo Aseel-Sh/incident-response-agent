@@ -16,7 +16,7 @@ test.describe.serial('incident response core flows', () => {
   test('app shell exposes honest health, version, runtime config, themes, and useful tabs', async ({ page, request }) => {
     const readiness = await request.get('/ready');
     expect(readiness.status()).toBe(503);
-    expect(await readiness.json()).toMatchObject({ status: 'not-ready', components: { model: { status: 'unconfigured' }, embeddings: { status: 'unconfigured' } } });
+    expect(await readiness.json()).toMatchObject({ status: 'unavailable', components: { model: { status: 'unavailable', executionVerified: false }, embeddings: { status: 'unavailable', executionVerified: false } } });
     const identity = await request.get('/api/identity/me');
     expect(await identity.json()).toMatchObject({ name: 'local-operator', roles: ['admin'] });
     const services = await request.get('/api/services');

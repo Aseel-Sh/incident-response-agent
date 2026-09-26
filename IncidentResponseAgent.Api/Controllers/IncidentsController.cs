@@ -1,3 +1,4 @@
+using IncidentResponseAgent.Api.Security;
 using IncidentResponseAgent.Api.Contracts.Incidents;
 using IncidentResponseAgent.Application.Incidents;
 using IncidentResponseAgent.Domain.Incidents;
@@ -41,6 +42,7 @@ public sealed class IncidentsController : ControllerBase
     }
 
     [HttpPost("analyze")]
+    [RequestBudget("Expensive")]
     [ProducesResponseType(typeof(IncidentAnalysisResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     public async Task<ActionResult<IncidentAnalysisResponse>> AnalyzeAsync(
@@ -184,6 +186,7 @@ public sealed class IncidentsController : ControllerBase
     }
 
     [HttpPost("scan")]
+    [RequestBudget("Expensive")]
     public async Task<ActionResult<object>> ScanAsync(CancellationToken cancellationToken)
     {
         var started = DateTimeOffset.UtcNow;
@@ -221,6 +224,7 @@ public sealed class IncidentsController : ControllerBase
     }
 
     [HttpPost("candidates/{candidateId}/confirm")]
+    [RequestBudget("Expensive")]
     public async Task<ActionResult<IncidentAnalysisResponse>> ConfirmCandidateAsync(string candidateId, [FromQuery] string? sessionId, CancellationToken cancellationToken)
     {
         try
@@ -243,6 +247,7 @@ public sealed class IncidentsController : ControllerBase
     }
 
     [HttpPost("{incidentId:guid}/analysis/retry")]
+    [RequestBudget("Expensive")]
     public async Task<ActionResult<IncidentAnalysisResponse>> RetryAnalysisAsync(Guid incidentId, [FromQuery] string? sessionId, CancellationToken cancellationToken)
     {
         var record = await _incidentRecordStore.GetByIncidentIdAsync(incidentId, cancellationToken);
@@ -284,6 +289,7 @@ public sealed class IncidentsController : ControllerBase
     }
 
     [HttpPost("{incidentId:guid}/knowledge-review")]
+    [RequestBudget("Expensive")]
     [Authorize(Roles = "admin")]
     public async Task<ActionResult<ProposedKnowledgeUpdateResponse>> ReviewKnowledgeAsync(Guid incidentId, [FromBody] KnowledgeReviewRequest request, CancellationToken cancellationToken)
     {

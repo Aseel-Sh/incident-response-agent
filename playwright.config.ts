@@ -32,6 +32,12 @@ export default defineConfig({
     env: {
       ASPNETCORE_URLS: baseURL,
       ASPNETCORE_ENVIRONMENT: 'Testing',
+      // The suite shares one process; production budgets have independent backend tests.
+      RateLimits__General: '10000',
+      RateLimits__Signals: '1000',
+      RateLimits__Expensive: '1000',
+      RateLimits__Readiness: '1000',
+      HF_TOKEN: '',
       'Authentication__AllowDevelopmentIdentity': 'true',
       'ServiceCatalog__Services__0__ServiceName': 'checkout-api',
       'ServiceCatalog__Services__0__OwningTeam': 'checkout-team',

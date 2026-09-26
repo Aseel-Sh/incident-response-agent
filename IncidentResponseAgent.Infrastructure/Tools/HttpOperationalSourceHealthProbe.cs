@@ -17,11 +17,11 @@ public sealed class HttpOperationalSourceHealthProbe(IOptions<OperationalDataOpt
 			using var response = await httpClientFactory.CreateClient().GetAsync(_options.SourceHealthEndpoint, timeout.Token);
 			return response.IsSuccessStatusCode
 				? new OperationalSourceHealth(true)
-				: new OperationalSourceHealth(true, $"Telemetry producer is reachable but its health endpoint reports HTTP {(int)response.StatusCode} {response.ReasonPhrase}.");
+				: new OperationalSourceHealth(true, $"Telemetry producer is reachable but its health endpoint reports HTTP {(int)response.StatusCode}.");
 		}
 		catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
 		{
-			return new OperationalSourceHealth(false, $"Telemetry health check failed: {exception.GetType().Name}: {exception.Message}");
+			return new OperationalSourceHealth(false, $"Telemetry health check failed: {exception.GetType().Name}");
 		}
 	}
 }

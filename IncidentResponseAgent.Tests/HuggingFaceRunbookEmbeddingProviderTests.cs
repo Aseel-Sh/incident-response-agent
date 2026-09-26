@@ -41,6 +41,20 @@ public sealed class HuggingFaceRunbookEmbeddingProviderTests
 		Assert.Contains("model unavailable", exception.Message);
 	}
 
+    [Fact]
+    public async Task ProviderErrorBodyIsNotIncludedInException()
+    {
+        var provider = new HuggingFaceRunbookEmbeddingProvider(
+            new RunbookRetrievalOptions { ApiKey = "synthetic-test-token", Endpoint = "https://example.test/", Model = "test/model" },
+            new StaticHttpClientFactory("private upstream payload: synthetic-test-token", HttpStatusCode.Unauthorized),
+            NullLogger<HuggingFaceRunbookEmbeddingProvider>.Instance);
+        var error = await Assert.ThrowsAsync<HttpRequestException>(() => provider.GenerateEmbeddingAsync("test"));
+        Assert.Equal(HttpStatusCode.Unauthorized, error.StatusCode);
+        Assert.Contains("401", error.Message);
+        Assert.DoesNotContain("synthetic-test-token", error.Message);
+        Assert.DoesNotContain("private upstream payload", error.Message);
+    }
+
 	private sealed class StaticHttpClientFactory : IHttpClientFactory
 	{
 		private readonly string _json;

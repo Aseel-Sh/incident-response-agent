@@ -79,7 +79,7 @@ public sealed class ServerIncidentMonitoringService : BackgroundService, IIncide
 		}
 		catch (Exception exception) when (exception is not OperationCanceledException)
 		{
-			_lastError = exception.Message;
+			_lastError = "Monitoring failed (" + exception.GetType().Name + "). Check telemetry configuration.";
 			var completed = DateTimeOffset.UtcNow;
 			try
 			{
@@ -90,7 +90,7 @@ public sealed class ServerIncidentMonitoringService : BackgroundService, IIncide
 				}
 			}
 			catch (Exception persistenceException) when (persistenceException is not OperationCanceledException) { _logger.LogError(persistenceException, "Could not persist the failed monitoring scan."); }
-			_logger.LogError(exception, "Server monitoring scan failed.");
+			_logger.LogError("Server monitoring scan failed.");
 		}
 		finally { _scanInProgress = false; _scanLock.Release(); }
 		return await GetStateAsync(projectId, cancellationToken);
@@ -104,7 +104,7 @@ public sealed class ServerIncidentMonitoringService : BackgroundService, IIncide
 			if (_enabled)
 			{
 				try { await ScanNowAsync(cancellationToken: stoppingToken); }
-				catch (Exception exception) when (exception is not OperationCanceledException) { _lastError = exception.Message; _logger.LogError(exception, "Unexpected monitoring loop failure; the schedule will continue."); }
+				catch (Exception exception) when (exception is not OperationCanceledException) { _lastError = "Monitoring failed (" + exception.GetType().Name + "). Check telemetry configuration."; _logger.LogError("Unexpected monitoring loop failure; the schedule will continue."); }
 			}
 			await Task.Delay(TimeSpan.FromSeconds(IntervalSeconds), stoppingToken);
 		}
@@ -150,7 +150,7 @@ public sealed class ServerIncidentMonitoringService : BackgroundService, IIncide
 		try { return File.Exists(StatePath) ? JsonSerializer.Deserialize<PersistedState>(File.ReadAllText(StatePath), JsonOptions) : null; }
 		catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException)
 		{
-			_logger.LogWarning(exception, "Monitoring settings could not be loaded; configured defaults are in use.");
+			_logger.LogWarning("Monitoring settings could not be loaded; configured defaults are in use.");
 			_lastError = "Saved monitoring settings could not be read. Configured defaults are in use.";
 			return null;
 		}

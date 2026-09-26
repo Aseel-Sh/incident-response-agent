@@ -129,10 +129,10 @@ internal sealed class ResilientRunbookEmbeddingProvider : IRunbookEmbeddingProvi
 			_useFallbackOnly = true;
 			if (!_allowFallback)
 			{
-				_logger.LogWarning(exception, "Primary embedding provider failed and local fallback is disabled. Provider={ProviderName} FailureReason={FailureReason}.", _primary.ProviderName, _failureReason);
+				_logger.LogWarning("Primary embedding provider failed and local fallback is disabled. Provider={ProviderName} FailureReason={FailureReason}.", _primary.ProviderName, _failureReason);
 				throw new InvalidOperationException(DegradedReason, exception);
 			}
-			_logger.LogWarning(exception, "Primary embedding provider failed. Provider={ProviderName} FailureReason={FailureReason} FallbackProvider={FallbackProviderName}.", _primary.ProviderName, _failureReason, _fallback.ProviderName);
+			_logger.LogWarning("Primary embedding provider failed. Provider={ProviderName} FailureReason={FailureReason} FallbackProvider={FallbackProviderName}.", _primary.ProviderName, _failureReason, _fallback.ProviderName);
 		}
 
 		return await _fallback.GenerateEmbeddingAsync(text, cancellationToken).ConfigureAwait(false);
@@ -140,9 +140,9 @@ internal sealed class ResilientRunbookEmbeddingProvider : IRunbookEmbeddingProvi
 
 	private static string SanitizeFailure(Exception exception)
 	{
-		var message = string.IsNullOrWhiteSpace(exception.Message) ? exception.GetType().Name : exception.Message.ReplaceLineEndings(" ").Trim();
-		if (message.Length > 300) message = string.Concat(message.AsSpan(0, 297), "...");
-		return $"{exception.GetType().Name}: {message}";
+        return exception is HttpRequestException http && http.StatusCode is { } status
+            ? $"HttpRequestException: provider unavailable (HTTP {(int)status}). Check provider access and availability."
+            : $"{exception.GetType().Name}: provider unavailable; check provider configuration and availability.";
 	}
 
 	public async Task<IReadOnlyList<float[]>> GenerateEmbeddingsAsync(IReadOnlyList<string> texts, CancellationToken cancellationToken = default)

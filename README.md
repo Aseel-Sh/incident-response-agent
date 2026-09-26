@@ -813,3 +813,7 @@ npx playwright test -c playwright.batched-rag.config.ts --retries=0
 ```
 
 See `docs/validation-2026-09-14.md` for the workflow coverage and live-provider verification boundaries.
+
+## Deployment preparation
+
+See [single-instance deployment and security guidance](docs/deployment.md) for Docker/Compose, runtime configuration, persistence, the shared responder authorization model, conservative readiness, and remaining deployment steps. Bundled operational telemetry is demo data unless a real provider is connected. CI prepares artifacts only; it does not deploy.

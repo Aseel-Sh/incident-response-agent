@@ -58,9 +58,9 @@ internal sealed class HuggingFaceRunbookEmbeddingProvider : IRunbookEmbeddingPro
 		using var response = await SendAsync(httpClient, request, cancellationToken).ConfigureAwait(false);
 		if (!response.IsSuccessStatusCode)
 		{
-			var errorBody = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+			// Never copy an untrusted provider response body into errors, logs or stored incident diagnostics.
 			throw new HttpRequestException(
-				$"Hugging Face embedding request failed with HTTP {(int)response.StatusCode} {response.ReasonPhrase}: {Sanitize(errorBody)}",
+				$"Hugging Face embedding request failed with HTTP {(int)response.StatusCode} model unavailable; check provider status and model access.",
 				null,
 				response.StatusCode);
 		}
@@ -168,9 +168,4 @@ internal sealed class HuggingFaceRunbookEmbeddingProvider : IRunbookEmbeddingPro
 			: options.Endpoint.Trim();
 	}
 
-	private static string Sanitize(string value)
-	{
-		var text = string.IsNullOrWhiteSpace(value) ? "no response body" : value.ReplaceLineEndings(" ").Trim();
-		return text.Length <= 300 ? text : string.Concat(text.AsSpan(0, 297), "...");
-	}
 }

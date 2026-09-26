@@ -1,3 +1,4 @@
+using IncidentResponseAgent.Api.Security;
 using System.Text.Json;
 using IncidentResponseAgent.Api.Contracts.Signals;
 using IncidentResponseAgent.Application.Tools;
@@ -9,6 +10,7 @@ using Microsoft.Extensions.Options;
 namespace IncidentResponseAgent.Api.Controllers;
 
 [ApiController]
+[RequestBudget("Signals")]
 [Authorize]
 [Route("api/signals")]
 public sealed class SignalsController : ControllerBase

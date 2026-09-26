@@ -6,61 +6,65 @@ using IncidentResponseAgent.Infrastructure.Tools;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
 using IncidentResponseAgent.Api.Security;
+using IncidentResponseAgent.Api.Services;
 
 namespace IncidentResponseAgent.Api.Controllers;
 
 [ApiController]
 [Route("ready")]
+[RequestBudget("Readiness")]
 public sealed class ReadinessController(
-	IOptions<IncidentAnalysisAgentOptions> agentOptions,
-	IOptions<RunbookRetrievalOptions> runbookOptions,
-	IOptions<OperationalDataOptions> operationalOptions,
-	IOptions<IncidentStorageOptions> storageOptions,
-	IOptions<IncidentAuthenticationOptions> authenticationOptions,
-	IIncidentMonitoringCoordinator monitoring) : ControllerBase
+    IOptions<IncidentAnalysisAgentOptions> agentOptions,
+    IOptions<RunbookRetrievalOptions> runbookOptions,
+    IOptions<OperationalDataOptions> operationalOptions,
+    IOptions<IncidentStorageOptions> storageOptions,
+    IOptions<IncidentAuthenticationOptions> authenticationOptions,
+    IIncidentMonitoringCoordinator monitoring,
+    DependencyReadinessProbe probe,
+    IConfiguration configuration) : ControllerBase
 {
-	[HttpGet]
-	public async Task<IActionResult> GetAsync(CancellationToken cancellationToken)
-	{
-		var agent = agentOptions.Value;
-		var runbooks = runbookOptions.Value;
-		var operational = operationalOptions.Value;
-		var storage = storageOptions.Value;
-		var modelConfigured = HasValue(agent.ApiKey, "IRA_AGENT_API_KEY", "OPENROUTER_API_KEY") && !string.IsNullOrWhiteSpace(agent.Model);
-		var embeddingsConfigured = runbooks.EmbeddingProvider.Equals("OpenRouter", StringComparison.OrdinalIgnoreCase)
-			? HasValue(runbooks.ApiKey, "OPENROUTER_API_KEY") : HasValue(runbooks.ApiKey, "HF_TOKEN", "HF_API_TOKEN");
-		var vectorStore = runbooks.VectorStoreProvider.Equals("Qdrant", StringComparison.OrdinalIgnoreCase)
-			? (!string.IsNullOrWhiteSpace(runbooks.QdrantEndpoint) ? "configured" : "unconfigured")
-			: "local-selected";
-		var logs = SourceState(operational.LogEntriesPath, Path.Combine(AppContext.BaseDirectory, "Tools", "SampleData", "logs.json"));
-		var metrics = SourceState(operational.MetricSamplesPath, Path.Combine(AppContext.BaseDirectory, "Tools", "SampleData", "metrics.json"));
-		var monitor = await monitoring.GetStateAsync(cancellationToken: cancellationToken);
-		var persistenceConfigured = !string.IsNullOrWhiteSpace(storage.IncidentRecordsPath) && !string.IsNullOrWhiteSpace(storage.SessionDatabasePath);
-		var authenticationConfigured = !authenticationOptions.Value.AllowDevelopmentIdentity && !string.IsNullOrWhiteSpace(authenticationOptions.Value.Authority) && !string.IsNullOrWhiteSpace(authenticationOptions.Value.Audience);
-		var ready = modelConfigured && embeddingsConfigured && vectorStore != "unconfigured" && logs != "missing" && metrics != "missing" && persistenceConfigured && authenticationConfigured;
-		var body = new
-		{
-			status = ready ? "ready" : "not-ready",
-			components = new
-			{
-				authentication = new { status = authenticationConfigured ? "oidc-configured" : authenticationOptions.Value.AllowDevelopmentIdentity ? "development-identity" : "unconfigured", authority = authenticationOptions.Value.Authority, audience = authenticationOptions.Value.Audience },
-				model = new { status = modelConfigured ? "configured" : "unconfigured", provider = agent.Provider, agent.Model },
-				embeddings = new { status = embeddingsConfigured ? "configured" : "unconfigured", provider = runbooks.EmbeddingProvider, runbooks.Model },
-				vectorStore = new { status = vectorStore, provider = runbooks.VectorStoreProvider, endpoint = runbooks.VectorStoreProvider.Equals("Qdrant", StringComparison.OrdinalIgnoreCase) ? runbooks.QdrantEndpoint : null },
-				persistence = new { status = persistenceConfigured ? "configured" : "default-local", incidentRecords = storage.IncidentRecordsPath, sessions = storage.SessionDatabasePath },
-				telemetry = new { status = logs == "available" && metrics == "available" ? "available" : "degraded", logs, metrics },
-				monitoring = new { status = monitor.LastError is null ? (monitor.Enabled ? "running" : "paused") : "degraded", monitor.LastError, monitor.LastScan }
-			}
-		};
-		return StatusCode(ready ? StatusCodes.Status200OK : StatusCodes.Status503ServiceUnavailable, body);
-	}
+    [HttpGet]
+    public async Task<IActionResult> GetAsync(CancellationToken cancellationToken)
+    {
+        var agent = agentOptions.Value;
+        var runbooks = runbookOptions.Value;
+        var operational = operationalOptions.Value;
+        var storage = storageOptions.Value;
+        var model = HasValue(agent.ApiKey, "IRA_AGENT_API_KEY", "OPENROUTER_API_KEY") && !string.IsNullOrWhiteSpace(agent.Model) ? "configured" : "unavailable";
+        var embeddings = (runbooks.EmbeddingProvider.Equals("OpenRouter", StringComparison.OrdinalIgnoreCase)
+            ? HasValue(runbooks.ApiKey, "OPENROUTER_API_KEY") : HasValue(runbooks.ApiKey, "HF_TOKEN", "HF_API_TOKEN")) ? "configured" : "unavailable";
+        var vectorStore = runbooks.VectorStoreProvider.Equals("Qdrant", StringComparison.OrdinalIgnoreCase)
+            ? await probe.QdrantAsync(runbooks, cancellationToken) : "configured";
+        var persistence = DependencyReadinessProbe.Persistence([
+            storage.IncidentRecordsPath, storage.SessionDatabasePath, runbooks.DatabasePath, runbooks.SourceRegistryPath,
+            operational.ProjectRegistryPath, operational.LogEntriesPath, operational.MetricSamplesPath, configuration["Monitoring:StatePath"],
+            runbooks.KnowledgeBasePath is { Length: > 0 } knowledge ? Path.Combine(knowledge, "probe") : null,
+            configuration["Storage:DataProtectionKeysPath"] is { Length: > 0 } keys ? Path.Combine(keys, "probe") : null]);
+        var monitor = await monitoring.GetStateAsync(cancellationToken: cancellationToken);
+        var logs = SourceState(operational.LogEntriesPath);
+        var metrics = SourceState(operational.MetricSamplesPath);
+        var auth = !authenticationOptions.Value.AllowDevelopmentIdentity && !string.IsNullOrWhiteSpace(authenticationOptions.Value.Authority)
+            && !string.IsNullOrWhiteSpace(authenticationOptions.Value.Audience) ? "configured" : "unavailable";
+        var unavailable = new[] { model, embeddings, vectorStore, persistence, auth, logs, metrics }.Contains("unavailable");
+        // No paid inference, embedding or Auth0 requests in a readiness probe. Configuration is not evidence of working credentials/model access.
+        return StatusCode(StatusCodes.Status503ServiceUnavailable, new
+        {
+            status = unavailable ? "unavailable" : "degraded",
+            reason = "External authentication, model and embedding execution are not verified by this probe.",
+            components = new
+            {
+                authentication = new { status = auth },
+                model = new { status = model, executionVerified = false },
+                embeddings = new { status = embeddings, executionVerified = false },
+                vectorStore = new { status = vectorStore, collectionVerified = false },
+                persistence = new { status = persistence, databaseIntegrityVerified = false },
+                telemetry = new { status = logs == "configured" && metrics == "configured" ? "configured" : "degraded", logs, metrics, provenanceVerified = false },
+                monitoring = new { status = monitor.LastError is not null ? "degraded" : monitor.Enabled ? "running" : "paused", monitor.LastScan }
+            }
+        });
+    }
 
-	private static bool HasValue(string? configured, params string[] environmentVariables) =>
-		!string.IsNullOrWhiteSpace(configured) || environmentVariables.Any(name => !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(name)));
-
-	private static string SourceState(string? configured, string fallback)
-	{
-		var path = string.IsNullOrWhiteSpace(configured) ? fallback : Path.GetFullPath(Environment.ExpandEnvironmentVariables(configured));
-		return System.IO.File.Exists(path) ? "available" : "missing";
-	}
+    private static bool HasValue(string? configured, params string[] names) =>
+        !string.IsNullOrWhiteSpace(configured) || names.Any(name => !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(name)));
+    private static string SourceState(string? path) => string.IsNullOrWhiteSpace(path) ? "demo" : System.IO.File.Exists(path) ? "configured" : "unavailable";
 }

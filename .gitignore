@@ -45,3 +45,6 @@ test-results/
 .data/
 
 Plan.md
+
+!.env.example
+IncidentResponseAgent.Api/wwwroot/
