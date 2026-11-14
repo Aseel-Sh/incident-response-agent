@@ -24,7 +24,7 @@ COPY --from=frontend /src/IncidentResponseAgent.Api/wwwroot/ IncidentResponseAge
 ARG VERSION=1.0.0
 RUN dotnet publish IncidentResponseAgent.Api/IncidentResponseAgent.Api.csproj -c Release --no-restore -o /out /p:UseAppHost=false /p:Version=${VERSION}
 
-FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS final
+FROM mcr.microsoft.com/dotnet/aspnet:11.0 AS final
 WORKDIR /app
 COPY --from=build /out/ ./
 # Docker initializes new named volumes from these owned directories.
